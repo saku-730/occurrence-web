@@ -97,7 +97,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_route_returns_not_implemented() {
+    async fn register_route_returns() {
+        let app = build_app(test_state());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"email":"test@example.com"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], br#"{"message":"temporary registration accepted","email":"test@example.com"}"#);
+    }
+
+    #[tokio::test]
+    async fn register_route_rejects_missing_json_body() {
         let app = build_app(test_state());
 
         let response = app
@@ -111,9 +133,28 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert!(response.status().is_client_error());
+    }
+    #[tokio::test]
+    async fn register_route_returns_bad_request_for_invalid_email() {
+        let app = build_app(test_state());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"email":"invalid-email"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&body[..], b"register not implemented");
+        assert_eq!(&body[..], b"invalid email");
     }
 }
+
