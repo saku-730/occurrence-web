@@ -10,7 +10,8 @@ use axum::{
 use super::{
     dto::{
     RegisterRequest,
-    RegisterResponse
+    RegisterResponse,
+    ErrorResponse
 },
     service::{
         AuthService,
@@ -18,6 +19,24 @@ use super::{
 },
 };
 
+#[utoipa::path(
+    post,
+    path = "/auth/register",
+    request_body = RegisterRequest,
+    responses(
+        (
+            status = 201,
+            description = "Register user successfully",
+            body = RegisterResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid email",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
 pub async fn register(
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError> {
@@ -42,7 +61,12 @@ impl IntoResponse for AuthHandlerError {
     fn into_response(self) -> Response {
         match self {
             AuthHandlerError::InvalidEmail => {
-                (StatusCode::BAD_REQUEST, "invalid email").into_response()
+                let body = ErrorResponse {
+                    error: "invalid_email".to_string(),
+                    message: "Invalid email".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
         }
     }

@@ -1,0 +1,16 @@
+/home/saku/Programs/occurence-web/backend/target/debug/deps/backend-3206fd4732c5e175.d: src/lib.rs src/app.rs src/config.rs src/state.rs src/features/mod.rs src/features/auth/mod.rs src/features/auth/dto.rs src/features/auth/handler.rs src/features/auth/service.rs src/openapi.rs
+
+/home/saku/Programs/occurence-web/backend/target/debug/deps/libbackend-3206fd4732c5e175.rlib: src/lib.rs src/app.rs src/config.rs src/state.rs src/features/mod.rs src/features/auth/mod.rs src/features/auth/dto.rs src/features/auth/handler.rs src/features/auth/service.rs src/openapi.rs
+
+/home/saku/Programs/occurence-web/backend/target/debug/deps/libbackend-3206fd4732c5e175.rmeta: src/lib.rs src/app.rs src/config.rs src/state.rs src/features/mod.rs src/features/auth/mod.rs src/features/auth/dto.rs src/features/auth/handler.rs src/features/auth/service.rs src/openapi.rs
+
+src/lib.rs:
+src/app.rs:
+src/config.rs:
+src/state.rs:
+src/features/mod.rs:
+src/features/auth/mod.rs:
+src/features/auth/dto.rs:
+src/features/auth/handler.rs:
+src/features/auth/service.rs:
+src/openapi.rs:

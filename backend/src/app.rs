@@ -1,18 +1,28 @@
 use axum::{
     routing::{get, post}, 
-    Router};
+    Router
+};
+
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
     features::auth::handler::register,
     state::AppState,
+    openapi::ApiDoc
 };
 
 pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/auth/register", post(register))
+        .merge(
+            SwaggerUi::new("/swagger-ui")
+                .url("/openapi.json", ApiDoc::openapi()),
+        )
 
         .with_state(state)
 }
@@ -180,7 +190,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&body[..], b"invalid email");
-}
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_email");
+        assert_eq!(json["message"], "Invalid email");
+    }
+
+    #[tokio::test]
+    async fn openapi_json_returns_auth_register_spec() {
+        let app = build_app(test_state());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["openapi"].is_string());
+        assert!(json["paths"]["/auth/register"]["post"].is_object());
+        assert!(json["components"]["schemas"]["RegisterRequest"].is_object());
+        assert!(json["components"]["schemas"]["RegisterResponse"].is_object());
+        assert!(json["components"]["schemas"]["ErrorResponse"].is_object());
+    }
 }
 
