@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: occurrence_web_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: occurrence
+      POSTGRES_PASSWORD: occurrence_password
+      POSTGRES_DB: occurrence_web
+    ports:
+      - "5432:5432"
+    volumes:
+      - occurrence_web_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  occurrence_web_postgres_data:
