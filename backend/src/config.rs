@@ -4,7 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub app: AppConfig,
-    pub posgre: Posgre,
+    pub posgre: PosgreConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -21,11 +21,8 @@ impl AppConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct Posgre {
-    pub host: String,
-    pub port: u16,
-    pub base_url: String,
-    pub databse_url: String,
+pub struct PosgreConfig {
+    pub url: String,
 }
 
 #[derive(Debug)]
@@ -62,9 +59,11 @@ impl Config {
             app_base_url: get_env_or("APP_BASE_URL", "http://127.0.0.1:3000"),
         };
 
-        let database_url = std::env::var("DATABASE_URL").map_err(|_| ConfigError::MissinEnv("DATABASE_URL".to_string()))?;
+        let posgre = PosgreConfig{
+            url: get_required_env("DATABASE_URL")?,
+        };
 
-        Ok(Self { app })
+        Ok(Self { app , posgre})
     }
 }
 
@@ -74,6 +73,14 @@ fn get_env_or(key: &'static str, default: &str) -> String {
         _ => default.to_string(),
     }
 }
+
+fn get_required_env(key: &'static str) -> Result<String, ConfigError> {
+    match env::var(key) {
+        Ok(value) if !value.trim().is_empty() => Ok(value),
+        _ => Err(ConfigError::MissingVar(key)),
+    }
+}
+
 
 fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError> {
     match env::var(key) {

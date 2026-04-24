@@ -4,7 +4,7 @@ services:
     container_name: occurrence_web_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: occurrence
+      POSTGRES_USER: admin
       POSTGRES_PASSWORD: occurrence_password
       POSTGRES_DB: occurrence_web
     ports:

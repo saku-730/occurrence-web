@@ -6,11 +6,13 @@ use axum::{
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+
 use crate::{
     features::auth::handler::pre_register,
     state::AppState,
     openapi::ApiDoc
 };
+
 
 pub fn build_app(state: AppState) -> Router {
     Router::new()
@@ -45,13 +47,14 @@ async fn info(State(state): State<AppState>) -> String {
 #[cfg(test)]//test section
 mod tests {
     use super::build_app;
-    use crate::config::{AppConfig, Config};
+    use crate::config::{AppConfig, Config, PosgreConfig};
     use crate::state::AppState;
 
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
     };
+    use sqlx::postgres::PgPoolOptions;
     use tower::util::ServiceExt; // oneshot
 
     fn test_state() -> AppState {
@@ -61,9 +64,17 @@ mod tests {
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
             },
+            posgre: PosgreConfig {
+                url: "postgres://occurrence:occurrence_password@localhost:5432/occurrence_web"
+            .to_string(),
+            }
         };
 
-        AppState::new(config)
+        let posgre = PgPoolOptions::new()
+        .connect_lazy(&config.posgre.url)
+        .expect("failed to create lazy database pool");
+
+        AppState::new(config,posgre)
     }
 
     #[tokio::test]
