@@ -1,18 +1,20 @@
 use super::dto::RegisterResponse;
 
+use email_address::EmailAddress;
+
 #[derive(Debug)]
 pub enum AuthServiceError {
     InvalidEmail,
 }
 
-pub struct AuthService;
+pub struct AuthService;//とりあえずメソッド用に作っておく。
 
 impl AuthService {
-    pub async fn register(email: String) 
+    pub async fn pre_register(email: String) 
     -> Result<RegisterResponse, AuthServiceError> {
-        let email = email.trim().to_lowercase();
+        let email = email.trim().to_lowercase();//前後空白を削除&小文字化
 
-        if email.is_empty() || !email.contains('@'){
+        if !EmailAddress::is_valid(&email){ //メールアドレスのvalidation
             return Err(AuthServiceError::InvalidEmail);
         }
 
@@ -23,14 +25,13 @@ impl AuthService {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{AuthService, AuthServiceError};
 
     #[tokio::test]
     async fn register_accepts_valid_email() {
-        let result = AuthService::register("test@example.com".to_string()).await;
+        let result = AuthService::pre_register("test@example.com".to_string()).await;
 
         assert!(result.is_ok());
 
@@ -41,7 +42,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_trims_and_lowercases_email() {
-        let result = AuthService::register("  TEST@EXAMPLE.COM  ".to_string()).await;
+        let result = AuthService::pre_register("  TEST@EXAMPLE.COM  ".to_string()).await;
 
         assert!(result.is_ok());
 
@@ -51,14 +52,35 @@ mod tests {
 
     #[tokio::test]
     async fn register_rejects_empty_email() {
-        let result = AuthService::register("   ".to_string()).await;
+        let result = AuthService::pre_register("   ".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
 
     #[tokio::test]
     async fn register_rejects_email_without_at() {
-        let result = AuthService::register("invalid-email".to_string()).await;
+        let result = AuthService::pre_register("invalid-email".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
+    }
+
+    #[tokio::test]
+    async fn register_rejects_email_without_local_part() {
+        let result = AuthService::pre_register("@example.com".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
+    }
+
+    #[tokio::test]
+    async fn register_rejects_email_without_domain_part() {
+        let result = AuthService::pre_register("test@".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
+    }
+
+    #[tokio::test]
+    async fn register_rejects_email_with_multiple_at_marks() {
+        let result = AuthService::pre_register("test@@example.com".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }

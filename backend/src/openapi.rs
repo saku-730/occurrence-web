@@ -5,7 +5,7 @@ use crate::features::auth::dto::{RegisterRequest, RegisterResponse,ErrorResponse
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        crate::features::auth::handler::register
+        crate::features::auth::handler::pre_register
     ),
     components(
         schemas(RegisterRequest, RegisterResponse, ErrorResponse)

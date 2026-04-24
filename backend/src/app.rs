@@ -7,7 +7,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    features::auth::handler::register,
+    features::auth::handler::pre_register,
     state::AppState,
     openapi::ApiDoc
 };
@@ -18,7 +18,7 @@ pub fn build_app(state: AppState) -> Router {
         
         .route("/health", get(health))
         .route("/info", get(info))
-        .route("/auth/register", post(register))
+        .route("/auth/pre_register", post(pre_register))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -42,7 +42,7 @@ async fn info(State(state): State<AppState>) -> String {
 }
 
 
-#[cfg(test)]
+#[cfg(test)]//test section
 mod tests {
     use super::build_app;
     use crate::config::{AppConfig, Config};
@@ -114,7 +114,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/auth/register")
+                    .uri("/auth/pre_register")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"email":"test@example.com"}"#))
                     .unwrap(),
@@ -136,7 +136,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/auth/register")
+                    .uri("/auth/pre_register")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -154,7 +154,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/auth/register")
+                    .uri("/auth/pre_register")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"email":"test@example.com"}"#))
                     .unwrap(),
@@ -179,7 +179,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/auth/register")
+                    .uri("/auth/pre_register")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"email":"invalid-email"}"#))
                     .unwrap(),
@@ -218,7 +218,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert!(json["openapi"].is_string());
-        assert!(json["paths"]["/auth/register"]["post"].is_object());
+        assert!(json["paths"]["/auth/pre_register"]["post"].is_object());
         assert!(json["components"]["schemas"]["RegisterRequest"].is_object());
         assert!(json["components"]["schemas"]["RegisterResponse"].is_object());
         assert!(json["components"]["schemas"]["ErrorResponse"].is_object());

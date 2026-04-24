@@ -21,7 +21,7 @@ use super::{
 
 #[utoipa::path(
     post,
-    path = "/auth/register",
+    path = "/auth/pre_register",
     request_body = RegisterRequest,
     responses(
         (
@@ -37,10 +37,10 @@ use super::{
     ),
     tag = "auth"
 )]
-pub async fn register(
+pub async fn pre_register(
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError> {
-    let response = AuthService::register(payload.email).await?;
+    let response = AuthService::pre_register(payload.email).await?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
