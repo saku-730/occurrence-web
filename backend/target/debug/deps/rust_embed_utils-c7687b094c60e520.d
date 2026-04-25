@@ -1,7 +1,0 @@
-/home/saku/Programs/occurrence-web/backend/target/debug/deps/rust_embed_utils-c7687b094c60e520.d: /home/saku/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rust-embed-utils-8.11.0/src/lib.rs
-
-/home/saku/Programs/occurrence-web/backend/target/debug/deps/librust_embed_utils-c7687b094c60e520.rlib: /home/saku/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rust-embed-utils-8.11.0/src/lib.rs
-
-/home/saku/Programs/occurrence-web/backend/target/debug/deps/librust_embed_utils-c7687b094c60e520.rmeta: /home/saku/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rust-embed-utils-8.11.0/src/lib.rs
-
-/home/saku/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rust-embed-utils-8.11.0/src/lib.rs:

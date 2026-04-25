@@ -1,2 +1,0 @@
-fn(Json<RegisterRequest>) -> impl Future<Output = Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError>> {register}
-fn(Json<RegisterRequest>) -> impl Future<Output = Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError>> {register}: Handler<_, _>

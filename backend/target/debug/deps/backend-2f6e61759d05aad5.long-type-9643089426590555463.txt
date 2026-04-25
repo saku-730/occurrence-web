@@ -1,2 +1,0 @@
-fn(axum::Json<RegisterRequest>) -> impl Future<Output = Result<(StatusCode, axum::Json<RegisterResponse>), AuthHandlerError>> {register}
-fn(axum::Json<RegisterRequest>) -> impl Future<Output = Result<(StatusCode, axum::Json<RegisterResponse>), AuthHandlerError>> {register}: Handler<_, _>

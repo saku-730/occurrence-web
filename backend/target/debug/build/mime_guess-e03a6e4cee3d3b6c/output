@@ -1,1 +1,0 @@
-cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/saku/Programs/occurence-web/backend/target/debug/build/mime_guess-e03a6e4cee3d3b6c/out/mime_types_generated.rs
