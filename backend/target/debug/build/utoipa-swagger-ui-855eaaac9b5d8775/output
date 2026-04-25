@@ -1,8 +1,6 @@
-OUT_DIR: /home/saku/Programs/occurence-web/backend/target/debug/build/utoipa-swagger-ui-855eaaac9b5d8775/out
+OUT_DIR: /home/saku/Programs/occurrence-web/backend/target/debug/build/utoipa-swagger-ui-855eaaac9b5d8775/out
 SWAGGER_UI_DOWNLOAD_URL: https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.zip
 cargo:rerun-if-env-changed=SWAGGER_UI_DOWNLOAD_URL
-start download to : "/home/saku/Programs/occurence-web/backend/target/debug/build/utoipa-swagger-ui-855eaaac9b5d8775/out/v5.17.14.zip"
-reqwest feature: Err(NotPresent)
-trying to download using `curl` system package
+using cached zip path from : "/home/saku/Programs/occurrence-web/backend/target/debug/build/utoipa-swagger-ui-855eaaac9b5d8775/out/v5.17.14.zip"
 zip_top_level_folder: "swagger-ui-5.17.14"
 SWAGGER_UI_OVERWRITE_FOLDER not found: "overwrite"
