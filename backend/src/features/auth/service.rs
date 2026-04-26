@@ -1,10 +1,21 @@
 use super::dto::RegisterResponse;
+use super::repository::AuthRepository;
 
 use email_address::EmailAddress;
+use sha2::{Digest,Sha256};
+use sqlx::PgPool;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum AuthServiceError {
     InvalidEmail,
+}
+
+
+impl From<sqlx::Error> for AuthServiceError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
 }
 
 pub struct AuthService;//とりあえずメソッド用に作っておく。
