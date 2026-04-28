@@ -9,8 +9,8 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub enum AuthServiceError {
     InvalidEmail,
+    Database(sqlx::Error),
 }
-
 
 impl From<sqlx::Error> for AuthServiceError {
     fn from(error: sqlx::Error) -> Self {
@@ -21,19 +21,30 @@ impl From<sqlx::Error> for AuthServiceError {
 pub struct AuthService;//とりあえずメソッド用に作っておく。
 
 impl AuthService {
-    pub async fn pre_register(email: String) 
-    -> Result<RegisterResponse, AuthServiceError> {
+    pub async fn pre_register(
+        db: &PgPool,   
+        email: String,
+    ) -> Result<RegisterResponse, AuthServiceError> {
         let email = email.trim().to_lowercase();//前後空白を削除&小文字化
 
         if !EmailAddress::is_valid(&email){ //メールアドレスのvalidation
             return Err(AuthServiceError::InvalidEmail);
         }
 
+        let token = Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        AuthRepository::create_pending_registration(db, &email, &token_hash).await?; //データベース書き込み
+
         Ok(RegisterResponse{
-            message: "temporary registration accepted".to_string(),
+            message: "pre registration accepted".to_string(),
             email,
         })
     }
+}
+
+fn hash_token(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes())) //ハッシュ化, encodeはバイナリそのままを16進数に変換している。
 }
 
 #[cfg(test)]

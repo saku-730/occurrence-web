@@ -5,6 +5,7 @@ use axum::{
         Response,
     },
     Json,
+    extract::State,
 };
 
 use super::{
@@ -18,6 +19,46 @@ use super::{
         AuthServiceError
 },
 };
+
+use crate::state::AppState;
+
+#[derive(Debug)]
+pub enum AuthHandlerError{
+    InvalidEmail,
+    Database(sqlx::Error),
+}
+
+impl From<AuthServiceError> for AuthHandlerError{
+    fn from(error: AuthServiceError) -> Self {
+        match error {
+            AuthServiceError::InvalidEmail => Self::InvalidEmail,
+            AuthServiceError::Database(error) => Self::Database(error),
+        }
+    }
+}
+
+impl IntoResponse for AuthHandlerError {
+    fn into_response(self) -> Response {
+        match self {
+            AuthHandlerError::InvalidEmail => {
+                let body = ErrorResponse {
+                    error: "invalid_email".to_string(),
+                    message: "Invalid email".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            AuthHandlerError::Database(_) => {
+                let body = ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "internal server error".to_string(),
+                };
+
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+            }
+        }
+    }
+}
 
 #[utoipa::path(
     post,
@@ -38,36 +79,10 @@ use super::{
     tag = "auth"
 )]
 pub async fn pre_register(
+    State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError> {
-    let response = AuthService::pre_register(payload.email).await?;
+    let response = AuthService::pre_register(&state.posgre,payload.email).await?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-#[derive(Debug)]
-pub enum AuthHandlerError {
-    InvalidEmail
-}
-
-impl From<AuthServiceError> for AuthHandlerError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidEmail => AuthHandlerError::InvalidEmail,
-        }
-    }
-}
-
-impl IntoResponse for AuthHandlerError {
-    fn into_response(self) -> Response {
-        match self {
-            AuthHandlerError::InvalidEmail => {
-                let body = ErrorResponse {
-                    error: "invalid_email".to_string(),
-                    message: "Invalid email".to_string(),
-                };
-
-                (StatusCode::BAD_REQUEST, Json(body)).into_response()
-            }
-        }
-    }
-}
