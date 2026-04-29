@@ -30,3 +30,72 @@ impl AuthRepository {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sqlx::{postgres::PgPoolOptions, PgPool};
+
+    async fn test_db_pool() -> PgPool {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for repository tests");
+
+        PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .expect("failed to connect test database")
+    }
+
+    async fn delete_pending_registration_by_token_hash(db: &PgPool, token_hash: &str) {
+        sqlx::query(
+            r#"
+            DELETE FROM pending_registrations
+            WHERE token_hash = $1
+            "#,
+        )
+        .bind(token_hash)
+        .execute(db)
+        .await
+        .expect("failed to delete pending registration");
+    }
+
+    #[tokio::test]
+    async fn create_pending_registration_inserts_row() {
+        let db = test_db_pool().await;
+
+        let email = "repository-insert@example.com";
+        let token_hash = "repository-test-token-hash";
+
+        delete_pending_registration_by_token_hash(&db, token_hash).await;
+
+        let result =
+            AuthRepository::create_pending_registration(&db, email, token_hash).await;
+
+        assert!(result.is_ok());
+
+        let row: (String, String, bool, bool) = sqlx::query_as(
+            r#"
+            SELECT
+                email,
+                token_hash,
+                completed_at IS NULL,
+                expires_at > now()
+            FROM pending_registrations
+            WHERE token_hash = $1
+            "#,
+        )
+        .bind(token_hash)
+        .fetch_one(&db)
+        .await
+        .expect("failed to fetch pending registration");
+
+        assert_eq!(row.0, email);
+        assert_eq!(row.1, token_hash);
+        assert!(row.2);
+        assert!(row.3);
+
+        delete_pending_registration_by_token_hash(&db, token_hash).await;
+    }
+}
