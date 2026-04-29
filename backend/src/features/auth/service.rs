@@ -37,7 +37,7 @@ impl AuthService {
         AuthRepository::create_pending_registration(db, &email, &token_hash).await?; //データベース書き込み
 
         Ok(RegisterResponse{
-            message: "pre registration accepted".to_string(),
+            message: "temporary registration accepted".to_string(),
             email,
         })
     }

@@ -58,6 +58,11 @@ mod tests {
     use tower::util::ServiceExt; // oneshot
 
     fn test_state() -> AppState {
+        dotenvy::dotenv().ok();
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for app tests");
+            
         let config = Config {
             app: AppConfig {
                 host: "127.0.0.1".to_string(),
@@ -65,9 +70,8 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
             },
             posgre: PosgreConfig {
-                url: "postgres://occurrence:occurrence_password@localhost:5432/occurrence_web"
-            .to_string(),
-            }
+                url: database_url.clone(),
+            },
         };
 
         let posgre = PgPoolOptions::new()
