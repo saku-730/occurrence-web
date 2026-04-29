@@ -46,63 +46,135 @@ impl AuthService {
 fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes())) //ハッシュ化, encodeはバイナリそのままを16進数に変換している。
 }
-
 #[cfg(test)]
 mod tests {
     use super::{AuthService, AuthServiceError};
+    use sqlx::{postgres::PgPoolOptions, PgPool};
+
+    async fn test_db_pool() -> PgPool {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for DB tests");
+
+        PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .expect("failed to connect test database")
+    }
+
+    async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
+        sqlx::query(
+            r#"
+            DELETE FROM pending_registrations
+            WHERE email = $1
+            "#,
+        )
+        .bind(email)
+        .execute(db)
+        .await
+        .expect("failed to delete pending registration");
+    }
+
+    async fn count_pending_registration_by_email(db: &PgPool, email: &str) -> i64 {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM pending_registrations
+            WHERE email = $1
+            "#,
+        )
+        .bind(email)
+        .fetch_one(db)
+        .await
+        .expect("failed to count pending registration");
+
+        row.0
+    }
 
     #[tokio::test]
-    async fn register_accepts_valid_email() {
-        let result = AuthService::pre_register("test@example.com".to_string()).await;
+    async fn pre_register_accepts_valid_email_and_creates_pending_registration() {
+        let db = test_db_pool().await;
+        let email = "service-valid@example.com";
+
+        delete_pending_registration_by_email(&db, email).await;
+
+        let result = AuthService::pre_register(&db, email.to_string()).await;
 
         assert!(result.is_ok());
 
         let response = result.unwrap();
-        assert_eq!(response.email, "test@example.com");
+        assert_eq!(response.email, email);
         assert_eq!(response.message, "temporary registration accepted");
+
+        let count = count_pending_registration_by_email(&db, email).await;
+        assert_eq!(count, 1);
+
+        delete_pending_registration_by_email(&db, email).await;
     }
 
     #[tokio::test]
-    async fn register_trims_and_lowercases_email() {
-        let result = AuthService::pre_register("  TEST@EXAMPLE.COM  ".to_string()).await;
+    async fn pre_register_trims_and_lowercases_email_and_creates_pending_registration() {
+        let db = test_db_pool().await;
+        let normalized_email = "test@example.com";
+
+        delete_pending_registration_by_email(&db, normalized_email).await;
+
+        let result = AuthService::pre_register(&db, "  TEST@EXAMPLE.COM  ".to_string()).await;
 
         assert!(result.is_ok());
 
         let response = result.unwrap();
-        assert_eq!(response.email, "test@example.com");
+        assert_eq!(response.email, normalized_email);
+
+        let count = count_pending_registration_by_email(&db, normalized_email).await;
+        assert_eq!(count, 1);
+
+        delete_pending_registration_by_email(&db, normalized_email).await;
     }
 
     #[tokio::test]
-    async fn register_rejects_empty_email() {
-        let result = AuthService::pre_register("   ".to_string()).await;
+    async fn pre_register_rejects_empty_email() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::pre_register(&db, "   ".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
 
     #[tokio::test]
-    async fn register_rejects_email_without_at() {
-        let result = AuthService::pre_register("invalid-email".to_string()).await;
+    async fn pre_register_rejects_email_without_at() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::pre_register(&db, "invalid-email".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
 
     #[tokio::test]
-    async fn register_rejects_email_without_local_part() {
-        let result = AuthService::pre_register("@example.com".to_string()).await;
+    async fn pre_register_rejects_email_without_local_part() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::pre_register(&db, "@example.com".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
 
     #[tokio::test]
-    async fn register_rejects_email_without_domain_part() {
-        let result = AuthService::pre_register("test@".to_string()).await;
+    async fn pre_register_rejects_email_without_domain_part() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::pre_register(&db, "test@".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
 
     #[tokio::test]
-    async fn register_rejects_email_with_multiple_at_marks() {
-        let result = AuthService::pre_register("test@@example.com".to_string()).await;
+    async fn pre_register_rejects_email_with_multiple_at_marks() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::pre_register(&db, "test@@example.com".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }

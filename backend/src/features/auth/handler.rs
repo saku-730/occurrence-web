@@ -22,6 +22,7 @@ use super::{
 
 use crate::state::AppState;
 
+
 #[derive(Debug)]
 pub enum AuthHandlerError{
     InvalidEmail,
@@ -40,13 +41,14 @@ impl From<AuthServiceError> for AuthHandlerError{
 impl IntoResponse for AuthHandlerError {
     fn into_response(self) -> Response {
         match self {
-            AuthHandlerError::InvalidEmail => {
+            AuthHandlerError::InvalidEmail => { 
                 let body = ErrorResponse {
                     error: "invalid_email".to_string(),
                     message: "Invalid email".to_string(),
                 };
 
-                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+                (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
+
             }
             AuthHandlerError::Database(_) => {
                 let body = ErrorResponse {
@@ -54,7 +56,7 @@ impl IntoResponse for AuthHandlerError {
                     message: "internal server error".to_string(),
                 };
 
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response() //500
             }
         }
     }
@@ -73,6 +75,11 @@ impl IntoResponse for AuthHandlerError {
         (
             status = 400,
             description = "Invalid email",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
             body = ErrorResponse
         )
     ),
