@@ -33,6 +33,7 @@ impl AuthRepository {
 
 #[cfg(test)]
 mod tests {
+    use super::AuthRepository;
     use sqlx::{postgres::PgPoolOptions, PgPool};
 
     async fn test_db_pool() -> PgPool {
@@ -81,7 +82,7 @@ mod tests {
                 email,
                 token_hash,
                 completed_at IS NULL,
-                expires_at > now()
+                expires_at > now()  + interval '28 minutes'
             FROM pending_registrations
             WHERE token_hash = $1
             "#,
