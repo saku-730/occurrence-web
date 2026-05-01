@@ -52,9 +52,9 @@ mod tests {
 
     use axum::{
         body::{to_bytes, Body},
-        http::{Request, StatusCode},
+        http::{Request, StatusCode,Method,header},
     };
-    use sqlx::postgres::PgPoolOptions;
+    use sqlx::{postgres::PgPoolOptions, PgPool};
     use tower::util::ServiceExt; // oneshot
 
     fn test_state() -> AppState {
@@ -79,6 +79,35 @@ mod tests {
         .expect("failed to create lazy database pool");
 
         AppState::new(config,posgre)
+    }
+
+    async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
+    sqlx::query(
+        r#"
+        DELETE FROM pending_registrations
+        WHERE email = $1
+        "#,
+    )
+    .bind(email)
+    .execute(db)
+    .await
+    .expect("failed to delete pending registration");
+    }
+
+    async fn count_pending_registration_by_email(db: &PgPool, email: &str) -> i64 {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM pending_registrations
+            WHERE email = $1
+            "#,
+        )
+        .bind(email)
+        .fetch_one(db)
+        .await
+        .expect("failed to count pending registration");
+
+        row.0
     }
 
     #[tokio::test]
@@ -237,6 +266,37 @@ mod tests {
         assert!(json["components"]["schemas"]["RegisterRequest"].is_object());
         assert!(json["components"]["schemas"]["RegisterResponse"].is_object());
         assert!(json["components"]["schemas"]["ErrorResponse"].is_object());
+    }
+
+    #[tokio::test]
+    async fn pre_register_route_creates_pending_registration() {
+        let state = test_state();
+        let db = state.posgre.clone();
+
+        let email = format!("route-valid-{}@example.com", uuid::Uuid::new_v4());
+
+        delete_pending_registration_by_email(&db, &email).await;
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/pre_register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let count = count_pending_registration_by_email(&db, &email).await;
+        assert_eq!(count, 1);
+
+        delete_pending_registration_by_email(&db, &email).await;
     }
 }
 
