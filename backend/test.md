@@ -53,11 +53,3 @@
 ### other
 
 - [ ] `config.rs` の `Config::from_env` が、`APP_HOST`、`APP_PORT`、`APP_BASE_URL`、`DATABASE_URL` を正しく読むことを確認するテストは未作成。
-
-- [ ] `config.rs` の `APP_PORT` が不正な値のとき、`ConfigError::InvalidVar` になることを確認するテストは未作成。
-
-- [ ] `config.rs` の `DATABASE_URL` がないとき、`ConfigError::MissingVar` になることを確認するテストは未作成。
-
-- [ ] `state.rs` の `AppState::new` が `Config` と `PgPool` を保持できることを確認するテストは未作成。
-
-- [ ] `dto.rs` の `RegisterRequest` / `RegisterResponse` / `ErrorResponse` の serialize / deserialize を確認するテストは未作成。
