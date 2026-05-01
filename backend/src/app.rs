@@ -298,5 +298,74 @@ mod tests {
 
         delete_pending_registration_by_email(&db, &email).await;
     }
-}
 
+    #[tokio::test]
+    async fn pre_register_route_rejects_invalid_email_and_does_not_create_pending_registration() {
+        let state = test_state();
+        let db = state.posgre.clone();
+
+        let invalid_email = format!("invalid-{}", uuid::Uuid::new_v4());
+
+        delete_pending_registration_by_email(&db, &invalid_email).await;
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/pre_register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, invalid_email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["error"], "invalid_email");
+        assert_eq!(body_json["message"], "Invalid email");
+
+        let count = count_pending_registration_by_email(&db, &invalid_email).await;
+        assert_eq!(count, 0);
+
+        delete_pending_registration_by_email(&db, &invalid_email).await;
+    }
+
+    #[tokio::test]
+    async fn openapi_json_includes_pre_register_response_statuses() {
+        let app = build_app(test_state());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let responses = &body_json["paths"]["/auth/pre_register"]["post"]["responses"];
+
+        assert!(responses.get("201").is_some());
+        assert!(responses.get("400").is_some());
+        assert!(responses.get("500").is_some());
+    }
+}

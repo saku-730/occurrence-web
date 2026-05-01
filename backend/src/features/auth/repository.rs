@@ -99,4 +99,26 @@ mod tests {
 
         delete_pending_registration_by_token_hash(&db, token_hash).await;
     }
+    #[tokio::test]
+    async fn create_pending_registration_rejects_duplicate_token_hash() {
+        let db = test_db_pool().await;
+
+        let token_hash = format!("duplicate-token-hash-{}", uuid::Uuid::new_v4());
+        let email1 = format!("duplicate-1-{}@example.com", uuid::Uuid::new_v4());
+        let email2 = format!("duplicate-2-{}@example.com", uuid::Uuid::new_v4());
+
+        delete_pending_registration_by_token_hash(&db, &token_hash).await;
+
+        let first_result =
+            AuthRepository::create_pending_registration(&db, &email1, &token_hash).await;
+
+        assert!(first_result.is_ok());
+
+        let second_result =
+            AuthRepository::create_pending_registration(&db, &email2, &token_hash).await;
+
+        assert!(second_result.is_err());
+
+        delete_pending_registration_by_token_hash(&db, &token_hash).await;
+    }
 }
