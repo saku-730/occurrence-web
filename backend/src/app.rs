@@ -299,6 +299,9 @@ mod tests {
         delete_pending_registration_by_email(&db, &email).await;
     }
 
+    
+    
+
     #[tokio::test]
     async fn pre_register_route_rejects_invalid_email_and_does_not_create_pending_registration() {
         let state = test_state();
@@ -368,4 +371,6 @@ mod tests {
         assert!(responses.get("400").is_some());
         assert!(responses.get("500").is_some());
     }
+
+    
 }

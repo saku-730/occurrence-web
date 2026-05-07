@@ -7,7 +7,7 @@ edition = "2024"
 axum = "0.8.9"
 tokio =  { version = "1.52.0", features = ["full"] }
 dotenvy = "0.15"
-utoipa = "5"
+utoipa = "5.5"
 utoipa-axum = "0.2"
 utoipa-scalar = "0.3"
 utoipa-swagger-ui = {version = "9", features = ["axum"]}
@@ -25,3 +25,4 @@ sqlx = { version = "0.8.6", features = [
 hex = "0.4.3"
 sha2 = "0.11.0"
 uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"

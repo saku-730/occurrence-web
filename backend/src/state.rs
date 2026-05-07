@@ -11,7 +11,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Config, posgre:PgPool) -> Self {
+    pub fn new(config: Config, posgre:PgPool, ) -> Self {
         Self {
             config: Arc::new(config),
             posgre:posgre,

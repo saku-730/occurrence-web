@@ -16,7 +16,7 @@ async fn main() {
     .await.expect("failed to connect postgresql server");
 
     let bind_addr = config.app.bind_addr();
-    let state = AppState::new(config, posgre);
+    let state = AppState::new(config, posgre,);
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
