@@ -45,13 +45,18 @@
 - [x] 正常な email で `pre_register` すると、DBに保存された `token_hash` が64文字で、全て16進数文字である。`pre_register_stores_token_hash`
 
 - [x] 不正な email を渡すと、`AuthServiceError::InvalidEmail` が返り、`pending_registrations` には作成されない。`pre_register_rejects_invalid_email_and_does_not_create_pending_registration`
-- [ ] `POST /auth/pre_register` に正常な email を送ると、登録完了URLを含むメール文面が作成される
+
+
 
 ### repository
 
 - [x] 正常な形式で `pending_registrations` に `email`、`token_hash`、`expires_at` を INSERT できる。保存後、`email` と `token_hash` が一致し、`completed_at` は `NULL`、`expires_at` は現在時刻より未来である。`create_pending_registration_inserts_row`
 
 - [x] 同じ `token_hash` で2回 INSERT しようとすると、1回目は成功し、2回目は `UNIQUE` 制約により失敗する。`create_pending_registration_rejects_duplicate_token_hash`
+
+### mail
+
+- [x] `POST /auth/pre_register` に正常な email を送ると、登録完了URLを含むメール文面が作成される
 
 ### other
 
