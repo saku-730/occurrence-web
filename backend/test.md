@@ -23,8 +23,6 @@
 - [x] `POST /auth/pre_register` に不正な email を送ると `400 Bad Request` が返り、`pending_registrations` には作成されない。`pre_register_route_rejects_invalid_email_and_does_not_create_pending_registration`
 
 - [x] `/openapi.json` の `/auth/pre_register` の `post.responses` に `201`、`400`、`500` が含まれる。`openapi_json_includes_pre_register_response_statuses`
-- [ ]  `POST /auth/pre_register` に正常な emailを送ると、トークンが作られる。
-- [ ]  `POST /auth/pre_register` に不正形式な emailを送ると、トークンが作られる。
 - [ ]  `POST /auth/pre_register` に正常な emailを送ると、トークンが作られhashがpostgresSQLに保存される。
 
 ### service
