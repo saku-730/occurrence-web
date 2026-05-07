@@ -93,3 +93,88 @@ fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError>
         _ => Ok(default),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        env,
+        sync::{Mutex, OnceLock},
+    };
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new(vars: &[(&'static str, &'static str)]) -> Self {
+            let keys = [
+                "APP_HOST",
+                "APP_PORT",
+                "APP_BASE_URL",
+                "DATABASE_URL",
+            ];
+
+            let saved = keys
+                .iter()
+                .map(|&key| (key, env::var(key).ok()))
+                .collect();
+
+            unsafe {
+                for key in keys {
+                    env::remove_var(key);
+                }
+
+                for &(key, value) in vars {
+                    env::set_var(key, value);
+                }
+            }
+
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (key, value) in &self.saved {
+                    match value {
+                        Some(value) => env::set_var(key, value),
+                        None => env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn from_env_reads_app_host_port_base_url_and_database_url() {
+        let _lock = env_lock().lock().unwrap();
+
+        let _env = EnvGuard::new(&[
+            ("APP_HOST", "127.0.0.1"),
+            ("APP_PORT", "3000"),
+            ("APP_BASE_URL", "http://127.0.0.1:3000"),
+            (
+                "DATABASE_URL",
+                "postgres://admin:occurrence_password@localhost:5432/occurrence_web",
+            ),
+        ]);
+
+        let config = Config::from_env()
+            .expect("Config::from_env should read required environment variables");
+
+        assert_eq!(config.app.host, "127.0.0.1");
+        assert_eq!(config.app.port, 3000);
+        assert_eq!(config.app.app_base_url, "http://127.0.0.1:3000");
+        assert_eq!(
+            config.posgre.url,
+            "postgres://admin:occurrence_password@localhost:5432/occurrence_web"
+        );
+    }
+}
