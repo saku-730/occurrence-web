@@ -110,6 +110,61 @@ mod tests {
         row.0
     }
 
+    async fn delete_mailpit_messages() {
+        let response = reqwest::Client::new()
+            .delete("http://127.0.0.1:8025/api/v1/messages")
+            .send()
+            .await
+            .expect("failed to delete Mailpit messages");
+
+        assert!(
+            response.status().is_success(),
+            "failed to clear Mailpit messages: {}",
+            response.status()
+        );
+    }
+
+    async fn fetch_mailpit_messages() -> Vec<serde_json::Value> {
+        let response = reqwest::get("http://127.0.0.1:8025/api/v1/messages")
+            .await
+            .expect("failed to fetch Mailpit messages");
+
+        assert!(
+            response.status().is_success(),
+            "failed to fetch Mailpit messages: {}",
+            response.status()
+        );
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .expect("failed to parse Mailpit messages response");
+
+        body["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    async fn fetch_mailpit_message(message_id: &str) -> serde_json::Value {
+        let url = format!("http://127.0.0.1:8025/api/v1/message/{}", message_id);
+
+        let response = reqwest::get(url)
+            .await
+            .expect("failed to fetch Mailpit message detail");
+
+        assert!(
+            response.status().is_success(),
+            "failed to fetch Mailpit message detail: {}",
+            response.status()
+        );
+
+        response
+            .json()
+            .await
+            .expect("failed to parse Mailpit message detail response")
+    }
+
     #[tokio::test]
     async fn index_route_returns_backend_name() {
         let app = build_app(test_state());
@@ -372,5 +427,62 @@ mod tests {
         assert!(responses.get("500").is_some());
     }
 
-    
+    #[tokio::test]
+    async fn pre_register_route_sends_registration_completion_email() {
+        let state = test_state();
+        let db = state.posgre.clone();
+
+        let email = format!("route-mail-{}@example.com", uuid::Uuid::new_v4());
+
+        delete_pending_registration_by_email(&db, &email).await;
+        delete_mailpit_messages().await;
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/pre_register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let mailpit_messages = fetch_mailpit_messages().await; //メール一覧取得
+
+        let message = mailpit_messages
+            .iter()
+            .find(|message| message["To"] //宛先で特定のメール探索
+                .as_array()
+                .is_some_and(|to| {
+                    to.iter().any(|recipient| {
+                        recipient["Address"]
+                            .as_str()
+                            .is_some_and(|address| address == email)
+                    })
+                }))
+            .expect("registration completion email was not sent");
+
+        let subject = message["Subject"].as_str().unwrap_or("");
+        assert!(subject.contains("registration"));
+
+        let message_id = message["ID"]
+            .as_str()
+            .expect("mailpit message ID is missing");
+
+        let message_detail = fetch_mailpit_message(message_id).await;
+
+        let body = message_detail["Text"].as_str().unwrap_or("");
+
+        assert!(body.contains("/auth/complete_registration"));
+        assert!(body.contains("token="));
+
+        delete_pending_registration_by_email(&db, &email).await;
+        delete_mailpit_messages().await;
+    }   
 }

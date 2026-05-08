@@ -27,3 +27,10 @@ sha2 = "0.11.0"
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1",
+    "tokio1-native-tls",
+] }

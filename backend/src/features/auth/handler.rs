@@ -18,6 +18,7 @@ use super::{
         AuthService,
         AuthServiceError
 },
+    mail::{send_mail, MailError},
 };
 
 use crate::state::AppState;
@@ -27,9 +28,10 @@ use crate::state::AppState;
 pub enum AuthHandlerError{
     InvalidEmail,
     Database(sqlx::Error),
+    Mail(MailError),   
 }
 
-impl From<AuthServiceError> for AuthHandlerError{
+impl From<AuthServiceError> for AuthHandlerError{ //.await?用
     fn from(error: AuthServiceError) -> Self {
         match error {
             AuthServiceError::InvalidEmail => Self::InvalidEmail,
@@ -38,7 +40,13 @@ impl From<AuthServiceError> for AuthHandlerError{
     }
 }
 
-impl IntoResponse for AuthHandlerError {
+impl From<MailError> for AuthHandlerError { //.await?用
+    fn from(error: MailError) -> Self {
+        Self::Mail(error)        
+    }
+}
+
+impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変換 axumのやつ
     fn into_response(self) -> Response {
         match self {
             AuthHandlerError::InvalidEmail => { 
@@ -57,6 +65,15 @@ impl IntoResponse for AuthHandlerError {
                 };
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response() //500
+            }
+
+            AuthHandlerError::Mail(_) => {
+                let body = ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Internal server error".to_string(),
+                };
+
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
         }
     }
@@ -95,6 +112,8 @@ pub async fn pre_register(
         payload.email,
     )
     .await?;
+
+    send_mail(&output.mail).await?; //メール送信
 
     Ok((StatusCode::CREATED, Json(output.response)))
 }

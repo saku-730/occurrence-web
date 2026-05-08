@@ -1,8 +1,55 @@
+use lettre::{
+    message::Mailbox,
+    transport::smtp::client::Tls,
+    AsyncSmtpTransport,
+    AsyncTransport,
+    Message,
+    Tokio1Executor,
+};
+
+pub async fn send_mail(message: &MailMessage) -> Result<(), MailError> {
+    let from: Mailbox = "no-reply@example.com"//送信元メールアドレス設定
+        .parse()
+        .map_err(|_| MailError::InvalidFromAddress)?;//エラー変換
+
+    let to: Mailbox = message //宛先メールアドレス設定
+        .to
+        .parse()
+        .map_err(|_| MailError::InvalidToAddress)?;
+
+    let email = Message::builder() //メール作成
+        .from(from)
+        .to(to)
+        .subject(&message.subject)
+        .body(message.body.clone())
+        .map_err(|_| MailError::BuildMessage)?;
+
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1") //SMTP送信設定
+        .port(1025)
+        .tls(Tls::None)
+        .build();
+
+    mailer //メール送信
+        .send(email)
+        .await
+        .map_err(|_| MailError::SendFailed)?;
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailMessage {
     pub to: String, //宛先
     pub subject: String, //件名
     pub body: String, //本文
+}
+
+#[derive(Debug)]
+pub enum MailError {
+    InvalidFromAddress,
+    InvalidToAddress,
+    BuildMessage,
+    SendFailed,
 }
 
 pub fn build_registration_completion_email( //メールの宛先・件名・本文を作成
