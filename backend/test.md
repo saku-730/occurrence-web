@@ -45,6 +45,7 @@
 - [x] 正常な email で `pre_register` すると、DBに保存された `token_hash` が64文字で、全て16進数文字である。`pre_register_stores_token_hash`
 
 - [x] 不正な email を渡すと、`AuthServiceError::InvalidEmail` が返り、`pending_registrations` には作成されない。`pre_register_rejects_invalid_email_and_does_not_create_pending_registration`
+- [x] AuthService::pre_register に正常な email を渡すと、登録完了URLを本文に含む MailMessage が作成される`pre_register_creates_registration_completion_email`
 
 
 
@@ -56,7 +57,7 @@
 
 ### mail
 
-- [x] `POST /auth/pre_register` に正常な email を送ると、登録完了URLを含むメール文面が作成される
+- [x] `POST /auth/pre_register` に正常な email を送ると、登録完了URLを含むメール文面が作成される`builds_registration_completion_email_with_completion_url`
 
 ### other
 

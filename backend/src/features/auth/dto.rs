@@ -6,7 +6,7 @@ pub struct RegisterRequest {
     pub email: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone,Serialize, ToSchema,PartialEq,Eq)]
 pub struct RegisterResponse{
     pub message: String,
     pub email: String,

@@ -89,7 +89,12 @@ pub async fn pre_register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError> {
-    let response = AuthService::pre_register(&state.posgre,payload.email).await?;
-    Ok((StatusCode::CREATED, Json(response)))
-}
+    let output = AuthService::pre_register(
+        &state.posgre,
+        &state.config.app.app_base_url,
+        payload.email,
+    )
+    .await?;
 
+    Ok((StatusCode::CREATED, Json(output.response)))
+}
