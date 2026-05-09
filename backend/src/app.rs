@@ -47,7 +47,7 @@ async fn info(State(state): State<AppState>) -> String {
 #[cfg(test)]//test section
 mod tests {
     use super::build_app;
-    use crate::config::{AppConfig, Config, PosgreConfig};
+    use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig};
     use crate::state::AppState;
 
     use axum::{
@@ -71,6 +71,15 @@ mod tests {
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+
+            smtp: SmtpConfig{
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
             },
         };
 

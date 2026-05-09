@@ -12,5 +12,13 @@ services:
     volumes:
       - occurrence_web_postgres_data:/var/lib/postgresql/data
 
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: occurrence_web_mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"   
+
 volumes:
   occurrence_web_postgres_data:

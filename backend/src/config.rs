@@ -5,6 +5,7 @@ use std::fmt;
 pub struct Config {
     pub app: AppConfig,
     pub posgre: PosgreConfig,
+    pub smtp: SmtpConfig, //メール関係
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,16 @@ impl AppConfig {
 #[derive(Debug, Clone)]
 pub struct PosgreConfig {
     pub url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub tls: String,
+    pub from: String,
 }
 
 #[derive(Debug)]
@@ -63,7 +74,16 @@ impl Config {
             url: get_required_env("DATABASE_URL")?,
         };
 
-        Ok(Self { app , posgre})
+        let smtp = SmtpConfig {
+            host: get_env_or("SMTP_HOST", "127.0.0.1"),
+            port: parse_u16_env_or("SMTP_PORT", 1025)?,
+            username: get_env_or("SMTP_USERNAME", ""),
+            password: get_env_or("SMTP_PASSWORD", ""),
+            tls: get_env_or("SMTP_TLS", "none"),
+            from: get_env_or("MAIL_FROM", "no-reply@example.com"),
+        };
+
+        Ok(Self { app, posgre, smtp })
     }
 }
 
@@ -118,6 +138,12 @@ mod tests {
                 "APP_PORT",
                 "APP_BASE_URL",
                 "DATABASE_URL",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_USERNAME",
+                "SMTP_PASSWORD",
+                "SMTP_TLS",
+                "MAIL_FROM",
             ];
 
             let saved = keys
@@ -157,14 +183,23 @@ mod tests {
         let _lock = env_lock().lock().unwrap();
 
         let _env = EnvGuard::new(&[
-            ("APP_HOST", "127.0.0.1"),
-            ("APP_PORT", "3000"),
-            ("APP_BASE_URL", "http://127.0.0.1:3000"),
-            (
-                "DATABASE_URL",
-                "postgres://admin:occurrence_password@localhost:5432/occurrence_web",
-            ),
+            ("DATABASE_URL", "postgres://admin:occurrence_password@localhost:5432/occurrence_web"),
+            ("SMTP_HOST", "smtp.gmail.com"),
+            ("SMTP_PORT", "587"),
+            ("SMTP_USERNAME", "test-user@gmail.com"),
+            ("SMTP_PASSWORD", "test-app-password"),
+            ("SMTP_TLS", "starttls"),
+            ("MAIL_FROM", "test-user@gmail.com"),
         ]);
+        let config = Config::from_env()
+            .expect("Config::from_env should read SMTP environment variables");
+
+        assert_eq!(config.smtp.host, "smtp.gmail.com");
+        assert_eq!(config.smtp.port, 587);
+        assert_eq!(config.smtp.username, "test-user@gmail.com");
+        assert_eq!(config.smtp.password, "test-app-password");
+        assert_eq!(config.smtp.tls, "starttls");
+        assert_eq!(config.smtp.from, "test-user@gmail.com");
 
         let config = Config::from_env()
             .expect("Config::from_env should read required environment variables");

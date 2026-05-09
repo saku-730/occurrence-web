@@ -7,7 +7,12 @@ use lettre::{
     Tokio1Executor,
 };
 
-pub async fn send_mail(message: &MailMessage) -> Result<(), MailError> {
+use crate::config::SmtpConfig;
+
+pub async fn send_mail(
+    message: &MailMessage,
+    smtp: &SmtpConfig
+) -> Result<(), MailError> {
     let from: Mailbox = "no-reply@example.com"//送信元メールアドレス設定
         .parse()
         .map_err(|_| MailError::InvalidFromAddress)?;//エラー変換
@@ -24,8 +29,8 @@ pub async fn send_mail(message: &MailMessage) -> Result<(), MailError> {
         .body(message.body.clone())
         .map_err(|_| MailError::BuildMessage)?;
 
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1") //SMTP送信設定
-        .port(1025)
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host) //SMTP送信設定
+        .port(smtp.port)
         .tls(Tls::None)
         .build();
 
@@ -74,7 +79,10 @@ pub fn build_registration_completion_email( //メールの宛先・件名・本�
 }
 
 #[cfg(test)]
+
 mod tests {
+    use crate::config::SmtpConfig;
+    use super::{send_mail, MailMessage};
     use super::build_registration_completion_email;
 
     #[test]
@@ -92,5 +100,27 @@ mod tests {
                 .body
                 .contains("http://127.0.0.1:3000/auth/complete_registration?token=test-token")
         );
+    }
+
+    #[tokio::test]
+    async fn send_mail_sends_message_using_smtp_config() {
+        let message = MailMessage {
+            to: format!("mail-send-test-{}@example.com", uuid::Uuid::new_v4()),
+            subject: "SMTP config test".to_string(),
+            body: "This mail was sent using SmtpConfig.".to_string(),
+        };
+
+        let smtp = SmtpConfig {
+            host: "127.0.0.1".to_string(),
+            port: 1025,
+            username: "".to_string(),
+            password: "".to_string(),
+            tls: "none".to_string(),
+            from: "no-reply@example.com".to_string(),
+        };
+
+        send_mail(&message, &smtp)
+            .await
+            .expect("send_mail should send email using SmtpConfig");
     }
 }

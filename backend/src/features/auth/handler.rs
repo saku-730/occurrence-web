@@ -113,7 +113,7 @@ pub async fn pre_register(
     )
     .await?;
 
-    send_mail(&output.mail).await?; //メール送信
+    send_mail(&output.mail, &state.config.smtp).await?; //メール送信
 
     Ok((StatusCode::CREATED, Json(output.response)))
 }
