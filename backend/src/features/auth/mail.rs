@@ -1,6 +1,9 @@
 use lettre::{
     message::Mailbox,
-    transport::smtp::client::Tls,
+    transport::smtp::{
+        authentication::Credentials,
+        client::Tls,
+    },
     AsyncSmtpTransport,
     AsyncTransport,
     Message,
@@ -13,7 +16,8 @@ pub async fn send_mail(
     message: &MailMessage,
     smtp: &SmtpConfig
 ) -> Result<(), MailError> {
-    let from: Mailbox = "no-reply@example.com"//送信元メールアドレス設定
+    let from: Mailbox = smtp//送信元メールアドレス設定
+        .from
         .parse()
         .map_err(|_| MailError::InvalidFromAddress)?;//エラー変換
 
@@ -28,6 +32,44 @@ pub async fn send_mail(
         .subject(&message.subject)
         .body(message.body.clone())
         .map_err(|_| MailError::BuildMessage)?;
+
+    let tls_mode = smtp.tls.trim().to_lowercase(); //tls の設定値を整形
+
+    let mut builder = match tls_mode.as_str() { //tlsの値によって分岐
+        "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host) //開発 Mailpit
+            .port(smtp.port)
+            .tls(Tls::None),
+
+        "starttls" => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp.host) //本番Resend用
+            .map_err(|_| MailError::BuildTransport)?
+            .port(smtp.port),
+
+        "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host) //
+            .map_err(|_| MailError::BuildTransport)?
+            .port(smtp.port),
+
+        _ => return Err(MailError::UnsupportedTlsMode),//TLS設定外
+    };
+
+    if !smtp.username.trim().is_empty() {
+        let credentials = Credentials::new( //認証用情報組み立て
+            smtp.username.clone(),
+            smtp.password.clone(),
+        );
+
+        builder = builder.credentials(credentials);
+    }
+
+    let mailer = builder.build();
+
+    mailer
+        .send(email)
+        .await
+        .map_err(|_| MailError::SendFailed)?;
+
+    Ok(())
+
+
 
     let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host) //SMTP送信設定
         .port(smtp.port)
@@ -54,6 +96,8 @@ pub enum MailError {
     InvalidFromAddress,
     InvalidToAddress,
     BuildMessage,
+    BuildTransport,
+    UnsupportedTlsMode,
     SendFailed,
 }
 

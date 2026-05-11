@@ -25,7 +25,6 @@
 - [x] `/openapi.json` の `/auth/pre_register` の `post.responses` に `201`、`400`、`500` が含まれる。`openapi_json_includes_pre_register_response_statuses`
 - [x]  `POST /auth/pre_register` に正常な emailを送ると、トークンが作られhashがpostgresSQLのpending_registrationに保存される。`pre_register_route_creates_token_hash_for_valid_email`
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
-- [x]  send_mail が Config の SMTP 設定を使って Mailpit にメールを送信できる
 - [ ]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
 
 ### service
@@ -60,6 +59,7 @@
 ### mail
 
 - [x] `POST /auth/pre_register` に正常な email を送ると、登録完了URLを含むメール文面が作成される`builds_registration_completion_email_with_completion_url`
+- [x]  send_mail が Config の SMTP 設定を使って Mailpit にメールを送信できる `send_mail_sends_message_using_smtp_config`
 
 ### other
 
