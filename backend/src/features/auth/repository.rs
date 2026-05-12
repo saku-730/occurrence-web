@@ -55,7 +55,34 @@ impl AuthRepository {
 
         Ok(row)
     }
+
+    pub async fn create_user(
+        db: &PgPool,
+        email: &str,
+        user_name: &str,
+        password_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            INSERT INTO users (
+                email,
+                user_name,
+                password_hash
+            )
+            VALUES ($1, $2, $3)
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .execute(db)
+        .await?;
+
+        Ok(())
+    }
 }
+
+
 
 #[cfg(test)]
 mod tests {

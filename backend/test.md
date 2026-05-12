@@ -54,6 +54,8 @@
 - [x] ユーザー名が空だと拒否`complete_registration_rejects_empty_user_name`
 - [x] ユーザー名が空白だと拒否`complete_registration_rejects_blank_user_name`
 - [x] complete_registration は存在しない token を拒否する`complete_registration_rejects_unknown_token`
+- [x] トークンでpendingテーブルからユーザー探して、作成・本登録。`complete_registration_creates_user_for_valid_token`
+- [ ] 本登録に使ったtoken(urlのやつ)は使い済みにする。
 
 ### repository
 

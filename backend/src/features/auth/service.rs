@@ -6,6 +6,10 @@ use email_address::EmailAddress;
 use sha2::{Digest,Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+    Argon2,
+};
 
 #[derive(Debug)]
 pub enum AuthServiceError {
@@ -14,6 +18,7 @@ pub enum AuthServiceError {
     InvalidToken, //トークンエラー トークンが空とか
     InvalidPassword, //パスワードが空、空白だけ
     InvalidUserName, //ユーザー名が空か空白だけ
+    PasswordHash, //ハッシュ化したパスワードのエラー
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +30,12 @@ pub struct PreRegisterOutput {
 impl From<sqlx::Error> for AuthServiceError {
     fn from(error: sqlx::Error) -> Self {
         Self::Database(error)
+    }
+}
+
+impl From<argon2::password_hash::Error> for AuthServiceError {//hash_password用
+    fn from(_error: argon2::password_hash::Error) -> Self {
+        Self::PasswordHash
     }
 }
 
@@ -56,50 +67,73 @@ impl AuthService {
 
         Ok(PreRegisterOutput{ response, mail })
     }
+
     pub async fn complete_registration( //登録を完了するための関数
-    db: &PgPool,
-    token: String,
-    user_name: String,
-    password: String,
+        db: &PgPool,
+        token: String,
+        user_name: String,
+        password: String,
     ) -> Result<(), AuthServiceError> {
-    let token = token.trim();
+        let token = token.trim();
 
-    if token.is_empty() {
-        return Err(AuthServiceError::InvalidToken); //トークンが空はエラー
-    }
+        if token.is_empty() {
+            return Err(AuthServiceError::InvalidToken); //トークンが空はエラー
+        }
 
-    if password.trim().is_empty() {
-        return Err(AuthServiceError::InvalidPassword);
-    }
+        if password.trim().is_empty() {
+            return Err(AuthServiceError::InvalidPassword);
+        }
 
-    if user_name.trim().is_empty() {
-        return Err(AuthServiceError::InvalidUserName);
-    }
-    
-    let token_hash = hash_token(token);
+        if user_name.trim().is_empty() {
+            return Err(AuthServiceError::InvalidUserName);
+        }
+        
+        let token_hash = hash_token(token);
 
-    let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?;
+        let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?;
 
-    if pending_registration.is_none() {
-        return Err(AuthServiceError::InvalidToken);
-    }
+        let pending_registration = pending_registration
+    .ok_or(AuthServiceError::InvalidToken)?;
 
-    Ok(())
+
+
+        let user_name = user_name.trim();
+        let password_hash = hash_password(password.trim())?;
+
+        AuthRepository::create_user(
+            db,
+            &pending_registration.email,
+            user_name,
+            &password_hash,
+        )
+        .await?;
+
+        Ok(())
     }
 }
 
-fn hash_token(token: &str) -> String {
+pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes())) //ハッシュ化, encodeはバイナリそのままを16進数に変換している。
 }
 
+fn hash_password(password: &str) -> Result<String, AuthServiceError> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
 
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)?
+        .to_string();
 
+    Ok(password_hash)
+}
 
 #[cfg(test)]
 mod tests {
 
     use super::{AuthService, AuthServiceError};
     use sqlx::{postgres::PgPoolOptions, PgPool};
+    use crate::features::auth::repository::AuthRepository;
+    use crate::features::auth::service::hash_token;
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -107,11 +141,24 @@ mod tests {
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for DB tests");
 
-        PgPoolOptions::new()
+        let db = PgPoolOptions::new()
             .max_connections(5)
             .connect(&database_url)
             .await
-            .expect("failed to connect test database")
+            .expect("failed to connect test database");
+
+        sqlx::query!(  //データベースをきれいにしてから。実データ入っている本番環境ではアウト
+            r#"
+            TRUNCATE users, pending_registrations
+            RESTART IDENTITY
+            CASCADE
+            "#
+        )
+        .execute(&db)
+        .await
+        .expect("test database should be cleaned"); 
+        
+        db
     }
 
     async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
@@ -430,5 +477,53 @@ mod tests {
             result,
             Err(AuthServiceError::InvalidUserName)
         ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_creates_user_for_valid_token() {
+        let db = test_db_pool().await;
+
+        let token = "valid-registration-token";
+        let token_hash = hash_token(token);
+        let email = format!("complete-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        let result = AuthService::complete_registration(
+            &db,
+            token.to_string(),
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "complete_registration should succeed for a valid token: {:?}",
+            result
+        );
+
+        let user = sqlx::query!(
+            r#"
+            SELECT email, user_name, password_hash
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be created");
+
+        assert_eq!(user.email, email);
+        assert_eq!(user.user_name, "saku");
+        assert_ne!(user.password_hash, "password123");
+        assert!(!user.password_hash.is_empty());
     }
 }

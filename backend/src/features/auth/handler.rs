@@ -32,6 +32,7 @@ pub enum AuthHandlerError{
     InvalidToken,
     InvalidPassword,
     InvalidUserName,
+    PasswordHash,
 }
 
 impl From<AuthServiceError> for AuthHandlerError{ //.await?用
@@ -42,6 +43,7 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
             AuthServiceError::InvalidToken => Self::InvalidToken,
             AuthServiceError::InvalidPassword => Self::InvalidPassword,
             AuthServiceError::InvalidUserName => Self::InvalidUserName,
+            AuthServiceError::PasswordHash => Self::PasswordHash,
         }
     }
 }
@@ -109,6 +111,14 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
             }
 
+            AuthHandlerError::PasswordHash => { 
+                let body = ErrorResponse {
+                    error: "invalid_server_error".to_string(),
+                    message: "Invalid server_error".to_string(),
+                };
+
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response() //400
+            }
         }
     }
 }
