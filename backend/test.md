@@ -85,6 +85,8 @@
 
 - [x] `POST /auth/login`に JSON body なしでおくると client error`login_route_rejects_missing_json_body`
 - [x] `POST /auth/login` に登録済み email と正しい password を送ると 200 OK が返る`login_route_returns_ok_for_registered_user_with_correct_password`
+- [ ] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
+- [ ] 間違った、パスワードで`POST /auth/login` しても401
 
 ### service
 
