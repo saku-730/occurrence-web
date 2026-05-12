@@ -11,6 +11,7 @@ use crate::{
     features::auth::handler::{
         pre_register,
         complete_registration,
+        login,
     },
     state::AppState,
     openapi::ApiDoc
@@ -25,6 +26,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/info", get(info))
         .route("/auth/pre_register", post(pre_register))
         .route("/auth/complete_registration", post(complete_registration))
+        .route("/auth/login", post(login))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -54,6 +56,7 @@ mod tests {
     use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig};
     use crate::state::AppState;
     use crate::features::auth::repository::AuthRepository;
+    use crate::features::auth::service::hash_password;
 
     use axum::{
         body::{to_bytes, Body},
@@ -640,7 +643,7 @@ mod tests {
         assert!(!user.password_hash.is_empty());
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn complete_registration_route_returns_conflict_for_email_already_registered() {
         let state = test_state();
         let db = state.posgre.clone();
@@ -661,9 +664,7 @@ mod tests {
         AuthRepository::create_user(
             &db,
             &email,
-            "existing_user",
-            "$argon2id$dummy-existing-password-hash",
-        )
+            "existing_user", "$argon2id$dummy-existing-password-hash",)
         .await
         .expect("existing user should be created");
 
@@ -698,6 +699,7 @@ mod tests {
         assert_eq!(body["message"], "Email already registered");
     }
 
+    // Session
     #[tokio::test]
     async fn login_route_rejects_missing_json_body() {
         let state = test_state();
@@ -724,5 +726,57 @@ mod tests {
             StatusCode::NOT_FOUND,
             "/auth/login route should exist"
         );
+    }
+
+    #[tokio::test]
+    async fn login_route_returns_ok_for_registered_user_with_correct_password() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-login-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let body = serde_json::json!({
+            "email": email,
+            "password": password
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["message"], "login successful");
+        assert_eq!(body["email"], email);
+        assert_eq!(body["user_name"], "saku");
     }
 }

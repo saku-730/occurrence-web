@@ -15,6 +15,8 @@ use super::{
     ErrorResponse,
     CompleteRegistrationRequest,
     CompleteRegistrationResponse,
+    LoginRequest,
+    LoginResponse,
 },
     service::{
         AuthService,
@@ -229,4 +231,24 @@ pub async fn complete_registration(
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<(StatusCode, Json<LoginResponse>), AuthHandlerError> {
+    let output = AuthService::login(
+        &state.posgre,
+        payload.email,
+        payload.password,
+    )
+    .await?;
+
+    let response = LoginResponse {
+        message: "login successful".to_string(),
+        email: output.email,
+        user_name: output.user_name,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
 }
