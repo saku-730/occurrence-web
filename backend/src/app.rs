@@ -378,6 +378,11 @@ mod tests {
         );
 
         assert!(
+            body.contains("\"409\""),
+            "OpenAPI JSON should contain 409 response"
+        );
+
+        assert!(
             body.contains("\"500\""),
             "OpenAPI JSON should contain 500 response"
         );
@@ -633,5 +638,63 @@ mod tests {
         assert_eq!(user.user_name, "saku");
         assert_ne!(user.password_hash, "password123");
         assert!(!user.password_hash.is_empty());
+    }
+
+#[tokio::test]
+    async fn complete_registration_route_returns_conflict_for_email_already_registered() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
+        let email = format!("route-duplicate-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "existing_user",
+            "$argon2id$dummy-existing-password-hash",
+        )
+        .await
+        .expect("existing user should be created");
+
+        let body = serde_json::json!({
+            "token": token,
+            "user_name": "saku",
+            "password": "password123"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/complete_registration")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "email_already_registered");
+        assert_eq!(body["message"], "Email already registered");
     }
 }

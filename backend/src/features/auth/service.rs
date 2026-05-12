@@ -19,6 +19,7 @@ pub enum AuthServiceError {
     InvalidPassword, //パスワードが空、空白だけ
     InvalidUserName, //ユーザー名が空か空白だけ
     PasswordHash, //ハッシュ化したパスワードのエラー
+    EmailAlreadyRegistered, //メールがすでに使われている場合
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +97,14 @@ impl AuthService {
     .ok_or(AuthServiceError::InvalidToken)?; //pending_registrationの取り出し
 
 
+        if AuthRepository::user_exists_by_email( //メールの重複確認
+            db,
+            &pending_registration.email,
+        )
+        .await?
+        {
+            return Err(AuthServiceError::EmailAlreadyRegistered);
+        }
 
         let user_name = user_name.trim();
         let password_hash = hash_password(password.trim())?;
@@ -122,7 +131,7 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes())) //ハッシュ化, encodeはバイナリそのままを16進数に変換している。
 }
 
-fn hash_password(password: &str) -> Result<String, AuthServiceError> {
+pub fn hash_password(password: &str) -> Result<String, AuthServiceError> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
 
@@ -140,6 +149,7 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, PgPool};
     use crate::features::auth::repository::AuthRepository;
     use crate::features::auth::service::hash_token;
+    use crate::features::auth::service::hash_password;
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -655,5 +665,193 @@ mod tests {
             result,
             Err(AuthServiceError::InvalidToken)
         ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_email_already_registered() {
+        let db = test_db_pool().await;
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+        let email = format!("duplicate-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        let existing_password_hash = hash_password("oldpassword123")
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "existing_user",
+            &existing_password_hash,
+        )
+        .await
+        .expect("existing user should be created");
+
+        let result = AuthService::complete_registration(
+            &db,
+            token,
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::EmailAlreadyRegistered)
+        ));
+
+        let user_count = sqlx::query!(
+            r#"
+            SELECT COUNT(*) AS "count!"
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user count should be fetched");
+
+        assert_eq!(
+            user_count.count,
+            1,
+            "duplicate user should not be created"
+        );
+
+        let pending_registration = sqlx::query!(
+            r#"
+            SELECT completed_at
+            FROM pending_registrations
+            WHERE token_hash = $1
+            "#,
+            token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("pending registration should exist");
+
+        assert!(
+            pending_registration.completed_at.is_none(),
+            "pending registration should not be marked as completed when email is already registered"
+        );
+    }
+    #[tokio::test]
+    async fn complete_registration_rolls_back_user_creation_when_mark_completed_fails() {
+        let db = test_db_pool().await;
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+        let email = format!("rollback-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        sqlx::query(
+            r#"
+            CREATE OR REPLACE FUNCTION fail_pending_registration_completion()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced pending registration completion failure';
+            END;
+            $$ LANGUAGE plpgsql;
+            "#
+        )
+        .execute(&db)
+        .await
+        .expect("failure trigger function should be created");
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER fail_pending_registration_completion_trigger
+            BEFORE UPDATE OF completed_at
+            ON pending_registrations
+            FOR EACH ROW
+            WHEN (NEW.completed_at IS NOT NULL)
+            EXECUTE FUNCTION fail_pending_registration_completion();
+            "#
+        )
+        .execute(&db)
+        .await
+        .expect("failure trigger should be created");
+
+        let result = AuthService::complete_registration(
+            &db,
+            token,
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        sqlx::query(
+            r#"
+            DROP TRIGGER IF EXISTS fail_pending_registration_completion_trigger
+            ON pending_registrations;
+            "#
+        )
+        .execute(&db)
+        .await
+        .expect("failure trigger should be dropped");
+
+        sqlx::query(
+            r#"
+            DROP FUNCTION IF EXISTS fail_pending_registration_completion();
+            "#
+        )
+        .execute(&db)
+        .await
+        .expect("failure trigger function should be dropped");
+
+        assert!(
+            matches!(result, Err(AuthServiceError::Database(_))),
+            "complete_registration should fail when completed_at update fails"
+        );
+
+        let user_count = sqlx::query!(
+            r#"
+            SELECT COUNT(*) AS "count!"
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user count should be fetched");
+
+        assert_eq!(
+            user_count.count,
+            0,
+            "user should be rolled back when pending registration completion fails"
+        );
+
+        let pending_registration = sqlx::query!(
+            r#"
+            SELECT completed_at
+            FROM pending_registrations
+            WHERE token_hash = $1
+            "#,
+            token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("pending registration should exist");
+
+        assert!(
+            pending_registration.completed_at.is_none(),
+            "pending registration should remain incomplete after rollback"
+        );
     }
 }

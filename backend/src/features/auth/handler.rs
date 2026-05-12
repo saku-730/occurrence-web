@@ -34,6 +34,7 @@ pub enum AuthHandlerError{
     InvalidPassword,
     InvalidUserName,
     PasswordHash,
+    EmailAlreadyRegistered,
 }
 
 impl From<AuthServiceError> for AuthHandlerError{ //.await?用
@@ -45,6 +46,7 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
             AuthServiceError::InvalidPassword => Self::InvalidPassword,
             AuthServiceError::InvalidUserName => Self::InvalidUserName,
             AuthServiceError::PasswordHash => Self::PasswordHash,
+            AuthServiceError::EmailAlreadyRegistered => Self::EmailAlreadyRegistered,
         }
     }
 }
@@ -120,6 +122,14 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response() //400
             }
+            AuthHandlerError::EmailAlreadyRegistered => { 
+                let body = ErrorResponse {
+                    error: "email_already_registered".to_string(),
+                    message: "Email already registered".to_string(),
+                };
+
+                (StatusCode::CONFLICT, Json(body)).into_response() //400
+            }
         }
     }
 }
@@ -176,6 +186,11 @@ pub async fn pre_register(
         (
             status = 400,
             description = "Invalid registration input or token",
+            body = ErrorResponse
+        ),
+        (
+            status = 409,
+            description = "Email already registered",
             body = ErrorResponse
         ),
         (

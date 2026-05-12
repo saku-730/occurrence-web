@@ -27,7 +27,8 @@
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
 - [x]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る`complete_registration_route_rejects_missing_json_body`
-- [ ] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される 
+- [x] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される
+- [ ] `POST /auth/complete_registration` に登録済みのemailを送ると拒否する
 
 ### service
 
@@ -59,6 +60,8 @@
 - [x] 本登録できたら、pending_registratiosのcompleted_atを更新する`complete_registration_marks_pending_registration_as_completed`
 - [x] 使用済みtokenでは、本登録ができない。`complete_registration_rejects_already_completed_token`
 - [x] 本登録で期限切れトークンを拒否
+- [x] pending_registrations に有効な token があっても、その email の user がすでに users に存在するなら、本登録は失敗する`complete_registration_rejects_email_already_registered`
+- [ ] トランザクション処理テスト。ユーザー登録を途中でしくじったら、completed_atをロールバック。
 
 ### repository
 

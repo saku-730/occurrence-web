@@ -90,7 +90,7 @@ impl AuthRepository {
             UPDATE pending_registrations
             SET completed_at = now()
             WHERE token_hash = $1
-              AND completed_at IS NULL
+                AND completed_at IS NULL
             "#,
             token_hash
         )
@@ -98,7 +98,27 @@ impl AuthRepository {
         .await?;
 
         Ok(())
-}
+    }
+
+    pub async fn user_exists_by_email(
+        db: &PgPool,
+        email: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM users
+                WHERE email = $1
+            ) AS "exists!"
+            "#,
+            email
+        )
+        .fetch_one(db)
+        .await?;
+
+        Ok(row.exists)
+    }
 }
 
 
