@@ -29,6 +29,9 @@ pub enum AuthHandlerError{
     InvalidEmail,
     Database(sqlx::Error),
     Mail(MailError),   
+    InvalidToken,
+    InvalidPassword,
+    InvalidUserName,
 }
 
 impl From<AuthServiceError> for AuthHandlerError{ //.await?用
@@ -36,6 +39,9 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
         match error {
             AuthServiceError::InvalidEmail => Self::InvalidEmail,
             AuthServiceError::Database(error) => Self::Database(error),
+            AuthServiceError::InvalidToken => Self::InvalidToken,
+            AuthServiceError::InvalidPassword => Self::InvalidPassword,
+            AuthServiceError::InvalidUserName => Self::InvalidUserName,
         }
     }
 }
@@ -56,8 +62,8 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 };
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
-
             }
+
             AuthHandlerError::Database(_) => {
                 let body = ErrorResponse {
                     error: "internal_server_error".to_string(),
@@ -75,6 +81,34 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
+
+            AuthHandlerError::InvalidToken => { 
+                let body = ErrorResponse {
+                    error: "invalid_token".to_string(),
+                    message: "Invalid token".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
+            }
+
+            AuthHandlerError::InvalidPassword => { 
+                let body = ErrorResponse {
+                    error: "invalid_password".to_string(),
+                    message: "Invalid password".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
+            }
+
+            AuthHandlerError::InvalidUserName => { 
+                let body = ErrorResponse {
+                    error: "invalid_username".to_string(),
+                    message: "Invalid username".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
+            }
+
         }
     }
 }

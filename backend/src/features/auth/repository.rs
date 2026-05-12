@@ -2,6 +2,11 @@ use sqlx::PgPool;
 
 pub struct AuthRepository;
 
+#[derive(Debug)]
+pub struct PendingRegistration {
+    pub email: String,
+}
+
 impl AuthRepository {
     pub async fn create_pending_registration(
         db: &PgPool,
@@ -28,6 +33,27 @@ impl AuthRepository {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn find_pending_registration_by_token_hash(
+        db: &PgPool,
+        token_hash: &str,
+    ) -> Result<Option<PendingRegistration>, sqlx::Error> {
+        let row = sqlx::query_as!(
+            PendingRegistration,
+            r#"
+            SELECT email
+            FROM pending_registrations
+            WHERE token_hash = $1
+                AND completed_at IS NULL
+                AND expires_at > now()
+            "#,
+            token_hash
+        )
+        .fetch_optional(db)
+        .await?;
+
+        Ok(row)
     }
 }
 

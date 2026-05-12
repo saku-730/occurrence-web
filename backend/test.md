@@ -25,7 +25,8 @@
 - [x] `/openapi.json` の `/auth/pre_register` の `post.responses` に `201`、`400`、`500` が含まれる。`openapi_json_includes_pre_register_response_statuses`
 - [x]  `POST /auth/pre_register` に正常な emailを送ると、トークンが作られhashがpostgresSQLのpending_registrationに保存される。`pre_register_route_creates_token_hash_for_valid_email`
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
-- [ ]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
+- [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
+- [ ]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る
 
 ### service
 
@@ -47,8 +48,12 @@
 
 - [x] 不正な email を渡すと、`AuthServiceError::InvalidEmail` が返り、`pending_registrations` には作成されない。`pre_register_rejects_invalid_email_and_does_not_create_pending_registration`
 - [x] AuthService::pre_register に正常な email を渡すと、登録完了URLを本文に含む MailMessage が作成される`pre_register_creates_registration_completion_email`
-
-
+- [x] complete_registration は空 token を拒否する`complete_registration_rejects_empty_token`
+- [x] 空パスワードを拒否`complete_registration_rejects_empty_password`
+- [x] パスワードが空白だけを拒否`complete_registration_rejects_blank_password`
+- [x] ユーザー名が空だと拒否`complete_registration_rejects_empty_user_name`
+- [x] ユーザー名が空白だと拒否`complete_registration_rejects_blank_user_name`
+- [x] complete_registration は存在しない token を拒否する`complete_registration_rejects_unknown_token`
 
 ### repository
 

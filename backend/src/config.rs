@@ -205,8 +205,8 @@ mod tests {
             .expect("Config::from_env should read required environment variables");
 
         assert_eq!(config.app.host, "127.0.0.1");
-        assert_eq!(config.app.port, 3000);
-        assert_eq!(config.app.app_base_url, "http://127.0.0.1:3000");
+        assert_eq!(config.app.port, 3001);
+        assert_eq!(config.app.app_base_url, "http://127.0.0.1:3001");
         assert_eq!(
             config.posgre.url,
             "postgres://admin:occurrence_password@localhost:5432/occurrence_web"

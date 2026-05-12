@@ -11,6 +11,9 @@ use uuid::Uuid;
 pub enum AuthServiceError {
     InvalidEmail,
     Database(sqlx::Error),
+    InvalidToken, //トークンエラー トークンが空とか
+    InvalidPassword, //パスワードが空、空白だけ
+    InvalidUserName, //ユーザー名が空か空白だけ
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +55,36 @@ impl AuthService {
         let mail = build_registration_completion_email(&email, app_base_url, &token);
 
         Ok(PreRegisterOutput{ response, mail })
+    }
+    pub async fn complete_registration( //登録を完了するための関数
+    db: &PgPool,
+    token: String,
+    user_name: String,
+    password: String,
+    ) -> Result<(), AuthServiceError> {
+    let token = token.trim();
+
+    if token.is_empty() {
+        return Err(AuthServiceError::InvalidToken); //トークンが空はエラー
+    }
+
+    if password.trim().is_empty() {
+        return Err(AuthServiceError::InvalidPassword);
+    }
+
+    if user_name.trim().is_empty() {
+        return Err(AuthServiceError::InvalidUserName);
+    }
+    
+    let token_hash = hash_token(token);
+
+    let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?;
+
+    if pending_registration.is_none() {
+        return Err(AuthServiceError::InvalidToken);
+    }
+
+    Ok(())
     }
 }
 
@@ -289,5 +322,113 @@ mod tests {
         assert!(output.mail.body.contains("token="));
 
         delete_pending_registration_by_email(&db, &email).await;
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_empty_token() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "".to_string(),
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidToken)
+        ));
+    }
+    
+    #[tokio::test]
+    async fn complete_registration_rejects_unknown_token() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "unknown-token".to_string(),
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_empty_password() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "saku".to_string(),
+            "".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidPassword)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_blank_password() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "saku".to_string(),
+            "   ".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidPassword)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_empty_user_name() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidUserName)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_blank_user_name() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "   ".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidUserName)
+        ));
     }
 }

@@ -68,20 +68,6 @@ pub async fn send_mail(
         .map_err(|_| MailError::SendFailed)?;
 
     Ok(())
-
-
-
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host) //SMTP送信設定
-        .port(smtp.port)
-        .tls(Tls::None)
-        .build();
-
-    mailer //メール送信
-        .send(email)
-        .await
-        .map_err(|_| MailError::SendFailed)?;
-
-    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
