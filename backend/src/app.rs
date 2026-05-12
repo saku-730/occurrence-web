@@ -8,7 +8,10 @@ use utoipa_swagger_ui::SwaggerUi;
 
 
 use crate::{
-    features::auth::handler::pre_register,
+    features::auth::handler::{
+        pre_register,
+        complete_registration,
+    },
     state::AppState,
     openapi::ApiDoc
 };
@@ -21,6 +24,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/auth/pre_register", post(pre_register))
+        .route("/auth/complete_registration", post(complete_registration))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -331,7 +335,61 @@ mod tests {
         assert!(json["components"]["schemas"]["RegisterResponse"].is_object());
         assert!(json["components"]["schemas"]["ErrorResponse"].is_object());
     }
+    
+    #[tokio::test]
+    async fn openapi_json_includes_complete_registration_response_statuses() {
+        let app = build_app(test_state());
 
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(
+            body.contains("/auth/complete_registration"),
+            "OpenAPI JSON should contain /auth/complete_registration"
+        );
+
+        assert!(
+            body.contains("\"201\""),
+            "OpenAPI JSON should contain 201 response"
+        );
+
+        assert!(
+            body.contains("\"400\""),
+            "OpenAPI JSON should contain 400 response"
+        );
+
+        assert!(
+            body.contains("\"500\""),
+            "OpenAPI JSON should contain 500 response"
+        );
+
+        assert!(
+            body.contains("CompleteRegistrationRequest"),
+            "OpenAPI JSON should contain CompleteRegistrationRequest schema"
+        );
+
+        assert!(
+            body.contains("CompleteRegistrationResponse"),
+            "OpenAPI JSON should contain CompleteRegistrationResponse schema"
+        );
+    }
+        
     #[tokio::test]
     async fn pre_register_route_creates_pending_registration() {
         let state = test_state();
@@ -493,5 +551,28 @@ mod tests {
 
         delete_pending_registration_by_email(&db, &email).await;
         delete_mailpit_messages().await;
-    }   
+    }
+
+    #[tokio::test]
+    async fn complete_registration_route_rejects_missing_json_body() {
+        let state = test_state();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/complete_registration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            response.status().is_client_error(),
+            "missing JSON body should return client error"
+        );
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
 }

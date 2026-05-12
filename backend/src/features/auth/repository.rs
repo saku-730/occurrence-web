@@ -12,7 +12,7 @@ impl AuthRepository {
         db: &PgPool,
         email: &str,
         token_hash: &str,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), sqlx::Error> { //有効期限は30分
         sqlx::query(
             r#"
             INSERT INTO pending_registrations (
@@ -80,6 +80,25 @@ impl AuthRepository {
 
         Ok(())
     }
+
+    pub async fn mark_pending_registration_completed( //本登録完了後、pending_registrationのcompleted_atに時刻をいれる。これが登録完了の印。
+        db: &PgPool,
+        token_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE pending_registrations
+            SET completed_at = now()
+            WHERE token_hash = $1
+              AND completed_at IS NULL
+            "#,
+            token_hash
+        )
+        .execute(db)
+        .await?;
+
+        Ok(())
+}
 }
 
 

@@ -90,21 +90,27 @@ impl AuthService {
         
         let token_hash = hash_token(token);
 
-        let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?;
+        let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?; //pending_registrationからトークンでemail検索
 
         let pending_registration = pending_registration
-    .ok_or(AuthServiceError::InvalidToken)?;
+    .ok_or(AuthServiceError::InvalidToken)?; //pending_registrationの取り出し
 
 
 
         let user_name = user_name.trim();
         let password_hash = hash_password(password.trim())?;
 
-        AuthRepository::create_user(
+        AuthRepository::create_user( //ユーザー本作成処理
             db,
             &pending_registration.email,
             user_name,
             &password_hash,
+        )
+        .await?;
+
+        AuthRepository::mark_pending_registration_completed( //完了処理
+            db,
+            &token_hash,
         )
         .await?;
 
@@ -525,5 +531,129 @@ mod tests {
         assert_eq!(user.user_name, "saku");
         assert_ne!(user.password_hash, "password123");
         assert!(!user.password_hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_registration_marks_pending_registration_as_completed() {
+        let db = test_db_pool().await;
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+        let email = format!("completed-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        AuthService::complete_registration(
+            &db,
+            token,
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await
+        .expect("complete_registration should succeed");
+
+        let row = sqlx::query!(
+            r#"
+            SELECT completed_at
+            FROM pending_registrations
+            WHERE token_hash = $1
+            "#,
+            token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("pending registration should exist");
+
+        assert!(
+            row.completed_at.is_some(),//completed_atがnullでなければok
+            "completed_at should be set after complete_registration"
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_already_completed_token() {
+        let db = test_db_pool().await;
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+        let email = format!("reuse-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        AuthService::complete_registration(
+            &db,
+            token.clone(),
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await
+        .expect("first complete_registration should succeed");
+
+        let result = AuthService::complete_registration( //二回目の本登録。同じトークンなので失敗するはず。
+            &db,
+            token,
+            "another_user".to_string(),
+            "password456".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_expired_token() {
+        let db = test_db_pool().await;
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+        let email = format!("expired-{}@example.com", uuid::Uuid::new_v4());
+
+        sqlx::query!( //pending_registrationsにトークン期限、現在時刻-1分で登録。
+            r#"
+            INSERT INTO pending_registrations (
+                email,
+                token_hash,
+                expires_at
+            )
+            VALUES (
+                $1,
+                $2,
+                now() - interval '1 minute'
+            )
+            "#,
+            email,
+            token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("expired pending registration should be created");
+
+        let result = AuthService::complete_registration(
+            &db,
+            token,
+            "saku".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidToken)
+        ));
     }
 }

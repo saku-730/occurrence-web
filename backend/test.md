@@ -26,7 +26,8 @@
 - [x]  `POST /auth/pre_register` に正常な emailを送ると、トークンが作られhashがpostgresSQLのpending_registrationに保存される。`pre_register_route_creates_token_hash_for_valid_email`
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
-- [ ]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る
+- [x]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る`complete_registration_route_rejects_missing_json_body`
+- [ ] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される 
 
 ### service
 
@@ -55,7 +56,9 @@
 - [x] ユーザー名が空白だと拒否`complete_registration_rejects_blank_user_name`
 - [x] complete_registration は存在しない token を拒否する`complete_registration_rejects_unknown_token`
 - [x] トークンでpendingテーブルからユーザー探して、作成・本登録。`complete_registration_creates_user_for_valid_token`
-- [ ] 本登録に使ったtoken(urlのやつ)は使い済みにする。
+- [x] 本登録できたら、pending_registratiosのcompleted_atを更新する`complete_registration_marks_pending_registration_as_completed`
+- [x] 使用済みtokenでは、本登録ができない。`complete_registration_rejects_already_completed_token`
+- [x] 本登録で期限切れトークンを拒否
 
 ### repository
 

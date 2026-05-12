@@ -12,7 +12,9 @@ use super::{
     dto::{
     RegisterRequest,
     RegisterResponse,
-    ErrorResponse
+    ErrorResponse,
+    CompleteRegistrationRequest,
+    CompleteRegistrationResponse,
 },
     service::{
         AuthService,
@@ -22,7 +24,6 @@ use super::{
 };
 
 use crate::state::AppState;
-
 
 #[derive(Debug)]
 pub enum AuthHandlerError{
@@ -160,4 +161,47 @@ pub async fn pre_register(
     send_mail(&output.mail, &state.config.smtp).await?; //メール送信
 
     Ok((StatusCode::CREATED, Json(output.response)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/complete_registration",
+    request_body = CompleteRegistrationRequest,
+    responses(
+        (
+            status = 201,
+            description = "Complete registration successfully",
+            body = CompleteRegistrationResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid registration input or token",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+
+pub async fn complete_registration(
+    State(state): State<AppState>,
+    Json(payload): Json<CompleteRegistrationRequest>,
+    ) -> Result<(StatusCode, Json<CompleteRegistrationResponse>), AuthHandlerError> {
+    AuthService::complete_registration(
+        &state.posgre,
+        payload.token,
+        payload.user_name,
+        payload.password,
+    )
+    .await?;
+
+    let response = CompleteRegistrationResponse {
+        message: "registration completed".to_string(),
+    };
+
+    Ok((StatusCode::CREATED, Json(response)))
 }

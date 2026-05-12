@@ -17,3 +17,15 @@ pub struct ErrorResponse{
     pub error: String,
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CompleteRegistrationRequest {
+    pub token: String,
+    pub user_name: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompleteRegistrationResponse {
+    pub message: String,
+}
