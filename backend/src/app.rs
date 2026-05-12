@@ -697,4 +697,32 @@ mod tests {
         assert_eq!(body["error"], "email_already_registered");
         assert_eq!(body["message"], "Email already registered");
     }
+
+    #[tokio::test]
+    async fn login_route_rejects_missing_json_body() {
+        let state = test_state();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            response.status().is_client_error(),
+            "missing JSON body should return client error"
+        );
+
+        assert_ne!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "/auth/login route should exist"
+        );
+    }
 }

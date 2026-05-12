@@ -35,6 +35,7 @@ pub enum AuthHandlerError{
     InvalidUserName,
     PasswordHash,
     EmailAlreadyRegistered,
+    InvalidCredentials,
 }
 
 impl From<AuthServiceError> for AuthHandlerError{ //.await?用
@@ -47,6 +48,7 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
             AuthServiceError::InvalidUserName => Self::InvalidUserName,
             AuthServiceError::PasswordHash => Self::PasswordHash,
             AuthServiceError::EmailAlreadyRegistered => Self::EmailAlreadyRegistered,
+            AuthServiceError::InvalidCredentials => Self::InvalidCredentials,
         }
     }
 }
@@ -129,6 +131,14 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 };
 
                 (StatusCode::CONFLICT, Json(body)).into_response() //400
+            }
+            AuthHandlerError::InvalidCredentials => { 
+                let body = ErrorResponse {
+                    error: "invalid_credentials".to_string(),
+                    message: "Invalid credential".to_string(),
+                };
+
+                (StatusCode::UNAUTHORIZED, Json(body)).into_response() //400
             }
         }
     }

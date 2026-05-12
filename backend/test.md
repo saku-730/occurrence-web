@@ -1,6 +1,6 @@
 # テスト一覧
 
-## auth
+## user register
 
 ### app
 
@@ -61,7 +61,7 @@
 - [x] 使用済みtokenでは、本登録ができない。`complete_registration_rejects_already_completed_token`
 - [x] 本登録で期限切れトークンを拒否
 - [x] pending_registrations に有効な token があっても、その email の user がすでに users に存在するなら、本登録は失敗する`complete_registration_rejects_email_already_registered`
-- [ ] トランザクション処理テスト。ユーザー登録を途中でしくじったら、completed_atをロールバック。
+- [x] トランザクション処理テスト。ユーザー登録を途中でしくじったら、completed_atをロールバック。
 
 ### repository
 
@@ -78,3 +78,19 @@
 
 - [x] `config.rs` の `Config::from_env` が、`APP_HOST`、`APP_PORT`、`APP_BASE_URL`、`DATABASE_URL` を正しく読むことを確認する
 - [x] Config::from_env が SMTP_HOST、SMTP_PORT、SMTP_USERNAME、SMTP_PASSWORD、SMTP_TLS、MAIL_FROM を正しく読むことを確認する `from_env_reads_app_host_port_base_url_and_database_url`
+
+## Login/Logout
+
+### app
+
+- [ ] `POST /auth/login`に JSON body なしでおくると client error``
+
+### service
+
+- [x] 登録済みユーザーが正しい password で login できる`login_accepts_registered_user_with_correct_password`
+- [x] 間違ったパスワードを拒否する`login_rejects_registered_user_with_wrong_password`
+- [x] 存在しないメールアドレスを拒否する`login_rejects_unknown_email`
+
+### repository
+
+- [ ]

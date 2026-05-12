@@ -7,7 +7,13 @@ use sha2::{Digest,Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHash,
+        PasswordHasher,
+        PasswordVerifier,
+        SaltString,
+    },
     Argon2,
 };
 
@@ -20,12 +26,19 @@ pub enum AuthServiceError {
     InvalidUserName, //ユーザー名が空か空白だけ
     PasswordHash, //ハッシュ化したパスワードのエラー
     EmailAlreadyRegistered, //メールがすでに使われている場合
+    InvalidCredentials, //メールアドレスまたはパスワードが間違いの場合
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreRegisterOutput {
     pub response: RegisterResponse,
     pub mail: MailMessage,
+}
+
+#[derive(Debug)]
+pub struct LoginOutput {
+    pub email: String,
+    pub user_name: String,
 }
 
 impl From<sqlx::Error> for AuthServiceError {
@@ -129,6 +142,34 @@ impl AuthService {
 
         Ok(())
     }
+
+    pub async fn login(
+        db: &PgPool,
+        email: String,
+        password: String,
+    ) -> Result<LoginOutput, AuthServiceError> {
+        let email = email.trim().to_lowercase(); //メール整形
+
+        if email.is_empty() {
+            return Err(AuthServiceError::InvalidCredentials);
+        }
+
+        if password.trim().is_empty() {
+            return Err(AuthServiceError::InvalidCredentials);
+        }
+
+        let user = AuthRepository::find_user_by_email(db, &email)
+            .await?;
+
+        let user = user.ok_or(AuthServiceError::InvalidCredentials)?; //ユーザーが見つからなかったらエラー
+
+        verify_password(&password, &user.password_hash)?;
+
+        Ok(LoginOutput {
+            email: user.email,
+            user_name: user.user_name,
+        })
+    }
 }
 
 pub fn hash_token(token: &str) -> String {
@@ -144,6 +185,20 @@ pub fn hash_password(password: &str) -> Result<String, AuthServiceError> {
         .to_string();
 
     Ok(password_hash)
+}
+
+fn verify_password(
+    password: &str,
+    password_hash: &str,
+) -> Result<(), AuthServiceError> {
+    let parsed_hash = PasswordHash::new(password_hash)
+        .map_err(|_| AuthServiceError::InvalidCredentials)?;
+
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .map_err(|_| AuthServiceError::InvalidCredentials)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -857,5 +912,91 @@ mod tests {
             pending_registration.completed_at.is_none(),
             "pending registration should remain incomplete after rollback"
         );
+    }
+
+
+    //Session
+    #[tokio::test]
+    async fn login_accepts_registered_user_with_correct_password() {
+        let db = test_db_pool().await;
+
+        let email = format!("login-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let result = AuthService::login(
+            &db,
+            email.clone(),
+            password.to_string(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "login should succeed with correct password: {:?}",
+            result
+        );
+
+        let output = result.unwrap();
+
+        assert_eq!(output.email, email);
+        assert_eq!(output.user_name, "saku");
+    }
+
+    #[tokio::test]
+    async fn login_rejects_registered_user_with_wrong_password() {
+        let db = test_db_pool().await;
+
+        let email = format!("login-wrong-password-{}@example.com", uuid::Uuid::new_v4());
+        let password_hash = hash_password("correct-password")
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let result = AuthService::login(
+            &db,
+            email,
+            "wrong-password".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidCredentials)
+        ));
+    }
+
+    #[tokio::test]
+    async fn login_rejects_unknown_email() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::login(
+            &db,
+            "unknown@example.com".to_string(),
+            "password123".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AuthServiceError::InvalidCredentials)
+        ));
     }
 }

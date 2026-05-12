@@ -7,6 +7,13 @@ pub struct PendingRegistration {
     pub email: String,
 }
 
+#[derive(Debug)]
+pub struct UserForAuth {
+    pub email: String,
+    pub user_name: String,
+    pub password_hash: String,
+}
+
 impl AuthRepository {
     pub async fn create_pending_registration(
         db: &PgPool,
@@ -203,6 +210,25 @@ impl AuthRepository {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn find_user_by_email( //既存ユーザーをメールで検索
+        db: &PgPool,
+        email: &str,
+    ) -> Result<Option<UserForAuth>, sqlx::Error> {
+        let row = sqlx::query_as!(
+            UserForAuth,
+            r#"
+            SELECT email, user_name, password_hash
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_optional(db)
+        .await?;
+
+        Ok(row)
     }
 }
 
