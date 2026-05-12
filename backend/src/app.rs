@@ -53,13 +53,16 @@ mod tests {
     use super::build_app;
     use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig};
     use crate::state::AppState;
+    use crate::features::auth::repository::AuthRepository;
 
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode,Method,header},
     };
+    use axum::http::header::CONTENT_TYPE;
     use sqlx::{postgres::PgPoolOptions, PgPool};
     use tower::util::ServiceExt; // oneshot
+    use sha2::Digest;
 
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
@@ -574,5 +577,61 @@ mod tests {
             "missing JSON body should return client error"
         );
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn complete_registration_route_creates_user_for_valid_token() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
+        let email = format!("route-complete-{}@example.com", uuid::Uuid::new_v4());
+
+        AuthRepository::create_pending_registration(
+            &db,
+            &email,
+            &token_hash,
+        )
+        .await
+        .expect("pending registration should be created");
+
+        let body = serde_json::json!({
+            "token": token,
+            "user_name": "saku",
+            "password": "password123"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/complete_registration")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let user = sqlx::query!(
+            r#"
+            SELECT email, user_name, password_hash
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be created");
+
+        assert_eq!(user.email, email);
+        assert_eq!(user.user_name, "saku");
+        assert_ne!(user.password_hash, "password123");
+        assert!(!user.password_hash.is_empty());
     }
 }
