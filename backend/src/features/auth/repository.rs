@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 pub struct AuthRepository;
 
@@ -118,6 +118,91 @@ impl AuthRepository {
         .await?;
 
         Ok(row.exists)
+    }
+
+    pub async fn find_pending_registration_by_token_hash_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        token_hash: &str,
+    ) -> Result<Option<PendingRegistration>, sqlx::Error> {
+        let row = sqlx::query_as!(
+            PendingRegistration,
+            r#"
+            SELECT email
+            FROM pending_registrations
+            WHERE token_hash = $1
+                AND completed_at IS NULL
+                AND expires_at > now()
+            "#,
+            token_hash
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        Ok(row)
+    }
+
+    pub async fn user_exists_by_email_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        email: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM users
+                WHERE email = $1
+            ) AS "exists!"
+            "#,
+            email
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+
+        Ok(row.exists)
+    }
+
+    pub async fn create_user_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        email: &str,
+        user_name: &str,
+        password_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            INSERT INTO users (
+                email,
+                user_name,
+                password_hash
+            )
+            VALUES ($1, $2, $3)
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_pending_registration_completed_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        token_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE pending_registrations
+            SET completed_at = now()
+            WHERE token_hash = $1
+                AND completed_at IS NULL
+            "#,
+            token_hash
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
     }
 }
 

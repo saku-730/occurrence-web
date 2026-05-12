@@ -91,14 +91,16 @@ impl AuthService {
         
         let token_hash = hash_token(token);
 
-        let pending_registration = AuthRepository::find_pending_registration_by_token_hash(db, &token_hash).await?; //pending_registrationからトークンでemail検索
+        let mut tx = db.begin().await?;
+
+        let pending_registration = AuthRepository::find_pending_registration_by_token_hash_in_tx(&mut tx, &token_hash).await?; //pending_registrationからトークンでemail検索
 
         let pending_registration = pending_registration
     .ok_or(AuthServiceError::InvalidToken)?; //pending_registrationの取り出し
 
 
-        if AuthRepository::user_exists_by_email( //メールの重複確認
-            db,
+        if AuthRepository::user_exists_by_email_in_tx( //メールの重複確認
+            &mut tx,
             &pending_registration.email,
         )
         .await?
@@ -109,19 +111,21 @@ impl AuthService {
         let user_name = user_name.trim();
         let password_hash = hash_password(password.trim())?;
 
-        AuthRepository::create_user( //ユーザー本作成処理
-            db,
+        AuthRepository::create_user_in_tx( //ユーザー本作成処理
+            &mut tx,
             &pending_registration.email,
             user_name,
             &password_hash,
         )
         .await?;
 
-        AuthRepository::mark_pending_registration_completed( //完了処理
-            db,
+        AuthRepository::mark_pending_registration_completed_in_tx( //完了処理
+            &mut tx,
             &token_hash,
         )
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
