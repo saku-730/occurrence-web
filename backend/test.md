@@ -27,8 +27,8 @@
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
 - [x]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る`complete_registration_route_rejects_missing_json_body`
-- [x] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される
-- [ ] `POST /auth/complete_registration` に登録済みのemailを送ると拒否する
+- [x] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される`login_route_returns_ok_for_registered_user_with_correct_password`
+- [ ] `POST /auth/complete_registration` に登録済みのemailを送ると拒否する`login_route_returns_unauthorized_for_unknown_email`
 
 ### service
 

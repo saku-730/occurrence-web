@@ -779,4 +779,39 @@ mod tests {
         assert_eq!(body["email"], email);
         assert_eq!(body["user_name"], "saku");
     }
+
+    #[tokio::test]
+    async fn login_route_returns_unauthorized_for_unknown_email() {
+        let state = test_state();
+        let app = build_app(state);
+
+        let body = serde_json::json!({
+            "email": "unknown@example.com",
+            "password": "password123"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "invalid_credentials");
+        assert_eq!(body["message"], "Invalid credential");
+    }
 }
