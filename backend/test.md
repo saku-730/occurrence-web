@@ -110,6 +110,11 @@
 
 ### app
 
+- [x] `POST /occurrences`はCookieがなければ401`create_occurrence_route_requires_login`
+- [x] `POST /occurrences`はCookieが無効なら401`create_occurrence_route_returns_unauthorized_for_invalid_session_cookie`
+- [x] `POST /occurrences`はCookieが有効なら501`create_occurrence_route_with_valid_session_returns_not_implemented` 未実装だから一旦
+- [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415``
+
 ### service
 
 ### repository
