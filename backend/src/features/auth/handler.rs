@@ -23,6 +23,7 @@ use super::{
     LoginRequest,
     LoginResponse,
     LogoutResponse,
+    CurrentUserResponse,
 },
     service::{
         AuthService,
@@ -366,6 +367,28 @@ pub async fn logout( // path /auth/logout
     };
 
     Ok((StatusCode::OK, response_headers, Json(response)))
+}
+
+pub async fn me( // path /auth/me
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<CurrentUserResponse>), AuthHandlerError> {
+    let session_token = extract_session_token(&headers)?; //トークン取り出し
+
+    let output = AuthService::current_user(
+        &state.posgre,
+        session_token,
+    )
+    .await?;
+
+    let response = CurrentUserResponse { //httpレスポンス組み立て
+        user_id: output.user_id,
+        email: output.email,
+        user_name: output.user_name,
+        role: output.role,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, AuthHandlerError> { //セッションcookieを取り出す。

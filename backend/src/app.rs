@@ -13,6 +13,7 @@ use crate::{
         complete_registration,
         login,
         logout,
+        me,
     },
     state::AppState,
     openapi::ApiDoc
@@ -29,6 +30,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/complete_registration", post(complete_registration))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route("/auth/me", get(me))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -1012,5 +1014,102 @@ mod tests {
             .expect("response body should be JSON");
 
         assert_eq!(body["message"], "logout successful");
+    }
+
+    #[tokio::test]
+    async fn me_route_returns_unauthorized_without_session_cookie() {
+        let state = test_state();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/auth/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "invalid_session");
+        assert_eq!(body["message"], "Invalid session");
+    }
+
+    #[tokio::test]
+    async fn me_route_returns_current_user_for_valid_session_cookie() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-me-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let user = sqlx::query!(
+            r#"
+            SELECT id
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should exist");
+
+        let login_output = AuthService::login(
+            &db,
+            email.clone(),
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/auth/me")
+                    .header(COOKIE, format!("session={}", login_output.session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["user_id"], user.id.to_string());
+        assert_eq!(body["email"], email);
+        assert_eq!(body["user_name"], "saku");
+        assert_eq!(body["role"], "editor");
     }
 }

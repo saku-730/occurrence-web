@@ -90,6 +90,8 @@
 - [x] `POST /auth/login` に正常リクエストでCookiセッション発行される。`login_route_sets_session_cookie_for_registered_user`
 - [x] `POST /auth/logout`に正常リクエストでログアウト`logout_route_revokes_session_and_clears_cookie`
 - [x] `POST /auth/logout`にsession cookie なしで送ると401`logout_route_returns_unauthorized_without_session_cookie`
+- [ ] `GET /auth/me`に正常 session cookieでユーザー情報取得``
+- [x] `GET /auth/me`に session cookieなしで送ると401`me_route_returns_unauthorized_without_session_cookie`
 
 ### service
 
@@ -97,9 +99,17 @@
 - [x] 間違ったパスワードを拒否する`login_rejects_registered_user_with_wrong_password`
 - [x] 存在しないメールアドレスを拒否する`login_rejects_unknown_email`
 - [x] ログインでセッションが作成される`login_creates_session_for_registered_user_with_correct_password`
-- [x] ログアウトしたら、posgre sessionsテーブルのrevokedが更新されてセッションが無効になる。``
-- [ ] セッショントークンで現在のユーザーを参照できる。
+- [x] ログアウトしたら、posgre sessionsテーブルのrevokedが更新されてセッションが無効になる。`me_route_returns_current_user_for_valid_session_cookie`
+- [x] セッショントークンで現在のユーザーを参照できる。`current_user_returns_user_for_valid_session`
 
 ### repository
 
-- [ ]
+## Occurrence data
+
+### app
+
+### service
+
+### repository
+
+### other

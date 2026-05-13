@@ -7,7 +7,7 @@ edition = "2024"
 axum = "0.8.9"
 tokio =  { version = "1.52.0", features = ["full"] }
 dotenvy = "0.15"
-utoipa = "5.5"
+utoipa = {version = "5.5", features = ["uuid"] }
 utoipa-axum = "0.2"
 utoipa-scalar = "0.3"
 utoipa-swagger-ui = {version = "9", features = ["axum"]}
@@ -24,9 +24,9 @@ sqlx = { version = "0.8.6", features = [
 ] }
 hex = "0.4.3"
 sha2 = "0.11.0"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1.23.1", features = ["v4","serde"] }
 async-trait = "0.1"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13.3", features = ["json"] }
 lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
