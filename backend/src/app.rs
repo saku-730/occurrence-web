@@ -62,7 +62,7 @@ mod tests {
         body::{to_bytes, Body},
         http::{Request, StatusCode,Method,header},
     };
-    use axum::http::header::CONTENT_TYPE;
+    use axum::http::header::{CONTENT_TYPE, SET_COOKIE};
     use sqlx::{postgres::PgPoolOptions, PgPool};
     use tower::util::ServiceExt; // oneshot
     use sha2::Digest;
@@ -813,5 +813,73 @@ mod tests {
 
         assert_eq!(body["error"], "invalid_credentials");
         assert_eq!(body["message"], "Invalid credential");
+    }
+    
+    #[tokio::test]
+    async fn login_route_sets_session_cookie_for_registered_user() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-login-cookie-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let body = serde_json::json!({
+            "email": email,
+            "password": password
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("login response should include Set-Cookie header")
+            .to_str()
+            .expect("Set-Cookie header should be valid string");
+
+        assert!(
+            set_cookie.contains("session="),
+            "Set-Cookie should contain session token"
+        );
+
+        assert!(
+            set_cookie.contains("HttpOnly"),
+            "session cookie should be HttpOnly"
+        );
+
+        assert!(
+            set_cookie.contains("SameSite=Lax"),
+            "session cookie should set SameSite=Lax"
+        );
+
+        assert!(
+            set_cookie.contains("Path=/"),
+            "session cookie should be available for the whole app"
+        );
     }
 }

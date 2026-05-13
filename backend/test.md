@@ -27,8 +27,8 @@
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。mailpitで確認
 - [x]  `/auth/pre_register`に正常なemailが送られると、そのemail宛に登録用urlを本文に含むメールが送信される。Gmailで確認
 - [x]  `POST /auth/complete_registration` に JSON body なしで送ると client error が返る`complete_registration_route_rejects_missing_json_body`
-- [x] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される`login_route_returns_ok_for_registered_user_with_correct_password`
-- [ ] `POST /auth/complete_registration` に登録済みのemailを送ると拒否する`login_route_returns_unauthorized_for_unknown_email`
+- [x] `POST /auth/complete_registration` に有効な token / user_name / password を送ると201 Created が返り、users にユーザーが作成される
+- [x] `POST /auth/complete_registration` に登録済みのemailを送ると拒否する
 
 ### service
 
@@ -79,20 +79,21 @@
 - [x] `config.rs` の `Config::from_env` が、`APP_HOST`、`APP_PORT`、`APP_BASE_URL`、`DATABASE_URL` を正しく読むことを確認する
 - [x] Config::from_env が SMTP_HOST、SMTP_PORT、SMTP_USERNAME、SMTP_PASSWORD、SMTP_TLS、MAIL_FROM を正しく読むことを確認する `from_env_reads_app_host_port_base_url_and_database_url`
 
-## Login/Logout
+## Session, Login/Logout
 
 ### app
 
 - [x] `POST /auth/login`に JSON body なしでおくると client error`login_route_rejects_missing_json_body`
 - [x] `POST /auth/login` に登録済み email と正しい password を送ると 200 OK が返る`login_route_returns_ok_for_registered_user_with_correct_password`
-- [ ] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
-- [ ] 間違った、パスワードで`POST /auth/login` しても401
+- [x] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
+- [x] 間違った、パスワードで`POST /auth/login` しても401
 
 ### service
 
 - [x] 登録済みユーザーが正しい password で login できる`login_accepts_registered_user_with_correct_password`
 - [x] 間違ったパスワードを拒否する`login_rejects_registered_user_with_wrong_password`
 - [x] 存在しないメールアドレスを拒否する`login_rejects_unknown_email`
+- [x] ログインでセッションが作成される`login_creates_session_for_registered_user_with_correct_password`
 
 ### repository
 

@@ -39,6 +39,7 @@ pub struct PreRegisterOutput {
 pub struct LoginOutput {
     pub email: String,
     pub user_name: String,
+    pub session_token: String,
 }
 
 impl From<sqlx::Error> for AuthServiceError {
@@ -165,9 +166,21 @@ impl AuthService {
 
         verify_password(&password, &user.password_hash)?;
 
+
+        let session_token = Uuid::new_v4().to_string(); //トークン作成
+        let session_token_hash = hash_token(&session_token); //トークン　ハッシュ化
+
+        AuthRepository::create_session( //データベースにセッション保存
+            db,
+            user.id,
+            &session_token_hash,
+        )
+        .await?;
+
         Ok(LoginOutput {
             email: user.email,
             user_name: user.user_name,
+            session_token: session_token,
         })
     }
 }
@@ -209,6 +222,7 @@ mod tests {
     use crate::features::auth::repository::AuthRepository;
     use crate::features::auth::service::hash_token;
     use crate::features::auth::service::hash_password;
+    use chrono;
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -224,7 +238,7 @@ mod tests {
 
         sqlx::query!(  //データベースをきれいにしてから。実データ入っている本番環境ではアウト
             r#"
-            TRUNCATE users, pending_registrations
+            TRUNCATE users, pending_registrations, sessions
             RESTART IDENTITY
             CASCADE
             "#
@@ -998,5 +1012,71 @@ mod tests {
             result,
             Err(AuthServiceError::InvalidCredentials)
         ));
+    }
+
+    #[tokio::test]
+    async fn login_creates_session_for_registered_user_with_correct_password() {
+        let db = test_db_pool().await;
+
+        let email = format!("login-session-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user( //repositoryで直接データベース操作でユーザー作成
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let result = AuthService::login( //作ったユーザーでログイン処理
+            &db,
+            email.clone(),
+            password.to_string(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "login should succeed with correct password: {:?}",
+            result
+        );
+
+        let output = result.unwrap();
+
+        assert_eq!(output.email, email);
+        assert_eq!(output.user_name, "saku");
+        assert!(
+            !output.session_token.is_empty(), //セッショントークンが空だったら中止
+            "login output should include a raw session token for Set-Cookie"
+        );
+
+        let session_token_hash = hash_token(&output.session_token);
+
+        let session = sqlx::query!( //メールからセッション,ユーザー検索
+            r#"
+            SELECT s.session_token_hash, s.expires_at, s.revoked_at
+            FROM sessions s
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE u.email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("session should be created");
+
+        assert_eq!(session.session_token_hash, session_token_hash);
+        assert!(
+            session.expires_at > chrono::Utc::now(),
+            "session expiry should be in the future"
+        );
+        assert!(
+            session.revoked_at.is_none(),
+            "new session should not be revoked"
+        );
     }
 }

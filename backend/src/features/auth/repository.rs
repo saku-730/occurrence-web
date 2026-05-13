@@ -1,4 +1,5 @@
 use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 
 pub struct AuthRepository;
 
@@ -9,6 +10,7 @@ pub struct PendingRegistration {
 
 #[derive(Debug)]
 pub struct UserForAuth {
+    pub id: Uuid,
     pub email: String,
     pub user_name: String,
     pub password_hash: String,
@@ -219,7 +221,7 @@ impl AuthRepository {
         let row = sqlx::query_as!(
             UserForAuth,
             r#"
-            SELECT email, user_name, password_hash
+            SELECT id, email, user_name, password_hash
             FROM users
             WHERE email = $1
             "#,
@@ -229,6 +231,33 @@ impl AuthRepository {
         .await?;
 
         Ok(row)
+    }
+
+    pub async fn create_session( //ログインセッション作成。
+        db: &PgPool,
+        user_id: Uuid,
+        session_token_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (
+                user_id,
+                session_token_hash,
+                expires_at
+            )
+            VALUES (
+                $1,
+                $2,
+                now() + interval '7 days'
+            )
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(db)
+        .await?;
+
+        Ok(())
     }
 }
 
