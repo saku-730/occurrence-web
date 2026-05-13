@@ -87,6 +87,7 @@
 - [x] `POST /auth/login` に登録済み email と正しい password を送ると 200 OK が返る`login_route_returns_ok_for_registered_user_with_correct_password`
 - [x] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
 - [x] 間違った、パスワードで`POST /auth/login` しても401
+- [x] `POST /auth/login` に正常リクエストでCookiセッション発行される。`login_route_sets_session_cookie_for_registered_user`
 
 ### service
 
@@ -94,6 +95,7 @@
 - [x] 間違ったパスワードを拒否する`login_rejects_registered_user_with_wrong_password`
 - [x] 存在しないメールアドレスを拒否する`login_rejects_unknown_email`
 - [x] ログインでセッションが作成される`login_creates_session_for_registered_user_with_correct_password`
+- [x] ログアウトしたら、posgre sessionsテーブルのrevokedが更新されてセッションが無効になる。``
 
 ### repository
 

@@ -27,6 +27,7 @@ pub enum AuthServiceError {
     PasswordHash, //ハッシュ化したパスワードのエラー
     EmailAlreadyRegistered, //メールがすでに使われている場合
     InvalidCredentials, //メールアドレスまたはパスワードが間違いの場合
+    InvalidSession,   //セッショントークンが空など
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +183,31 @@ impl AuthService {
             user_name: user.user_name,
             session_token: session_token,
         })
+    }
+
+    pub async fn logout(
+    db: &PgPool,
+    session_token: String,
+    ) -> Result<(), AuthServiceError> {
+    let session_token = session_token.trim(); //セッショントークン整形
+
+    if session_token.is_empty() { //セッショントークンが空だったらエラー
+        return Err(AuthServiceError::InvalidSession);
+    }
+
+    let session_token_hash = hash_token(session_token);
+
+    let revoked = AuthRepository::revoke_session_by_token_hash(
+        db,
+        &session_token_hash,
+    )
+    .await?;
+
+    if !revoked { //無効化されていなかったらエラー
+        return Err(AuthServiceError::InvalidSession);
+    }
+
+    Ok(())
     }
 }
 
@@ -1077,6 +1103,59 @@ mod tests {
         assert!(
             session.revoked_at.is_none(),
             "new session should not be revoked"
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_revokes_existing_session() {
+        let db = test_db_pool().await;
+
+        let email = format!("logout-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let login_output = AuthService::login(
+            &db,
+            email,
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        AuthService::logout(
+            &db,
+            login_output.session_token.clone(),
+        )
+        .await
+        .expect("logout should succeed");
+
+        let session_token_hash = hash_token(&login_output.session_token);
+
+        let session = sqlx::query!(
+            r#"
+            SELECT revoked_at
+            FROM sessions
+            WHERE session_token_hash = $1
+            "#,
+            session_token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("session should exist");
+
+        assert!(
+            session.revoked_at.is_some(),
+            "logout should set revoked_at"
         );
     }
 }

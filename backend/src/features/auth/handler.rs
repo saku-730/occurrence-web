@@ -1,11 +1,16 @@
 use axum::{
-    http::StatusCode,
     response::{
         IntoResponse,
         Response,
     },
     Json,
     extract::State,
+};
+use axum::http::{
+    header::SET_COOKIE,
+    HeaderMap,
+    HeaderValue,
+    StatusCode,
 };
 
 use super::{
@@ -38,6 +43,8 @@ pub enum AuthHandlerError{
     PasswordHash,
     EmailAlreadyRegistered,
     InvalidCredentials,
+    InvalidSessionCookie,
+    InvalidSession,
 }
 
 impl From<AuthServiceError> for AuthHandlerError{ //.await?用
@@ -51,6 +58,7 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
             AuthServiceError::PasswordHash => Self::PasswordHash,
             AuthServiceError::EmailAlreadyRegistered => Self::EmailAlreadyRegistered,
             AuthServiceError::InvalidCredentials => Self::InvalidCredentials,
+            AuthServiceError::InvalidSession => Self::InvalidSession,
         }
     }
 }
@@ -142,6 +150,24 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::UNAUTHORIZED, Json(body)).into_response() //400
             }
+
+            AuthHandlerError::InvalidSessionCookie => {
+                let body = ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Internal server error".to_string(),
+                };
+
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+            }
+            
+            AuthHandlerError::InvalidSession=> {
+                let body = ErrorResponse {
+                    error: "internal_session".to_string(),
+                    message: "Internal session".to_string(),
+                };
+
+                (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+            }           
         }
     }
 }
@@ -260,13 +286,25 @@ pub async fn complete_registration(
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<(StatusCode, Json<LoginResponse>), AuthHandlerError> {
+) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AuthHandlerError> {
     let output = AuthService::login(
         &state.posgre,
         payload.email,
         payload.password,
     )
     .await?;
+    
+    let session_cookie = format!(
+        "session={}; HttpOnly; SameSite=Lax; Path=/; Max_Age=604800", //Max_Ageは秒数 7日
+        output.session_token
+    );
+
+    let mut headers = HeaderMap::new();
+
+    headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&session_cookie).map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
+    );
 
     let response = LoginResponse {
         message: "login successful".to_string(),
@@ -274,5 +312,5 @@ pub async fn login(
         user_name: output.user_name,
     };
 
-    Ok((StatusCode::OK, Json(response)))
+    Ok((StatusCode::OK,headers, Json(response)))
 }

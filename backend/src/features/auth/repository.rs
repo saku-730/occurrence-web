@@ -259,6 +259,26 @@ impl AuthRepository {
 
         Ok(())
     }
+    
+    pub async fn revoke_session_by_token_hash( //ログアウト時にセッションを無効化
+        db: &PgPool,
+        session_token_hash: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query!(
+            r#"
+            UPDATE sessions
+            SET revoked_at = now()
+            WHERE session_token_hash = $1
+                AND revoked_at IS NULL
+                AND expires_at > now()
+            "#,
+            session_token_hash
+        )
+        .execute(db)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
 }
 
 
