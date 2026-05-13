@@ -16,6 +16,13 @@ pub struct UserForAuth {
     pub password_hash: String,
 }
 
+#[derive(Debug)]
+pub struct UserForSession {
+    pub email: String,
+    pub user_name: String,
+    pub user_id: Uuid,
+}
+
 impl AuthRepository {
     pub async fn create_pending_registration(
         db: &PgPool,
@@ -278,6 +285,32 @@ impl AuthRepository {
         .await?;
 
         Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn find_user_by_session_token_hash(//ログイン中のユーザーを確認
+        db: &PgPool,
+        session_token_hash: &str,
+    ) -> Result<Option<UserForSession>, sqlx::Error> {
+        let row = sqlx::query_as!(
+            UserForSession,
+            r#"
+            SELECT
+                u.id AS user_id,
+                u.email,
+                u.user_name
+            FROM sessions s
+            INNER JOIN users u
+                ON u.id = s.user_id
+            WHERE s.session_token_hash = $1
+                AND s.revoked_at IS NULL
+                AND s.expires_at > now()
+            "#,
+            session_token_hash
+        )
+        .fetch_optional(db)
+        .await?;
+
+        Ok(row)
     }
 }
 

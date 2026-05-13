@@ -43,6 +43,14 @@ pub struct LoginOutput {
     pub session_token: String,
 }
 
+#[derive(Debug)]
+pub struct CurrentUserOutput {
+    pub user_id: uuid::Uuid,
+    pub email: String,
+    pub user_name: String,
+    pub role: String,
+}
+
 impl From<sqlx::Error> for AuthServiceError {
     fn from(error: sqlx::Error) -> Self {
         Self::Database(error)
@@ -208,6 +216,34 @@ impl AuthService {
     }
 
     Ok(())
+    }
+
+    pub async fn current_user( //現在ログイン中のユーザー情報取得
+        db: &PgPool,
+        session_token: String,
+    ) -> Result<CurrentUserOutput, AuthServiceError> {
+        let session_token = session_token.trim();
+
+        if session_token.is_empty() {
+            return Err(AuthServiceError::InvalidSession);
+        }
+
+        let session_token_hash = hash_token(session_token);
+
+        let user = AuthRepository::find_user_by_session_token_hash( //ユーザー検索
+            db,
+            &session_token_hash,
+        )
+        .await?;
+
+        let user = user.ok_or(AuthServiceError::InvalidSession)?;
+
+        Ok(CurrentUserOutput {
+            user_id: user.user_id,
+            email: user.email,
+            user_name: user.user_name,
+            role: "editor".to_string(), //とりあえず、編集者権限だけ用意しているので、これで
+        })
     }
 }
 
@@ -1157,5 +1193,63 @@ mod tests {
             session.revoked_at.is_some(),
             "logout should set revoked_at"
         );
+    }
+
+    #[tokio::test]
+    async fn current_user_returns_user_for_valid_session() {
+        let db = test_db_pool().await;
+
+        let email = format!("me-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let user = sqlx::query!(
+            r#"
+            SELECT id
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should exist");
+
+        let login_output = AuthService::login(
+            &db,
+            email.clone(),
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        let result = AuthService::current_user(
+            &db,
+            login_output.session_token,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "current_user should succeed with valid session: {:?}",
+            result
+        );
+
+        let output = result.unwrap();
+
+        assert_eq!(output.user_id, user.id);
+        assert_eq!(output.email, email);
+        assert_eq!(output.user_name, "saku");
+        assert_eq!(output.role, "editor");
     }
 }
