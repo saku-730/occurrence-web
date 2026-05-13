@@ -12,6 +12,7 @@ use crate::{
         pre_register,
         complete_registration,
         login,
+        logout,
     },
     state::AppState,
     openapi::ApiDoc
@@ -27,6 +28,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/pre_register", post(pre_register))
         .route("/auth/complete_registration", post(complete_registration))
         .route("/auth/login", post(login))
+        .route("/auth/logout", post(logout))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -56,16 +58,21 @@ mod tests {
     use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig};
     use crate::state::AppState;
     use crate::features::auth::repository::AuthRepository;
-    use crate::features::auth::service::hash_password;
+    use crate::features::auth::service::{
+        hash_password,
+        hash_token,
+        AuthService
+    };
 
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode,Method,header},
     };
-    use axum::http::header::{CONTENT_TYPE, SET_COOKIE};
+    use axum::http::header::{CONTENT_TYPE, SET_COOKIE, COOKIE};
     use sqlx::{postgres::PgPoolOptions, PgPool};
     use tower::util::ServiceExt; // oneshot
     use sha2::Digest;
+
 
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
@@ -840,7 +847,6 @@ mod tests {
             "email": email,
             "password": password
         });
-
         let response = app
             .oneshot(
                 Request::builder()
@@ -881,5 +887,130 @@ mod tests {
             set_cookie.contains("Path=/"),
             "session cookie should be available for the whole app"
         );
+    }
+
+    #[tokio::test]
+    async fn logout_route_returns_unauthorized_without_session_cookie() {
+        let state = test_state();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/logout")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "invalid_session");
+        assert_eq!(body["message"], "Invalid session");
+    }
+
+    #[tokio::test]
+    async fn logout_route_revokes_session_and_clears_cookie() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-logout-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let login_output = AuthService::login(
+            &db,
+            email,
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        let session_token = login_output.session_token.clone();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/logout")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("logout response should include Set-Cookie header")
+            .to_str()
+            .expect("Set-Cookie header should be valid string");
+
+        assert!(
+            set_cookie.contains("session="),
+            "logout response should clear session cookie"
+        );
+
+        assert!(
+            set_cookie.contains("Max-Age=0"),
+            "logout cookie should have Max-Age=0"
+        );
+
+        assert!(
+            set_cookie.contains("Path=/"),
+            "logout cookie should target the same path"
+        );
+
+        let session_token_hash = hash_token(&login_output.session_token);
+
+        let session = sqlx::query!(
+            r#"
+            SELECT revoked_at
+            FROM sessions
+            WHERE session_token_hash = $1
+            "#,
+            session_token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("session should exist");
+
+        assert!(
+            session.revoked_at.is_some(),
+            "logout should mark session as revoked"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["message"], "logout successful");
     }
 }

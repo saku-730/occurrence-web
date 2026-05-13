@@ -42,3 +42,8 @@ pub struct LoginResponse {
     pub email: String,
     pub user_name: String,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LogoutResponse {
+    pub message: String,
+}

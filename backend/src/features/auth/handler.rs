@@ -7,7 +7,7 @@ use axum::{
     extract::State,
 };
 use axum::http::{
-    header::SET_COOKIE,
+    header::{SET_COOKIE,COOKIE},
     HeaderMap,
     HeaderValue,
     StatusCode,
@@ -22,6 +22,7 @@ use super::{
     CompleteRegistrationResponse,
     LoginRequest,
     LoginResponse,
+    LogoutResponse,
 },
     service::{
         AuthService,
@@ -162,8 +163,8 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
             
             AuthHandlerError::InvalidSession=> {
                 let body = ErrorResponse {
-                    error: "internal_session".to_string(),
-                    message: "Internal session".to_string(),
+                    error: "invalid_session".to_string(),
+                    message: "Invalid session".to_string(),
                 };
 
                 (StatusCode::UNAUTHORIZED, Json(body)).into_response()
@@ -313,4 +314,55 @@ pub async fn login(
     };
 
     Ok((StatusCode::OK,headers, Json(response)))
+}
+
+pub async fn logout( // path /auth/logout
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, HeaderMap, Json<LogoutResponse>), AuthHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+
+    AuthService::logout(
+        &state.posgre,
+        session_token,
+    )
+    .await?;
+
+    let mut response_headers = HeaderMap::new();
+
+    response_headers.insert( //http レスポンスヘッダー作成
+        SET_COOKIE,
+        HeaderValue::from_str(
+            "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+        )
+        .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
+    );
+
+    let response = LogoutResponse {
+        message: "logout successful".to_string(),
+    };
+
+    Ok((StatusCode::OK, response_headers, Json(response)))
+}
+
+fn extract_session_token(headers: &HeaderMap) -> Result<String, AuthHandlerError> { //セッションcookieを取り出す。
+    let cookie_header = headers
+        .get(COOKIE)
+        .ok_or(AuthHandlerError::InvalidSession)?
+        .to_str()
+        .map_err(|_| AuthHandlerError::InvalidSession)?;
+
+    for cookie in cookie_header.split(';') {
+        let cookie = cookie.trim();
+
+        if let Some(session_token) = cookie.strip_prefix("session=") {
+            if session_token.trim().is_empty() {
+                return Err(AuthHandlerError::InvalidSession);
+            }
+
+            return Ok(session_token.to_string()); //取り出せたらここで終わり
+        }
+    }
+
+    Err(AuthHandlerError::InvalidSession)
 }

@@ -88,6 +88,8 @@
 - [x] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
 - [x] 間違った、パスワードで`POST /auth/login` しても401
 - [x] `POST /auth/login` に正常リクエストでCookiセッション発行される。`login_route_sets_session_cookie_for_registered_user`
+- [ ] `POST /auth/logout`に正常リクエストでログアウト`logout_route_revokes_session_and_clears_cookie`
+- [x] `POST /auth/logout`にsession cookie なしで送ると401`logout_route_returns_unauthorized_without_session_cookie`
 
 ### service
 
