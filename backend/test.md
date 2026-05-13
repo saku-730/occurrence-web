@@ -90,8 +90,10 @@
 - [x] `POST /auth/login` に正常リクエストでCookiセッション発行される。`login_route_sets_session_cookie_for_registered_user`
 - [x] `POST /auth/logout`に正常リクエストでログアウト`logout_route_revokes_session_and_clears_cookie`
 - [x] `POST /auth/logout`にsession cookie なしで送ると401`logout_route_returns_unauthorized_without_session_cookie`
-- [ ] `GET /auth/me`に正常 session cookieでユーザー情報取得``
+- [x] `GET /auth/me`に正常 session cookieでユーザー情報取得``
 - [x] `GET /auth/me`に session cookieなしで送ると401`me_route_returns_unauthorized_without_session_cookie`
+- [x] ログアウト済み session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_revoked_session_cookie`
+- [ ] 期限切れ session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_expired_session_cookie`
 
 ### service
 

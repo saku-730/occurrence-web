@@ -1062,10 +1062,7 @@ mod tests {
             &email,
             "saku",
             &password_hash,
-        )
-        .await
-        .expect("user should be created");
-
+        ) .await .expect("user should be created");
         let user = sqlx::query!(
             r#"
             SELECT id
@@ -1111,5 +1108,134 @@ mod tests {
         assert_eq!(body["email"], email);
         assert_eq!(body["user_name"], "saku");
         assert_eq!(body["role"], "editor");
+    }
+
+    #[tokio::test]
+    async fn me_route_returns_unauthorized_for_revoked_session_cookie() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-me-revoked-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let login_output = AuthService::login(
+            &db,
+            email,
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        AuthService::logout(
+            &db,
+            login_output.session_token.clone(),
+        )
+        .await
+        .expect("logout should succeed");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/auth/me")
+                    .header(COOKIE, format!("session={}", login_output.session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "invalid_session");
+        assert_eq!(body["message"], "Invalid session");
+    }
+
+    #[tokio::test]
+    async fn me_route_returns_unauthorized_for_expired_session_cookie() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-me-expired-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+
+        let password_hash = hash_password(password)
+            .expect("password hash should be created");
+
+        AuthRepository::create_user(
+            &db,
+            &email,
+            "saku",
+            &password_hash,
+        )
+        .await
+        .expect("user should be created");
+
+        let login_output = AuthService::login(
+            &db,
+            email,
+            password.to_string(),
+        )
+        .await
+        .expect("login should succeed");
+
+        let session_token_hash = hash_token(&login_output.session_token);
+
+        sqlx::query!(
+            r#"
+            UPDATE sessions
+            SET expires_at = now() - interval '1 minute'
+            WHERE session_token_hash = $1
+            "#,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be expired");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/auth/me")
+                    .header(COOKIE, format!("session={}", login_output.session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_slice(&body)
+            .expect("response body should be JSON");
+
+        assert_eq!(body["error"], "invalid_session");
+        assert_eq!(body["message"], "Invalid session");
     }
 }

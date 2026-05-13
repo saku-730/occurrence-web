@@ -369,6 +369,29 @@ pub async fn logout( // path /auth/logout
     Ok((StatusCode::OK, response_headers, Json(response)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/auth/me",
+    responses(
+        (
+            status = 200,
+            description = "Get current authenticated user",
+            body = CurrentUserResponse
+        ),
+        (
+            status = 401,
+            description = "Invalid or missing session",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+
 pub async fn me( // path /auth/me
     State(state): State<AppState>,
     headers: HeaderMap,
