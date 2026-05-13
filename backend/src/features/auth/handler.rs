@@ -233,6 +233,30 @@ pub async fn complete_registration(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    request_body = LoginRequest,
+    responses(
+        (
+            status = 200,
+            description = "Login successfully",
+            body = LoginResponse
+        ),
+        (
+            status = 401,
+            description = "Invalid credential",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,

@@ -5,14 +5,17 @@ use crate::features::auth::dto::{
     CompleteRegistrationResponse,
     RegisterRequest, 
     RegisterResponse,
-    ErrorResponse
+    ErrorResponse,
+    LoginRequest,
+    LoginResponse,
 };
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
         crate::features::auth::handler::pre_register,
-        crate::features::auth::handler::complete_registration
+        crate::features::auth::handler::complete_registration,
+        crate::features::auth::handler::login,
     ),
     components(
         schemas(
@@ -21,6 +24,8 @@ use crate::features::auth::dto::{
             ErrorResponse,
             CompleteRegistrationRequest,
             CompleteRegistrationResponse,
+            LoginRequest,
+            LoginResponse,
         )
     ),
     tags(
