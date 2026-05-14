@@ -2,7 +2,7 @@ use axum::{
     body::Bytes,
     extract::State,
     http::{
-        header::COOKIE,
+        header::{CONTENT_TYPE,COOKIE,},
         HeaderMap,
         StatusCode,
     },
@@ -23,6 +23,7 @@ pub enum OccurrenceHandlerError {
     InvalidSession, //セッションを持っていないなど
     Database(sqlx::Error),   //posgre側のエラー トークン認証など
     NotImplemented, //
+    UnsupportedMediaType, //httpリクエストのbodyがtext/turtle以外など
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -63,6 +64,14 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::NOT_IMPLEMENTED, Json(body)).into_response()
             }
+            OccurrenceHandlerError::UnsupportedMediaType => {
+                let body = ErrorResponse {
+                    error: "unsupported_media_type".to_string(),
+                    message: "Unsupported media type".to_string(),
+                };
+
+                (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(body)).into_response()
+            }
         }
     }
 }
@@ -80,10 +89,12 @@ pub async fn create_occurrence(
     )
     .await?;
 
+    ensure_supported_rdf_content_type(&headers)?;
+
     Err(OccurrenceHandlerError::NotImplemented)
 }
 
-fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し
+fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー
     let cookie_header = headers
         .get(COOKIE)
         .ok_or(OccurrenceHandlerError::InvalidSession)?
@@ -103,4 +114,26 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandle
     }
 
     Err(OccurrenceHandlerError::InvalidSession)
+}
+
+fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外はエラー
+    headers: &HeaderMap,
+) -> Result<(), OccurrenceHandlerError> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .ok_or(OccurrenceHandlerError::UnsupportedMediaType)?
+        .to_str()
+        .map_err(|_| OccurrenceHandlerError::UnsupportedMediaType)?;
+
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    match media_type.as_str() {
+        "text/turtle" => Ok(()),
+        _ => Err(OccurrenceHandlerError::UnsupportedMediaType),
+    }
 }
