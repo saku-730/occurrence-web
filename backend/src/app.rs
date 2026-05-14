@@ -1466,4 +1466,71 @@ mod tests {
         assert_eq!(body["error"], "unsupported_media_type");
         assert_eq!(body["message"], "Unsupported media type");
     }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_empty_body() {
+        let state = test_state();
+        let db = state.posgre.clone();
+
+        let email = format!("occurrence-user-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "occurrence-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "text/turtle")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from("")) //テスト用に空body
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX) //こっちはレスポンスの変換 bodyはレスポンスのbody
+            .await
+            .unwrap();
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body["error"], "empty_body");
+        assert_eq!(body["message"], "Request body must not be empty");
+    }
 }

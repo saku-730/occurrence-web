@@ -113,9 +113,13 @@
 - [x] `POST /occurrences`はCookieがなければ401`create_occurrence_route_requires_login`
 - [x] `POST /occurrences`はCookieが無効なら401`create_occurrence_route_returns_unauthorized_for_invalid_session_cookie`
 - [x] `POST /occurrences`はCookieが有効なら501`create_occurrence_route_with_valid_session_returns_not_implemented` 未実装だから一旦
-- [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415``
+- [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415`create_occurrence_route_rejects_unsupported_content_type`
+- [x] `POST /occurrences`はhttpリクエストのbodyが空なら400`create_occurrence_route_rejects_empty_body`
 
 ### service
+
+- [ ] フロントエンドから送られた、turtleの主語<>をバックエンドが、発行した、オカレンスuuidに差し替え``
+- [ ] フロントから送られた、turtleにcreate_user_idを付加``
 
 ### repository
 

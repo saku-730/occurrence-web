@@ -18,12 +18,20 @@ use crate::{
     state::AppState,
 };
 
+use super::service::{
+    CreateOccurrenceInput,
+    OccurrenceService,
+    OccurrenceServiceError,
+};
+
 #[derive(Debug)]
 pub enum OccurrenceHandlerError {
     InvalidSession, //セッションを持っていないなど
     Database(sqlx::Error),   //posgre側のエラー トークン認証など
     NotImplemented, //
     UnsupportedMediaType, //httpリクエストのbodyがtext/turtle以外など
+    EmptyBody, //httpリクエストのbodyが空
+    InternalServerError, //サーバー側の処理エラーなど
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -32,6 +40,17 @@ impl From<AuthServiceError> for OccurrenceHandlerError {
             AuthServiceError::InvalidSession => Self::InvalidSession,
             AuthServiceError::Database(error) => Self::Database(error),
             _ => Self::InvalidSession,
+        }
+    }
+}
+
+impl From<OccurrenceServiceError> for OccurrenceHandlerError {
+    fn from(error: OccurrenceServiceError) -> Self {
+        match error {
+            OccurrenceServiceError::NotImplemented => Self::NotImplemented,
+            OccurrenceServiceError::InvalidOccurrenceUri => Self::InternalServerError,
+            OccurrenceServiceError::InvalidPredicateUri => Self::InternalServerError,
+            OccurrenceServiceError::InvalidUserUri => Self::InternalServerError,
         }
     }
 }
@@ -72,6 +91,22 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(body)).into_response()
             }
+            OccurrenceHandlerError::EmptyBody => {
+                let body = ErrorResponse {
+                    error: "empty_body".to_string(),
+                    message: "Request body must not be empty".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::InternalServerError => {
+                let body = ErrorResponse {
+                    error: "internal_server_error".to_string(),
+                    message: "Internal server error".to_string(),
+                };
+
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+            }
         }
     }
 }
@@ -79,19 +114,29 @@ impl IntoResponse for OccurrenceHandlerError {
 pub async fn create_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
-    _body: Bytes,
+    body: Bytes,
 ) -> Result<StatusCode, OccurrenceHandlerError> {
     let session_token = extract_session_token(&headers)?;
 
-    let _current_user = AuthService::current_user(
+    let current_user = AuthService::current_user(
         &state.posgre,
         session_token,
     )
     .await?;
 
-    ensure_supported_rdf_content_type(&headers)?;
+    let content_type = ensure_supported_rdf_content_type(&headers)?; //text/turtle以外を拒否
 
-    Err(OccurrenceHandlerError::NotImplemented)
+    ensure_non_empty_body(&body)?; //空bodyを拒否
+
+    let input = CreateOccurrenceInput { //occurrenceデータ組み立て
+        create_user_id: current_user.user_id,
+        content_type,
+        rdf_body: body.to_vec(),
+    };
+
+    OccurrenceService::create_occurrence(input).await?;
+
+    Ok(StatusCode::CREATED)
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー
@@ -118,7 +163,7 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandle
 
 fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外はエラー
     headers: &HeaderMap,
-) -> Result<(), OccurrenceHandlerError> {
+) -> Result<String, OccurrenceHandlerError> {
     let content_type = headers
         .get(CONTENT_TYPE)
         .ok_or(OccurrenceHandlerError::UnsupportedMediaType)?
@@ -133,7 +178,15 @@ fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外�
         .to_ascii_lowercase();
 
     match media_type.as_str() {
-        "text/turtle" => Ok(()),
+        "text/turtle" => Ok(media_type),
         _ => Err(OccurrenceHandlerError::UnsupportedMediaType),
     }
+}
+
+fn ensure_non_empty_body(body: &Bytes) -> Result<(), OccurrenceHandlerError> { //bodyが空じゃないか確認
+    if body.is_empty() || body.iter().all(|byte| byte.is_ascii_whitespace()) {//.iterは改行とか空白も含めてエラーにするため
+        return Err(OccurrenceHandlerError::EmptyBody);
+    }
+
+    Ok(())
 }
