@@ -20,5 +20,22 @@ services:
       - "1025:1025"
       - "8025:8025"   
 
+  fuseki:
+    build:
+      context: ./jena-fuseki-docker-6.1.0
+      dockerfile: Dockerfile
+      args:
+        JENA_VERSION: 6.0.0
+    container_name: occurrence_fuseki
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./databases:/fuseki/databases
+    command:
+      - "--update"
+      - "--loc"
+      - "databases/occurrence"
+      - "/occurrence"
+
 volumes:
   occurrence_web_postgres_data:
