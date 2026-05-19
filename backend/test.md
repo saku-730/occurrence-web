@@ -118,8 +118,10 @@
 
 ### service
 
-- [ ] フロントエンドから送られた、turtleの主語<>をバックエンドが、発行した、オカレンスuuidに差し替え``
-- [ ] フロントから送られた、turtleにcreate_user_idを付加``
+- [x] フロントエンドから送られた、N-Quadsの主語なんでもをバックエンドが、発行した、オカレンスuuidに差し替え`replace_all_subjects_with_occurrence_uri_replaces_any_frontend_subject`
+- [x] フロントから送られた、N-Quadsにcreate_user_idを付加`add_create_user_id_quad_adds_creator_resource_in_occurrence_graph`
+- [ ] フロントから送られたN-Quadsを組み立て可能`serialize_quads_as_nquads_outputs_named_graph_quads`
+- [ ] N-Quadsのグラフ名が`<https://bio-database.net/graphs/occurrences>`以外拒否``
 
 ### repository
 

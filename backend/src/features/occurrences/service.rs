@@ -26,7 +26,12 @@ pub enum OccurrenceServiceError {
     InvalidOccurrenceUri,
     InvalidPredicateUri,
     InvalidUserUri,
+    InvalidGraphUri,
 }
+
+const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
+const USER_URI_BASE: &str = "https://bio-database.net/users/";
+const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 
 pub struct OccurrenceService;
 
@@ -38,9 +43,27 @@ impl OccurrenceService {
     }
 }
 
-const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator"; //ダブリン・コアの作成者
+fn replace_all_subjects_with_occurrence_uri(
+    quads: Vec<Quad>,
+    occurrence_uri: &str,
+) -> Result<Vec<Quad>, OccurrenceServiceError> {
+    let occurrence_subject = NamedNode::new(occurrence_uri)
+        .map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
 
-const USER_URI_BASE: &str = "https://bio-database.net/users/"; //bio-database上のusers空間
+    let replaced_quads = quads
+        .into_iter()
+        .map(|quad| {
+            Quad::new(
+                occurrence_subject.clone(),
+                quad.predicate,
+                quad.object,
+                quad.graph_name,
+            )
+        })
+        .collect();
+
+    Ok(replaced_quads)
+}
 
 fn add_create_user_id_quad(
     quads: &mut Vec<Quad>,
@@ -58,99 +81,89 @@ fn add_create_user_id_quad(
     let creator_resource = NamedNode::new(user_uri)
         .map_err(|_| OccurrenceServiceError::InvalidUserUri)?;
 
+    let occurrence_graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidGraphUri)?;
+
     let quad = Quad::new(
         occurrence_subject,
         creator_predicate,
         creator_resource,
-        GraphName::DefaultGraph,
+        GraphName::NamedNode(occurrence_graph),
     );
 
     quads.push(quad);
 
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn create_occurrence_returns_not_implemented_until_jena_client_is_added() {
-        let input = CreateOccurrenceInput {
-            create_user_id: Uuid::new_v4(),
-            content_type: "text/turtle".to_string(),
-            rdf_body: br#"
-@prefix ex: <https://example.org/occurrence/> .
-
-ex:occurrence-001
-    a ex:Occurrence .
-"#
-            .to_vec(),
-        };
-
-        let result = OccurrenceService::create_occurrence(input).await;
-
-        assert!(matches!(
-            result,
-            Err(OccurrenceServiceError::NotImplemented)
-        ));
-    }
-
     #[test]
-    fn frontend_empty_subject_is_resolved_to_occurrence_uri_by_base_iri() {
+    fn replace_all_subjects_with_occurrence_uri_replaces_any_frontend_subject() {
         use oxrdfio::{RdfFormat, RdfParser};
 
-        let input = br#"@prefix ex: <https://example.org/vocab/> .
-
-    <>
-        ex:taxonName "Lumbricus terrestris" .
+        let input = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
     "#;
 
         let occurrence_uri =
-            "https://example.org/occurrences/550e8400-e29b-41d4-a716-446655440000";
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
 
-        let parser = RdfParser::from_format(RdfFormat::Turtle) //パーサー作成
-            .with_base_iri(occurrence_uri)
-            .expect("occurrence uri should be a valid base iri")
-            .without_named_graphs();
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
 
         let quads = parser
-            .for_slice(input) //一文ずつ
+            .for_slice(input)
             .collect::<Result<Vec<_>, _>>()
-            .expect("frontend turtle should be parsed");
+            .expect("frontend n-quads should be parsed");
 
-        assert_eq!(quads.len(), 1);
-        assert_eq!(
-            quads[0].subject.to_string(),
-            "<https://example.org/occurrences/550e8400-e29b-41d4-a716-446655440000>"
-        );
+        let replaced_quads = replace_all_subjects_with_occurrence_uri(
+            quads,
+            occurrence_uri,
+        )
+        .expect("all frontend subjects should be replaced");
+
+        assert_eq!(replaced_quads.len(), 2);
+
+        assert!(replaced_quads.iter().all(|quad| {
+            quad.subject.to_string()
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+        }));
+
+        assert!(replaced_quads.iter().all(|quad| {
+            quad.graph_name.to_string()
+                == "<https://bio-database.net/graphs/occurrences>"
+        }));
     }
 
     #[test]
-    fn add_create_user_id_quad_adds_backend_user_as_uri_resource() {
+    fn add_create_user_id_quad_adds_creator_resource_in_occurrence_graph() {
         use oxrdfio::{RdfFormat, RdfParser};
 
-        let input = br#"@prefix ex: <https://example.org/vocab/> .
-
-    <>
-        ex:taxonName "Lumbricus terrestris" .
+        let input = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
     "#;
 
         let occurrence_uri =
-            "https://example.org/occurrences/550e8400-e29b-41d4-a716-446655440000";
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
 
         let create_user_id =
             uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
                 .expect("valid uuid");
 
-        let parser = RdfParser::from_format(RdfFormat::Turtle)
-            .with_base_iri(occurrence_uri)
-            .expect("occurrence uri should be a valid base iri")
-            .without_named_graphs();
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
 
-        let mut quads = parser
+        let quads = parser
             .for_slice(input)
             .collect::<Result<Vec<_>, _>>()
-            .expect("frontend turtle should be parsed");
+            .expect("frontend n-quads should be parsed");
+
+        let mut quads = replace_all_subjects_with_occurrence_uri(
+            quads,
+            occurrence_uri,
+        )
+        .expect("all subjects should be replaced");
 
         add_create_user_id_quad(
             &mut quads,
@@ -163,16 +176,75 @@ ex:occurrence-001
 
         let has_creator_quad = quads.iter().any(|quad| {
             quad.subject.to_string()
-                == "<https://example.org/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
                 && quad.predicate.to_string()
                     == "<http://purl.org/dc/terms/creator>"
                 && quad.object.to_string()
                     == "<https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa>"
+                && quad.graph_name.to_string()
+                    == "<https://bio-database.net/graphs/occurrences>"
         });
 
         assert!(
             has_creator_quad,
-            "dcterms:creator quad should point to backend-confirmed user URI"
+            "dcterms:creator quad should point to backend-confirmed user URI in occurrence graph"
         );
+    }
+
+    #[test]
+    fn serialize_quads_as_nquads_outputs_named_graph_quads() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let input = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+                .expect("valid uuid");
+
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
+
+        let quads = parser
+            .for_slice(input)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("frontend n-quads should be parsed");
+
+        let mut quads = replace_all_subjects_with_occurrence_uri(
+            quads,
+            occurrence_uri,
+        )
+        .expect("all subjects should be replaced");
+
+        add_create_user_id_quad(
+            &mut quads,
+            occurrence_uri,
+            create_user_id,
+        )
+        .expect("creator quad should be added");
+
+        let serialized = serialize_quads_as_nquads(&quads)
+            .expect("quads should be serialized as n-quads");
+
+        let serialized_text = String::from_utf8(serialized.clone())
+            .expect("serialized n-quads should be utf-8");
+
+        assert!(serialized_text.contains(
+            "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000> <https://example.org/vocab/taxonName> \"Lumbricus terrestris\" <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        assert!(serialized_text.contains(
+            "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa> <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        let parsed_again = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&serialized)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("serialized n-quads should be valid n-quads");
+
+        assert_eq!(parsed_again.len(), 2);
     }
 }

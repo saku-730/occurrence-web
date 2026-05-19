@@ -51,6 +51,7 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::InvalidOccurrenceUri => Self::InternalServerError,
             OccurrenceServiceError::InvalidPredicateUri => Self::InternalServerError,
             OccurrenceServiceError::InvalidUserUri => Self::InternalServerError,
+            OccurrenceServiceError::InvalidGraphUri => Self::InternalServerError,
         }
     }
 }
