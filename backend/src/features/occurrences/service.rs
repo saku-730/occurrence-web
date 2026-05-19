@@ -4,7 +4,11 @@ use oxrdf::{
     Quad,
 };
 use uuid::Uuid;
-
+use oxrdfio::{
+    RdfFormat,
+    RdfSerializer,
+    RdfParser,
+};
 
 #[derive(Debug)]
 pub struct CreateOccurrenceInput { //occurrenceデータ作成時の構造体
@@ -27,6 +31,8 @@ pub enum OccurrenceServiceError {
     InvalidPredicateUri,
     InvalidUserUri,
     InvalidGraphUri,
+    RdfSerializationFailed,
+    RdfParseFailed,
 }
 
 const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
@@ -43,7 +49,7 @@ impl OccurrenceService {
     }
 }
 
-fn replace_all_subjects_with_occurrence_uri(
+fn replace_all_subjects_with_occurrence_uri( //主語にoccurrence uuidを追加
     quads: Vec<Quad>,
     occurrence_uri: &str,
 ) -> Result<Vec<Quad>, OccurrenceServiceError> {
@@ -65,7 +71,7 @@ fn replace_all_subjects_with_occurrence_uri(
     Ok(replaced_quads)
 }
 
-fn add_create_user_id_quad(
+fn add_create_user_id_quad( //作成者情報を追加
     quads: &mut Vec<Quad>,
     occurrence_uri: &str,
     create_user_id: Uuid,
@@ -94,6 +100,47 @@ fn add_create_user_id_quad(
     quads.push(quad);
 
     Ok(())
+}
+
+fn serialize_quads_as_nquads( //再度シリアライズ
+    quads: &[Quad],
+) -> Result<Vec<u8>, OccurrenceServiceError> {
+    let mut serializer =
+        RdfSerializer::from_format(RdfFormat::NQuads).for_writer(Vec::new());
+
+    for quad in quads {
+        serializer
+            .serialize_quad(quad)
+            .map_err(|_| OccurrenceServiceError::RdfSerializationFailed)?;
+    }
+
+    serializer
+        .finish()
+        .map_err(|_| OccurrenceServiceError::RdfSerializationFailed)
+}
+
+fn build_occurrence_nquads( //フロントから来たN-Quadsを組み立て
+    frontend_nquads: &[u8],
+    occurrence_uri: &str,
+    create_user_id: Uuid,
+) -> Result<Vec<u8>, OccurrenceServiceError> {
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(frontend_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    let mut quads = replace_all_subjects_with_occurrence_uri(
+        quads,
+        occurrence_uri,
+    )?;
+
+    add_create_user_id_quad(
+        &mut quads,
+        occurrence_uri,
+        create_user_id,
+    )?;
+
+    serialize_quads_as_nquads(&quads)
 }
 
 #[cfg(test)]
@@ -246,5 +293,56 @@ mod tests {
             .expect("serialized n-quads should be valid n-quads");
 
         assert_eq!(parsed_again.len(), 2);
+    }
+
+    #[test]
+    fn build_occurrence_nquads_replaces_subject_and_adds_creator() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+                .expect("valid uuid");
+
+        let built = build_occurrence_nquads(
+            frontend_nquads,
+            occurrence_uri,
+            create_user_id,
+        )
+        .expect("occurrence n-quads should be built");
+
+        let built_text = String::from_utf8(built.clone())
+            .expect("built n-quads should be utf-8");
+
+        assert!(built_text.contains(
+            "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000> <https://example.org/vocab/taxonName> \"Lumbricus terrestris\" <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        assert!(built_text.contains(
+            "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000> <https://example.org/vocab/locality> \"somewhere\" <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        assert!(built_text.contains(
+            "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa> <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        let parsed_again = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&built)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("built output should be valid n-quads");
+
+        assert_eq!(parsed_again.len(), 3);
+
+        assert!(parsed_again.iter().all(|quad| {
+            quad.subject.to_string()
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+        }));
     }
 }

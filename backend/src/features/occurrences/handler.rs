@@ -52,6 +52,8 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::InvalidPredicateUri => Self::InternalServerError,
             OccurrenceServiceError::InvalidUserUri => Self::InternalServerError,
             OccurrenceServiceError::InvalidGraphUri => Self::InternalServerError,
+            OccurrenceServiceError::RdfSerializationFailed => Self::InternalServerError,
+            OccurrenceServiceError::RdfParseFailed => Self::InternalServerError,
         }
     }
 }
