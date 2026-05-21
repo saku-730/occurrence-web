@@ -18,10 +18,13 @@ use crate::{
     state::AppState,
 };
 
-use super::service::{
-    CreateOccurrenceInput,
-    OccurrenceService,
-    OccurrenceServiceError,
+use super::{
+    dto::PrepareOccurrenceResponse,
+    service::{
+        CreateOccurrenceInput,
+        OccurrenceService,
+        OccurrenceServiceError,
+    },
 };
 
 #[derive(Debug)]
@@ -118,7 +121,7 @@ pub async fn create_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, OccurrenceHandlerError> {
+) -> Result<(StatusCode, Json<PrepareOccurrenceResponse>), OccurrenceHandlerError> {
     let session_token = extract_session_token(&headers)?;
 
     let current_user = AuthService::current_user(
@@ -127,19 +130,27 @@ pub async fn create_occurrence(
     )
     .await?;
 
-    let content_type = ensure_supported_rdf_content_type(&headers)?; //text/turtle以外を拒否
+    let content_type = ensure_supported_rdf_content_type(&headers)?;
+    ensure_non_empty_body(&body)?;
 
-    ensure_non_empty_body(&body)?; //空bodyを拒否
-
-    let input = CreateOccurrenceInput { //occurrenceデータ組み立て
+    let input = CreateOccurrenceInput {
         create_user_id: current_user.user_id,
         content_type,
         rdf_body: body.to_vec(),
     };
 
-    OccurrenceService::create_occurrence(input).await?;
+    let output = OccurrenceService::prepare_occurrence_for_storage(input)?;
 
-    Ok(StatusCode::CREATED)
+    let nquads = String::from_utf8(output.nquads)
+        .map_err(|_| OccurrenceHandlerError::InternalServerError)?;
+
+    let response = PrepareOccurrenceResponse {
+        occurrence_id: output.occurrence_id.to_string(),
+        occurrence_uri: output.occurrence_uri,
+        nquads,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー
@@ -181,7 +192,7 @@ fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外�
         .to_ascii_lowercase();
 
     match media_type.as_str() {
-        "text/turtle" => Ok(media_type),
+        "application/n-quads" => Ok(media_type),
         _ => Err(OccurrenceHandlerError::UnsupportedMediaType),
     }
 }

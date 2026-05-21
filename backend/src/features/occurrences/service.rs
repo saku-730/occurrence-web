@@ -21,7 +21,16 @@ pub struct CreateOccurrenceInput { //occurrenceデータ作成時の構造体
 
 #[derive(Debug)]
 pub struct CreateOccurrenceOutput {
-    pub message: String,
+    pub occurrence_id: Uuid,
+    pub occurrence_uri: String,
+    pub nquads: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct BuiltOccurrenceNquads {
+    occurrence_id: Uuid,
+    occurrence_uri: String,
+    nquads: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -35,6 +44,7 @@ pub enum OccurrenceServiceError {
     RdfParseFailed,
 }
 
+const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
 const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
@@ -46,6 +56,21 @@ impl OccurrenceService {
         _input: CreateOccurrenceInput,
     ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError> {
         Err(OccurrenceServiceError::NotImplemented)
+    }
+
+    pub(crate) fn prepare_occurrence_for_storage(
+        input: CreateOccurrenceInput,
+    ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError> {
+        let built = build_occurrence_nquads_with_generated_id(
+            &input.rdf_body,
+            input.create_user_id,
+        )?;
+
+        Ok(CreateOccurrenceOutput {
+            occurrence_id: built.occurrence_id,
+            occurrence_uri: built.occurrence_uri,
+            nquads: built.nquads,
+        })
     }
 }
 
@@ -141,6 +166,26 @@ fn build_occurrence_nquads( //フロントから来たN-Quadsを組み立て
     )?;
 
     serialize_quads_as_nquads(&quads)
+}
+
+fn build_occurrence_nquads_with_generated_id(
+    frontend_nquads: &[u8],
+    create_user_id: Uuid,
+) -> Result<BuiltOccurrenceNquads, OccurrenceServiceError> {
+    let occurrence_id = Uuid::new_v4();
+    let occurrence_uri = format!("{}{}", OCCURRENCE_URI_BASE, occurrence_id);
+
+    let nquads = build_occurrence_nquads(
+        frontend_nquads,
+        &occurrence_uri,
+        create_user_id,
+    )?;
+
+    Ok(BuiltOccurrenceNquads {
+        occurrence_id,
+        occurrence_uri,
+        nquads,
+    })
 }
 
 #[cfg(test)]
@@ -344,5 +389,77 @@ mod tests {
             quad.subject.to_string()
                 == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
         }));
+    }
+
+    #[test]
+    fn prepare_occurrence_for_storage_generates_id_and_builds_nquads() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+                .expect("valid uuid");
+
+        let input = CreateOccurrenceInput {
+            create_user_id,
+            content_type: "application/n-quads".to_string(),
+            rdf_body: frontend_nquads.to_vec(),
+        };
+
+        let output = OccurrenceService::prepare_occurrence_for_storage(input)
+            .expect("occurrence should be prepared for storage");
+
+        assert!(
+            output.occurrence_uri.starts_with(OCCURRENCE_URI_BASE),
+            "occurrence URI should start with occurrence URI base"
+        );
+
+        let occurrence_id_in_uri = output
+            .occurrence_uri
+            .strip_prefix(OCCURRENCE_URI_BASE)
+            .expect("occurrence URI should contain UUID suffix");
+
+        let parsed_occurrence_id =
+            uuid::Uuid::parse_str(occurrence_id_in_uri)
+                .expect("occurrence URI suffix should be UUID");
+
+        assert_eq!(output.occurrence_id, parsed_occurrence_id);
+
+        let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&output.nquads)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("output n-quads should be valid");
+
+        assert_eq!(parsed_quads.len(), 3);
+
+        let expected_subject = format!("<{}>", output.occurrence_uri);
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.subject.to_string() == expected_subject
+            }),
+            "all subjects should be backend-issued occurrence URI"
+        );
+
+        let expected_creator_object = format!(
+            "<https://bio-database.net/users/{}>",
+            create_user_id
+        );
+
+        let has_creator_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
+                && quad.object.to_string() == expected_creator_object
+                && quad.graph_name.to_string()
+                    == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_creator_quad,
+            "output should contain dcterms:creator quad"
+        );
     }
 }

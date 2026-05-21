@@ -122,8 +122,8 @@
 - [x] フロントから送られた、N-Quadsにcreate_user_idを付加`add_create_user_id_quad_adds_creator_resource_in_occurrence_graph`
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [ ] N-Quadsのグラフ名が`<https://bio-database.net/graphs/occurrences>`以外拒否``
-- [ ] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
-- [ ] 
+- [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
+- [x] UUIDを発行してN-Quadsを組み立てできる。``
 
 ### repository
 

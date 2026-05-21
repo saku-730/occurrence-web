@@ -1252,20 +1252,17 @@ mod tests {
     async fn create_occurrence_route_requires_login() {
         let app = build_app(test_state());
 
-        let turtle = r#"
-    @prefix ex: <https://example.org/occurrence/> .
-
-    ex:occurrence-001
-        a ex:Occurrence .
-    "#;
+        let nquads = r#"
+        _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+        "#;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/occurrences")
-                    .header(CONTENT_TYPE, "text/turtle")
-                    .body(Body::from(turtle))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .body(Body::from(nquads))
                     .unwrap(),
             )
             .await
@@ -1289,21 +1286,18 @@ mod tests {
         let state = test_state();
         let app = build_app(state);
 
-        let turtle = r#"
-    @prefix ex: <https://example.org/occurrence/> .
-
-    ex:occurrence-001
-        a ex:Occurrence .
-    "#;
+        let nquads = r#"
+        _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+        "#;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/occurrences")
-                    .header(CONTENT_TYPE, "text/turtle")
+                    .header(CONTENT_TYPE, "application/n-quads")
                     .header(COOKIE, "session=invalid-session-token")
-                    .body(Body::from(turtle))
+                    .body(Body::from(nquads))
                     .unwrap(),
             )
             .await
@@ -1363,27 +1357,24 @@ mod tests {
 
         let app = build_app(state);
 
-        let turtle = r#"
-    @prefix ex: <https://example.org/occurrence/> .
-
-    ex:occurrence-001
-        a ex:Occurrence .
-    "#;
+        let nquads = r#"
+        _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+        "#;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/occurrences")
-                    .header(CONTENT_TYPE, "text/turtle")
+                    .header(CONTENT_TYPE, "application/n-quads")
                     .header(COOKIE, format!("session={}", session_token))
-                    .body(Body::from(turtle))
+                    .body(Body::from(nquads))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1392,80 +1383,51 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
 
-        assert_eq!(body["error"], "not_implemented");
-        assert_eq!(body["message"], "Occurrence creation is not implemented yet");
-    }
+            
+        let occurrence_id = body["occurrence_id"]
+            .as_str()
+            .expect("occurrence_id should be string");
 
-    #[tokio::test]
-    async fn create_occurrence_route_rejects_unsupported_content_type() {
-        let state = test_state();
-        let db = state.posgre.clone();
+        let occurrence_uri = body["occurrence_uri"]
+            .as_str()
+            .expect("occurrence_uri should be string");
 
-        let email = format!("occurrence-user-{}@example.com", uuid::Uuid::new_v4());
-        let user_name = "occurrence-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let built_nquads = body["nquads"]
+            .as_str()
+            .expect("nquads should be string");
 
-        let user_id = sqlx::query_scalar!( //sql直接でuser作成
-            r#"
-            INSERT INTO users (email, user_name, password_hash)
-            VALUES ($1, $2, $3)
-            RETURNING id
-            "#,
-            email,
-            user_name,
-            password_hash
-        )
-        .fetch_one(&db)
-        .await
-        .expect("user should be inserted");
+        assert!(
+            occurrence_uri.starts_with("https://bio-database.net/occurrences/")
+        );
 
-        let session_token = uuid::Uuid::new_v4().to_string();
-        let session_token_hash = hash_token(&session_token);
+        assert!(
+            occurrence_uri.ends_with(occurrence_id),
+            "occurrence_uri should contain occurrence_id"
+        );
 
-        sqlx::query!( //セッショントークン直接sqlで挿入してログイン状態にする
-            r#"
-            INSERT INTO sessions (user_id, session_token_hash, expires_at)
-            VALUES ($1, $2, now() + interval '30 days')
-            "#,
-            user_id,
-            session_token_hash
-        )
-        .execute(&db)
-        .await
-        .expect("session should be inserted");
+        assert!(
+            built_nquads.contains(occurrence_uri),
+            "built n-quads should contain backend-issued occurrence URI"
+        );
 
-        let app = build_app(state);
-
-        let body = serde_json::json!({
-            "taxon_name": "Lumbricus terrestris"
-        });
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/occurrences")
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(COOKIE, format!("session={}", session_token))
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
+        assert!(
+            built_nquads.contains(
+                "<https://example.org/vocab/taxonName> \"Lumbricus terrestris\" <https://bio-database.net/graphs/occurrences> ."
             )
-            .await
-            .unwrap();
+        );
 
-        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(
+            built_nquads.contains("<http://purl.org/dc/terms/creator>")
+        );
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-
-        let body: serde_json::Value =
-            serde_json::from_slice(&body).expect("response body should be JSON");
-
-        assert_eq!(body["error"], "unsupported_media_type");
-        assert_eq!(body["message"], "Unsupported media type");
+        assert!(
+            built_nquads.contains(&format!(
+                "<https://bio-database.net/users/{}>",
+                user_id
+            ))
+        );
     }
+
 
     #[tokio::test]
     async fn create_occurrence_route_rejects_empty_body() {
@@ -1513,7 +1475,7 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/occurrences")
-                    .header(CONTENT_TYPE, "text/turtle")
+                    .header(CONTENT_TYPE, "application/n-quads")
                     .header(COOKIE, format!("session={}", session_token))
                     .body(Body::from("")) //テスト用に空body
                     .unwrap(),
@@ -1532,5 +1494,114 @@ mod tests {
 
         assert_eq!(body["error"], "empty_body");
         assert_eq!(body["message"], "Request body must not be empty");
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_with_valid_session_returns_prepared_nquads() {
+        let state = test_state();
+        let db = state.posgre.clone();
+
+        let email = format!("occurrence-user-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "occurrence-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let nquads = r#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(nquads))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        let occurrence_id = body["occurrence_id"]
+            .as_str()
+            .expect("occurrence_id should be string");
+
+        let occurrence_uri = body["occurrence_uri"]
+            .as_str()
+            .expect("occurrence_uri should be string");
+
+        let nquads = body["nquads"]
+            .as_str()
+            .expect("nquads should be string");
+
+        assert!(
+            occurrence_uri.starts_with("https://bio-database.net/occurrences/")
+        );
+
+        assert!(
+            occurrence_uri.ends_with(occurrence_id),
+            "occurrence_uri should contain occurrence_id"
+        );
+
+        assert!(nquads.contains(occurrence_uri));
+
+        assert!(nquads.contains(
+            "<https://example.org/vocab/taxonName> \"Lumbricus terrestris\" <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        assert!(nquads.contains(
+            "<https://example.org/vocab/locality> \"somewhere\" <https://bio-database.net/graphs/occurrences> ."
+        ));
+
+        assert!(nquads.contains(
+            "<http://purl.org/dc/terms/creator>"
+        ));
+
+        assert!(nquads.contains(&format!(
+            "<https://bio-database.net/users/{}>",
+            user_id
+        )));
     }
 }
