@@ -25,17 +25,29 @@ services:
       context: ./jena-fuseki-docker-6.1.0
       dockerfile: Dockerfile
       args:
-        JENA_VERSION: 6.0.0
-    container_name: occurrence_fuseki
-    ports:
-      - "3030:3030"
-    volumes:
-      - ./databases:/fuseki/databases
-    command:
-      - "--update"
-      - "--loc"
-      - "databases/occurrence"
-      - "/occurrence"
+        JENA_VERSION: 6.1.0
 
-volumes:
-  occurrence_web_postgres_data:
+    container_name: occurrence_fuseki
+
+    expose:
+      - "3030"
+
+    volumes:
+      - ./fuseki/config.ttl:/fuseki/config.ttl:ro
+      - ./fuseki/secrets/passwd:/fuseki/secrets/passwd:ro
+      - ./fuseki/databases:/fuseki/databases
+
+    command:
+      - "--conf"
+      - "/fuseki/config.ttl"
+
+    networks:
+      - rdf_internal
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/$/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
