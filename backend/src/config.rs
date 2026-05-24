@@ -6,6 +6,7 @@ pub struct Config {
     pub app: AppConfig,
     pub posgre: PosgreConfig,
     pub smtp: SmtpConfig, //メール関係
+    pub fuseki: FusekiConfig, //Fuseki関係
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,27 @@ pub struct SmtpConfig {
     pub password: String,
     pub tls: String,
     pub from: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FusekiConfig {
+    pub base_url: String,
+    pub user: String,
+    pub password: String,
+}
+
+impl FusekiConfig {
+    pub fn data_url(&self) -> String {
+        format!("{}/data", self.base_url.trim_end_matches('/'))
+    }
+
+    pub fn sparql_url(&self) -> String {
+        format!("{}/sparql", self.base_url.trim_end_matches('/'))
+    }
+
+    pub fn update_url(&self) -> String {
+        format!("{}/update", self.base_url.trim_end_matches('/'))
+    }
 }
 
 #[derive(Debug)]
@@ -82,8 +104,14 @@ impl Config {
             tls: get_env_or("SMTP_TLS", "none"),
             from: get_env_or("MAIL_FROM", "no-reply@example.com"),
         };
+        
+        let fuseki = FusekiConfig {
+            base_url: get_required_env("FUSEKI_BASE_URL")?,
+            user: get_required_env("FUSEKI_USER")?,
+            password: get_required_env("FUSEKI_PASSWORD")?,
+        };
 
-        Ok(Self { app, posgre, smtp })
+        Ok(Self { app, posgre, smtp, fuseki })
     }
 }
 

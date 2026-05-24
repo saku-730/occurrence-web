@@ -65,7 +65,7 @@ async fn info(State(state): State<AppState>) -> String {
 #[cfg(test)]//test section
 mod tests {
     use super::build_app;
-    use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig};
+    use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig, FusekiConfig};
     use crate::state::AppState;
     use crate::features::auth::repository::AuthRepository;
     use crate::features::auth::service::{
@@ -108,6 +108,15 @@ mod tests {
                 tls: "none".to_string(),
                 from: "no-replay@example.com".to_string(),
             },
+
+            fuseki: FusekiConfig{
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string())
+            }
         };
 
         let posgre = PgPoolOptions::new()
