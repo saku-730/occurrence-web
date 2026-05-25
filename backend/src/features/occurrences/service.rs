@@ -51,6 +51,9 @@ pub enum OccurrenceServiceError {
     RdfSerializationFailed,
     RdfParseFailed,
     StoreFailed,
+    FrontendManagedPredicateProvided,//フロントから誤ってユーザー情報が送られた場合。ユーザー偽装
+    ForbiddenRdfGraph,//グラフの名前がoccurrence空間以外
+    EmptyRdf, //空のデータ送信
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -63,10 +66,10 @@ pub struct OccurrenceService;
 impl OccurrenceService {
     pub async fn create_occurrence<S>(
         input: CreateOccurrenceInput,
-        store: &S
+        store: &S,
     ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError>
     where
-        S: OccurrenceRdfStore + Sync,
+        S: OccurrenceRdfStore + ?Sized,
     {
         let output = Self::prepare_occurrence_for_storage(input)?;
 
@@ -170,6 +173,12 @@ fn build_occurrence_nquads( //フロントから来たN-Quadsを組み立て
         .for_slice(frontend_nquads)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+    
+    ensure_rdf_contains_at_least_one_quad(&quads)?;
+
+    ensure_only_occurrence_graph(&quads)?;
+
+    ensure_no_backend_managed_predicates(&quads)?;
 
     let mut quads = replace_all_subjects_with_occurrence_uri(
         quads,
@@ -203,6 +212,50 @@ fn build_occurrence_nquads_with_generated_id(
         occurrence_uri,
         nquads,
     })
+}
+
+fn ensure_no_backend_managed_predicates( //ユーザー情報がフロントから送られていないことを確認。
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let has_backend_managed_predicate = quads
+        .iter()
+        .any(|quad| quad.predicate.as_str() == CREATOR_PREDICATE_URI);
+
+    if has_backend_managed_predicate {
+        return Err(OccurrenceServiceError::FrontendManagedPredicateProvided);
+    }
+
+    Ok(())
+}
+
+fn ensure_only_occurrence_graph( //グラフ名が間違っていれば拒否
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let all_quads_use_occurrence_graph = quads.iter().all(|quad| {
+        match &quad.graph_name {
+            GraphName::NamedNode(graph_name) => {
+                graph_name.as_str() == OCCURRENCE_GRAPH_URI
+            }
+            GraphName::DefaultGraph => false,
+            GraphName::BlankNode(_) => false,
+        }
+    });
+
+    if !all_quads_use_occurrence_graph {
+        return Err(OccurrenceServiceError::ForbiddenRdfGraph);
+    }
+
+    Ok(())
+}
+
+fn ensure_rdf_contains_at_least_one_quad( //空のデータを拒否
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    if quads.is_empty() {
+        return Err(OccurrenceServiceError::EmptyRdf);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -12,12 +12,17 @@ async fn main() {
     let config = Config::from_env().unwrap();
 
     let posgre = PgPoolOptions::new()
-    .max_connections(5)
-    .connect(&config.posgre.url)
-    .await.expect("failed to connect postgresql server");
+        .max_connections(5)
+        .connect(&config.posgre.url)
+        .await.expect("failed to connect postgresql server");
 
     let bind_addr = config.app.bind_addr();
-    let state = AppState::new(config, posgre,);
+
+    let occurrence_rdf_store = Arc::new( //for fuseki
+        FusekiClient::new(config.fuseki.clone())
+    );
+
+    let state = AppState::new(config, posgre,occurrence_rdf_store);
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)

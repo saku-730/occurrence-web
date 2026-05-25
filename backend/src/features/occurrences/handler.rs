@@ -35,6 +35,11 @@ pub enum OccurrenceHandlerError {
     UnsupportedMediaType, //httpリクエストのbodyがtext/turtle以外など
     EmptyBody, //httpリクエストのbodyが空
     InternalServerError, //サーバー側の処理エラーなど
+    InvalidRdf, //フロントから送信されたN-Quadsが壊れている
+    RdfStoreError, //
+    ForbiddenRdfPredicate,//禁止されている述語を含むRDFを拒否
+    ForbiddenRdfGraph,//グラフ名が間違っている場合拒否
+    EmptyRdf,//空のデータを拒否
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -56,8 +61,11 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::InvalidUserUri => Self::InternalServerError,
             OccurrenceServiceError::InvalidGraphUri => Self::InternalServerError,
             OccurrenceServiceError::RdfSerializationFailed => Self::InternalServerError,
-            OccurrenceServiceError::RdfParseFailed => Self::InternalServerError,
-            OccurrenceServiceError::StoreFailed => Self::InternalServerError,
+            OccurrenceServiceError::RdfParseFailed => Self::InvalidRdf,
+            OccurrenceServiceError::StoreFailed => Self::RdfStoreError,
+            OccurrenceServiceError::FrontendManagedPredicateProvided => Self::ForbiddenRdfPredicate,
+            OccurrenceServiceError::ForbiddenRdfGraph => Self::ForbiddenRdfGraph,
+            OccurrenceServiceError::EmptyRdf => Self::EmptyRdf,
         }
     }
 }
@@ -114,6 +122,48 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
+            OccurrenceHandlerError::RdfStoreError => {
+                let body = ErrorResponse {
+                    error: "rdf_store_error".to_string(),
+                    message: "Failed to save occurrence RDF".to_string(),
+                };
+
+                (StatusCode::BAD_GATEWAY, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::ForbiddenRdfPredicate => {
+                let body = ErrorResponse {
+                    error: "forbidden_rdf_predicate".to_string(),
+                    message: "Frontend RDF must not contain backend-managed predicates".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::ForbiddenRdfGraph => {
+                let body = ErrorResponse {
+                    error: "forbidden_rdf_graph".to_string(),
+                    message: "Occurrence RDF must use the occurrence graph".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            Self::InvalidRdf => {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_rdf".to_string(),
+                        message: "Invalid RDF body".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+            OccurrenceHandlerError::EmptyRdf => {
+                let body = ErrorResponse {
+                    error: "empty_rdf".to_string(),
+                    message: "Occurrence RDF must contain at least one quad".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
         }
     }
 }
@@ -140,7 +190,11 @@ pub async fn create_occurrence(
         rdf_body: body.to_vec(),
     };
 
-    let output = OccurrenceService::prepare_occurrence_for_storage(input)?;
+    let output = OccurrenceService::create_occurrence(
+        input,
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
 
     let response = CreateOccurrenceResponse {
         occurrence_id: output.occurrence_id.to_string(),
@@ -194,8 +248,10 @@ fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外�
     }
 }
 
-fn ensure_non_empty_body(body: &Bytes) -> Result<(), OccurrenceHandlerError> { //bodyが空じゃないか確認
-    if body.is_empty() || body.iter().all(|byte| byte.is_ascii_whitespace()) {//.iterは改行とか空白も含めてエラーにするため
+fn ensure_non_empty_body(body: &Bytes) -> Result<(), OccurrenceHandlerError> {
+    // HTTP body が完全に空でないことだけを確認する。
+    // 空白だけ・コメントだけなど、RDF quad が 0 件になるケースは service 側で EmptyRdf として扱う。
+    if body.is_empty() {
         return Err(OccurrenceHandlerError::EmptyBody);
     }
 

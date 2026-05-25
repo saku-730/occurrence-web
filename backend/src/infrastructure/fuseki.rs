@@ -67,6 +67,7 @@ impl OccurrenceRdfStore for FusekiClient {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use uuid::Uuid;
 
     #[tokio::test]
     #[ignore]
@@ -89,5 +90,91 @@ mod tests {
             .post_nquads(nquads.into_bytes())
             .await
             .expect("n-quads should be posted to Fuseki");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_save_nquads_inserts_data_into_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER")
+                .unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            Uuid::new_v4()
+        );
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let predicate_uri = "https://example.org/vocab/scientificName";
+        let scientific_name = "Lumbricus terrestris";
+
+        let nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+"#,
+            occurrence_uri,
+            predicate_uri,
+            scientific_name,
+            graph_uri
+        );
+
+        client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("N-Quads should be saved to Fuseki");
+
+        let query = format!(
+            r#"
+            ASK WHERE {{
+                GRAPH <{}> {{
+                <{}> <{}> "{}" .
+                }}
+            }}
+            "#,
+            graph_uri,
+            occurrence_uri,
+            predicate_uri,
+            scientific_name
+        );
+
+        let response = reqwest::Client::new()
+            .post("http://127.0.0.1:3033/occurrence/sparql")
+            .basic_auth("occurrence_backend", Some("change_me_backend_password"))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/sparql-query",
+            )
+            .header(
+                reqwest::header::ACCEPT,
+                "application/sparql-results+json",
+            )
+            .body(query)
+            .send()
+            .await
+            .expect("SPARQL ASK request should be sent");
+
+        assert!(
+            response.status().is_success(),
+            "SPARQL ASK should succeed, got {}",
+            response.status()
+        );
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .expect("SPARQL ASK response should be JSON");
+
+        assert_eq!(
+            body["boolean"], true,
+            "saved N-Quads should be queryable from Fuseki"
+        );
     }
 }

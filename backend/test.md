@@ -104,8 +104,6 @@
 - [x] ログアウトしたら、posgre sessionsテーブルのrevokedが更新されてセッションが無効になる。`me_route_returns_current_user_for_valid_session_cookie`
 - [x] セッショントークンで現在のユーザーを参照できる。`current_user_returns_user_for_valid_session`
 
-### repository
-
 ## Occurrence data
 
 ### app
@@ -116,16 +114,25 @@
 - [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415`create_occurrence_route_rejects_unsupported_content_type`
 - [x] `POST /occurrences`はhttpリクエストのbodyが空なら400`create_occurrence_route_rejects_empty_body`
 - [x] `POST /occurrences`に有効なユーザーで有効リクエストしたときに201created response`create_occurrence_route_with_valid_session_returns_created`
+- [x] `POST /occurrences`に有効 session と正しい N-Quads を送ると、route 経由で保存用 N-Quads が OccurrenceRdfStore に渡される`create_occurrence_route_with_valid_session_saves_nquads_to_store`
+- [x] `POST /occurrences`に有効 session と壊れた N-Quads を送ると、400 Bad Request を返し、OccurrenceRdfStore には保存されない。`create_occurrence_route_with_invalid_nquads_returns_bad_request_and_does_not_save`
+- [x] `POST /occurrences`に有効 session と正しい N-Quads を送ったが、OccurrenceRdfStore の保存処理が失敗した場合、502 Bad Gateway`create_occurrence_route_when_rdf_store_fails_returns_bad_gateway`
+- [x] `POST /occurrences`にfrontend が backend 管理 predicate を送ってきたら拒否する`create_occurrence_route_rejects_frontend_creator_and_does_not_save`
+- [x] N-Quadsのグラフ名が`<https://bio-database.net/graphs/occurrences>`以外拒否で400 `create_occurrence_route_rejects_non_occurrence_graph_and_does_not_save`
+- [x] `POST /occurrences`に空のデータが送信されたときに、データがつくられない。creatorだけつくられることがない`create_occurrence_route_rejects_empty_rdf_and_does_not_save`
+- [x] `POST /occurrences` に有効 session と正しい N-Quads を送ると、実 Fuseki に保存され、SPARQL ASK で取得できる。
 
 ### service
 
 - [x] フロントエンドから送られた、N-Quadsの主語なんでもをバックエンドが、発行した、オカレンスuuidに差し替え`replace_all_subjects_with_occurrence_uri_replaces_any_frontend_subject`
 - [x] フロントから送られた、N-Quadsにcreate_user_idを付加`add_create_user_id_quad_adds_creator_resource_in_occurrence_graph`
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
-- [ ] N-Quadsのグラフ名が`<https://bio-database.net/graphs/occurrences>`以外拒否``
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
 - [x] UUIDを発行してN-Quadsを組み立てできる。``
 
 ### repository
 
 ### other
+
+- [x] fuseki.rsがfusekiにrdfを保存できる`fuseki_client_save_nquads_inserts_data_into_fuseki`
+- [ ] 

@@ -73,6 +73,7 @@ mod tests {
         hash_token,
         AuthService
     };
+    use crate::infrastructure::fuseki::FusekiClient;
 
     use axum::{
         body::{to_bytes, Body},
@@ -83,6 +84,12 @@ mod tests {
     use tower::util::ServiceExt; // oneshot
     use sha2::Digest;
 
+    use crate::features::occurrences::service::{
+        OccurrenceRdfStore,
+        OccurrenceServiceError,
+    };
+    use std::sync::{Arc, Mutex};
+    use oxrdfio::{RdfFormat, RdfParser};
 
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
@@ -123,7 +130,86 @@ mod tests {
         .connect_lazy(&config.posgre.url)
         .expect("failed to create lazy database pool");
 
-        AppState::new(config,posgre)
+        AppState::new(config,posgre,Arc::new(NoopOccurrenceRdfStore),)
+    }
+
+    #[derive(Clone, Default)]
+    struct NoopOccurrenceRdfStore;
+
+    #[async_trait::async_trait]
+    impl OccurrenceRdfStore for NoopOccurrenceRdfStore {
+        async fn save_nquads(
+            &self,
+            _nquads: Vec<u8>,
+        ) -> Result<(), OccurrenceServiceError> {
+            Ok(())
+        }
+    }
+
+    fn test_state_with_occurrence_rdf_store(
+        occurrence_rdf_store: Arc<dyn OccurrenceRdfStore>,
+    ) -> AppState {
+        dotenvy::dotenv().ok();
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for app tests");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        AppState::new(
+            config,
+            posgre,
+            occurrence_rdf_store,
+        )
+    }
+
+    #[derive(Clone, Default)]
+    struct FakeOccurrenceRdfStore {
+        saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+        async fn save_nquads(
+            &self,
+            nquads: Vec<u8>,
+        ) -> Result<(), OccurrenceServiceError> {
+            self.saved_nquads
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(nquads);
+
+            Ok(())
+        }
     }
 
     async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
@@ -208,6 +294,26 @@ mod tests {
             .json()
             .await
             .expect("failed to parse Mailpit message detail response")
+    }
+
+    #[derive(Clone, Default)]
+    struct FailingOccurrenceRdfStore {
+        attempted_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl OccurrenceRdfStore for FailingOccurrenceRdfStore {
+        async fn save_nquads(
+            &self,
+            nquads: Vec<u8>,
+        ) -> Result<(), OccurrenceServiceError> {
+            self.attempted_nquads
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(nquads);
+
+            Err(OccurrenceServiceError::StoreFailed)
+        }
     }
 
     #[tokio::test]
@@ -1478,5 +1584,785 @@ mod tests {
 
         uuid::Uuid::parse_str(occurrence_id)
             .expect("occurrence_id should be valid UUID");
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_with_valid_session_saves_nquads_to_store() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!("occurrence-store-user-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "occurrence-store-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        let occurrence_uri = body_json["occurrence_uri"]
+            .as_str()
+            .expect("response should contain occurrence_uri");
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            1,
+            "POST /occurrences should save exactly one N-Quads document to OccurrenceRdfStore"
+        );
+
+        let saved_nquads = &saved[0];
+
+        let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(saved_nquads)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("saved N-Quads should be valid");
+
+        assert_eq!(
+            parsed_quads.len(),
+            2,
+            "saved N-Quads should contain frontend quad plus backend creator quad"
+        );
+
+        let expected_subject = format!("<{}>", occurrence_uri);
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.subject.to_string() == expected_subject
+            }),
+            "all saved quads should use backend-issued occurrence URI as subject"
+        );
+
+        let has_frontend_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<https://example.org/vocab/scientificName>"
+                && quad.object.to_string() == "\"Lumbricus terrestris\""
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_frontend_quad,
+            "saved N-Quads should contain the frontend occurrence data"
+        );
+
+        let expected_creator_object =
+            format!("<https://bio-database.net/users/{}>", user_id);
+
+        let has_creator_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
+                && quad.object.to_string() == expected_creator_object
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_creator_quad,
+            "saved N-Quads should contain backend-confirmed creator user URI"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_with_invalid_nquads_returns_bad_request_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-invalid-rdf-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-invalid-rdf-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let invalid_nquads = br#"
+    this is not valid n-quads
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(invalid_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "invalid_rdf");
+        assert_eq!(body_json["message"], "Invalid RDF body");
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "invalid N-Quads should not be saved to OccurrenceRdfStore"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
+        let store = FailingOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-rdf-store-fail-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-rdf-store-fail-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "rdf_store_error");
+        assert_eq!(body_json["message"], "Failed to save occurrence RDF");
+
+        let attempted = store
+            .attempted_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            attempted.len(),
+            1,
+            "valid occurrence RDF should be passed to the store even if the store fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_frontend_creator_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-reject-creator-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-reject-creator-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://purl.org/dc/terms/creator> <https://bio-database.net/users/fake-user> <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "forbidden_rdf_predicate");
+        assert_eq!(
+            body_json["message"],
+            "Frontend RDF must not contain backend-managed predicates"
+        );
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF containing frontend-supplied creator should not be saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_non_occurrence_graph_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-wrong-graph-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-wrong-graph-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/taxonomy> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "forbidden_rdf_graph");
+        assert_eq!(
+            body_json["message"],
+            "Occurrence RDF must use the occurrence graph"
+        );
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF using a non-occurrence named graph should not be saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_empty_rdf_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-empty-rdf-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-empty-rdf-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let empty_rdf_body = br#"
+        
+        
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(empty_rdf_body.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "empty_rdf");
+        assert_eq!(
+            body_json["message"],
+            "Occurrence RDF must contain at least one quad"
+        );
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "empty RDF should not be saved"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn create_occurrence_route_saves_data_to_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration test");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let fuseki_client = FusekiClient::new(config.fuseki.clone());
+
+        let state = AppState::new(
+            config.clone(),
+            posgre,
+            Arc::new(fuseki_client),
+        );
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-real-fuseki-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-real-fuseki-user";
+        let password_hash = hash_password("password123")
+            .expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let scientific_name = format!(
+            "Lumbricus terrestris {}",
+            uuid::Uuid::new_v4()
+        );
+
+        let frontend_nquads = format!(
+            r#"
+    _:occurrence <https://example.org/vocab/scientificName> "{}" <https://bio-database.net/graphs/occurrences> .
+    "#,
+            scientific_name
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.into_bytes()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        let occurrence_uri = body_json["occurrence_uri"]
+            .as_str()
+            .expect("response should contain occurrence_uri");
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "https://example.org/vocab/scientificName";
+        let creator_predicate = "http://purl.org/dc/terms/creator";
+        let expected_user_uri = format!("https://bio-database.net/users/{}", user_id);
+
+        let ask_query = format!(
+            r#"
+            ASK WHERE {{
+                GRAPH <{}> {{
+                <{}> <{}> "{}" .
+                <{}> <{}> <{}> .
+                }}
+            }}
+            "#,
+            graph_uri,
+            occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            occurrence_uri,
+            creator_predicate,
+            expected_user_uri
+        );
+
+        let sparql_url = format!(
+            "{}/sparql",
+            config.fuseki.base_url.trim_end_matches('/')
+        );
+
+        let ask_response = reqwest::Client::new()
+            .post(sparql_url)
+            .basic_auth(&config.fuseki.user, Some(&config.fuseki.password))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/sparql-query",
+            )
+            .header(
+                reqwest::header::ACCEPT,
+                "application/sparql-results+json",
+            )
+            .body(ask_query)
+            .send()
+            .await
+            .expect("SPARQL ASK request should be sent");
+
+        assert!(
+            ask_response.status().is_success(),
+            "SPARQL ASK should succeed, got {}",
+            ask_response.status()
+        );
+
+        let ask_body: serde_json::Value = ask_response
+            .json()
+            .await
+            .expect("SPARQL ASK response should be JSON");
+
+        assert_eq!(
+            ask_body["boolean"], true,
+            "POST /occurrences should save occurrence data and creator to real Fuseki"
+        );
     }
 }
