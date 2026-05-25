@@ -63,8 +63,11 @@ pub struct OccurrenceService;
 impl OccurrenceService {
     pub async fn create_occurrence<S>(
         input: CreateOccurrenceInput,
-        store: &dyn OccurrenceRdfStore,
-    ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError>{
+        store: &S
+    ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError>
+    where
+        S: OccurrenceRdfStore + Sync,
+    {
         let output = Self::prepare_occurrence_for_storage(input)?;
 
         store.save_nquads(output.nquads.clone()).await?;

@@ -140,11 +140,7 @@ pub async fn create_occurrence(
         rdf_body: body.to_vec(),
     };
 
-    let output = OccurrenceService::create_occurrence(
-        input,
-        state.occurrence_rdf_store.as_ref(),
-    )
-    .await?;
+    let output = OccurrenceService::prepare_occurrence_for_storage(input)?;
 
     let response = CreateOccurrenceResponse {
         occurrence_id: output.occurrence_id.to_string(),

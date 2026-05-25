@@ -115,6 +115,7 @@
 - [x] `POST /occurrences`はCookieが有効なら501`create_occurrence_route_with_valid_session_returns_not_implemented` 未実装だから一旦
 - [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415`create_occurrence_route_rejects_unsupported_content_type`
 - [x] `POST /occurrences`はhttpリクエストのbodyが空なら400`create_occurrence_route_rejects_empty_body`
+- [x] `POST /occurrences`に有効なユーザーで有効リクエストしたときに201created response`create_occurrence_route_with_valid_session_returns_created`
 
 ### service
 
