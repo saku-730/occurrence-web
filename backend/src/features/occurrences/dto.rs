@@ -7,3 +7,9 @@ pub struct PrepareOccurrenceResponse {
     pub occurrence_uri: String,
     pub nquads: String,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreateOccurrenceResponse {
+    pub occurrence_id: String,
+    pub occurrence_uri: String,
+}

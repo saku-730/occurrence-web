@@ -33,6 +33,14 @@ struct BuiltOccurrenceNquads {
     nquads: Vec<u8>,
 }
 
+#[async_trait::async_trait]
+pub trait OccurrenceRdfStore: Send + Sync { //rdfストアの粗結合実装。fakeでもfusekiでもどっちでも対応できるようにtrait
+    async fn save_nquads(
+        &self,
+        nquads: Vec<u8>,
+    ) -> Result<(), OccurrenceServiceError>;
+}
+
 #[derive(Debug)]
 pub enum OccurrenceServiceError {
     NotImplemented,
@@ -42,6 +50,7 @@ pub enum OccurrenceServiceError {
     InvalidGraphUri,
     RdfSerializationFailed,
     RdfParseFailed,
+    StoreFailed,
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -52,10 +61,15 @@ const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences"
 pub struct OccurrenceService;
 
 impl OccurrenceService {
-    pub async fn create_occurrence(
-        _input: CreateOccurrenceInput,
-    ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError> {
-        Err(OccurrenceServiceError::NotImplemented)
+    pub async fn create_occurrence<S>(
+        input: CreateOccurrenceInput,
+        store: &dyn OccurrenceRdfStore,
+    ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError>{
+        let output = Self::prepare_occurrence_for_storage(input)?;
+
+        store.save_nquads(output.nquads.clone()).await?;
+
+        Ok(output)
     }
 
     pub(crate) fn prepare_occurrence_for_storage(
@@ -460,6 +474,94 @@ mod tests {
         assert!(
             has_creator_quad,
             "output should contain dcterms:creator quad"
+        );
+    }
+    
+    #[tokio::test]
+    async fn create_occurrence_saves_built_nquads_to_store() {
+        use std::sync::{Arc, Mutex};
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        #[derive(Clone, Default)]
+        struct FakeOccurrenceRdfStore {
+            saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(
+                &self,
+                nquads: Vec<u8>,
+            ) -> Result<(), OccurrenceServiceError> {
+                self.saved_nquads
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .push(nquads);
+
+                Ok(())
+            }
+        }
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+                .expect("valid uuid");
+
+        let input = CreateOccurrenceInput {
+            create_user_id,
+            content_type: "application/n-quads".to_string(),
+            rdf_body: frontend_nquads.to_vec(),
+        };
+
+        let store = FakeOccurrenceRdfStore::default();
+
+        let output = OccurrenceService::create_occurrence(input, &store)
+            .await
+            .expect("occurrence should be created");
+
+        assert!(
+            output.occurrence_uri.starts_with(OCCURRENCE_URI_BASE)
+        );
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(saved.len(), 1);
+
+        assert_eq!(saved[0], output.nquads);
+
+        let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&saved[0])
+            .collect::<Result<Vec<_>, _>>()
+            .expect("saved n-quads should be valid");
+
+        assert_eq!(parsed_quads.len(), 2);
+
+        let expected_subject = format!("<{}>", output.occurrence_uri);
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.subject.to_string() == expected_subject
+            }),
+            "all saved quads should use backend-issued occurrence URI"
+        );
+
+        let has_creator_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
+                && quad.object.to_string()
+                    == "<https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa>"
+                && quad.graph_name.to_string()
+                    == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_creator_quad,
+            "saved n-quads should contain dcterms:creator quad"
         );
     }
 }

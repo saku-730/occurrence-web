@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    dto::PrepareOccurrenceResponse,
+    dto::CreateOccurrenceResponse,
     service::{
         CreateOccurrenceInput,
         OccurrenceService,
@@ -57,6 +57,7 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::InvalidGraphUri => Self::InternalServerError,
             OccurrenceServiceError::RdfSerializationFailed => Self::InternalServerError,
             OccurrenceServiceError::RdfParseFailed => Self::InternalServerError,
+            OccurrenceServiceError::StoreFailed => Self::InternalServerError,
         }
     }
 }
@@ -121,7 +122,7 @@ pub async fn create_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<(StatusCode, Json<PrepareOccurrenceResponse>), OccurrenceHandlerError> {
+) -> Result<(StatusCode, Json<CreateOccurrenceResponse>), OccurrenceHandlerError> {
     let session_token = extract_session_token(&headers)?;
 
     let current_user = AuthService::current_user(
@@ -139,18 +140,18 @@ pub async fn create_occurrence(
         rdf_body: body.to_vec(),
     };
 
-    let output = OccurrenceService::prepare_occurrence_for_storage(input)?;
+    let output = OccurrenceService::create_occurrence(
+        input,
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
 
-    let nquads = String::from_utf8(output.nquads)
-        .map_err(|_| OccurrenceHandlerError::InternalServerError)?;
-
-    let response = PrepareOccurrenceResponse {
+    let response = CreateOccurrenceResponse {
         occurrence_id: output.occurrence_id.to_string(),
         occurrence_uri: output.occurrence_uri,
-        nquads,
     };
 
-    Ok((StatusCode::OK, Json(response)))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー
