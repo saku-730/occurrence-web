@@ -12,6 +12,10 @@ use crate::features::auth::dto::{
     CurrentUserResponse,
 };
 
+use crate::features::occurrences::{
+    dto::CreateOccurrenceResponse,
+};
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -20,6 +24,7 @@ use crate::features::auth::dto::{
         crate::features::auth::handler::login,
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
+        crate::features::occurrences::handler::create_occurrence,
     ),
     components(
         schemas(
@@ -32,10 +37,12 @@ use crate::features::auth::dto::{
             LoginResponse,
             LogoutResponse, 
             CurrentUserResponse,
+            CreateOccurrenceResponse,
         )
     ),
     tags(
-        (name = "auth", description = "Authentication endpoints")
+        (name = "auth", description = "Authentication endpoints"),
+        (name = "occurrences", description = "Occurrence RDF endpoints")
     )
 )]
 pub struct ApiDoc;

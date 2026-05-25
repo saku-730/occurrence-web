@@ -168,6 +168,49 @@ impl IntoResponse for OccurrenceHandlerError {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/occurrences",
+    request_body(
+        content = String,
+        content_type = "application/n-quads",
+        description = "Occurrence RDF in N-Quads format. All quads must use <https://bio-database.net/graphs/occurrences> as the graph name. Backend-managed predicates such as dcterms:creator must not be included."
+    ),
+    responses(
+        (
+            status = 201,
+            description = "Occurrence created",
+            body = CreateOccurrenceResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid occurrence RDF body",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Authentication required",
+            body = ErrorResponse
+        ),
+        (
+            status = 415,
+            description = "Content-Type must be application/n-quads",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Failed to save occurrence RDF to RDF store",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "occurrences"
+)]
+
 pub async fn create_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
