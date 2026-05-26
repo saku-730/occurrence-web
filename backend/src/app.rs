@@ -18,6 +18,7 @@ use crate::{
         },
         occurrences::handler::{
             create_occurrence,
+            get_occurrence,
         },
     },
     state::AppState,
@@ -39,6 +40,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/me", get(me))
         //occurrence
         .route("/occurrences", post(create_occurrence))
+        .route("/occurrences/{occurrence_id}", get(get_occurrence))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/openapi.json", ApiDoc::openapi()),
@@ -89,6 +91,7 @@ mod tests {
         OccurrenceServiceError,
     };
     use std::sync::{Arc, Mutex};
+    use std::collections::HashMap;
     use oxrdfio::{RdfFormat, RdfParser};
 
     fn test_state() -> AppState {
@@ -144,6 +147,13 @@ mod tests {
         ) -> Result<(), OccurrenceServiceError> {
             Ok(())
         }
+
+        async fn get_occurrence_nquads(
+            &self,
+            _occurrence_uri: &str,
+        ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+            Ok(None)
+        }
     }
 
     fn test_state_with_occurrence_rdf_store(
@@ -194,7 +204,21 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct FakeOccurrenceRdfStore {
-        saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+    saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+    occurrence_nquads_by_uri: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    }
+
+    impl FakeOccurrenceRdfStore {
+        fn insert_occurrence_nquads(
+            &self,
+            occurrence_uri: impl Into<String>,
+            nquads: impl Into<Vec<u8>>,
+        ) {
+            self.occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .insert(occurrence_uri.into(), nquads.into());
+        }
     }
 
     #[async_trait::async_trait]
@@ -210,7 +234,21 @@ mod tests {
 
             Ok(())
         }
+
+        async fn get_occurrence_nquads(
+            &self,
+            occurrence_uri: &str,
+        ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+            Ok(self
+                .occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .get(occurrence_uri)
+                .cloned())
+        }
     }
+
+
 
     async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
     sqlx::query(
@@ -312,6 +350,13 @@ mod tests {
                 .expect("mutex should not be poisoned")
                 .push(nquads);
 
+            Err(OccurrenceServiceError::StoreFailed)
+        }
+
+        async fn get_occurrence_nquads(
+            &self,
+            _occurrence_uri: &str,
+        ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
             Err(OccurrenceServiceError::StoreFailed)
         }
     }
@@ -2363,6 +2408,71 @@ mod tests {
         assert_eq!(
             ask_body["boolean"], true,
             "POST /occurrences should save occurrence data and creator to real Fuseki"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_occurrence_route_returns_nquads_for_existing_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            occurrence_id
+        );
+
+        let expected_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/test-user> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(
+            occurrence_uri.clone(),
+            expected_nquads.clone().into_bytes(),
+        );
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/n-quads"),
+            "GET /occurrences/{{occurrence_id}} should return application/n-quads"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            body.as_ref(),
+            expected_nquads.as_bytes(),
+            "response body should be occurrence N-Quads returned from OccurrenceRdfStore"
         );
     }
 }

@@ -1,14 +1,16 @@
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{State,Path},
     http::{
         header::{CONTENT_TYPE,COOKIE,},
         HeaderMap,
         StatusCode,
+        header,
     },
     response::{IntoResponse, Response},
     Json,
 };
+use uuid::Uuid;
 
 use crate::{
     features::auth::{
@@ -24,6 +26,7 @@ use super::{
         CreateOccurrenceInput,
         OccurrenceService,
         OccurrenceServiceError,
+        GetOccurrenceInput,
     },
 };
 
@@ -40,6 +43,7 @@ pub enum OccurrenceHandlerError {
     ForbiddenRdfPredicate,//禁止されている述語を含むRDFを拒否
     ForbiddenRdfGraph,//グラフ名が間違っている場合拒否
     EmptyRdf,//空のデータを拒否
+    NotFound//
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -164,6 +168,14 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
+            OccurrenceHandlerError::NotFound => {
+                let body = ErrorResponse {
+                    error: "occurrence_not_found".to_string(),
+                    message: "Occurrence not found".to_string(),
+                };
+
+                (StatusCode::NOT_FOUND, Json(body)).into_response()
+            }
         }
     }
 }
@@ -245,6 +257,32 @@ pub async fn create_occurrence(
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub async fn get_occurrence(
+    State(state): State<AppState>,
+    Path(occurrence_id): Path<Uuid>,
+) -> Result<Response, OccurrenceHandlerError> {
+    let input = GetOccurrenceInput {
+        occurrence_id,
+    };
+
+    let output = OccurrenceService::get_occurrence(
+        input,
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
+
+    let Some(output) = output else {
+        return Err(OccurrenceHandlerError::NotFound);
+    };
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/n-quads")],
+        output.nquads,
+    )
+        .into_response())
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー

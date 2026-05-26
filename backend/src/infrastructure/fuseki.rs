@@ -61,6 +61,85 @@ impl OccurrenceRdfStore for FusekiClient {
             .await
             .map_err(|_| OccurrenceServiceError::StoreFailed)
     }
+
+    async fn get_occurrence_nquads(
+        &self,
+        occurrence_uri: &str,
+    ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+
+        let query = format!(
+            r#"
+            CONSTRUCT {{
+                <{occurrence_uri}> ?p ?o .
+            }}
+            WHERE {{
+                GRAPH <{graph_uri}> {{
+                <{occurrence_uri}> ?p ?o .
+                }}
+            }}
+            "#
+        );
+
+        let sparql_url = format!(
+            "{}/sparql",
+            self.config.base_url.trim_end_matches('/')
+        );
+
+        let response = self
+            .client
+            .post(sparql_url)
+            .basic_auth(&self.config.user, Some(&self.config.password))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/sparql-query",
+            )
+            .header(
+                reqwest::header::ACCEPT,
+                "application/n-triples",
+            )
+            .body(query)
+            .send()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        if !response.status().is_success() {
+            return Err(OccurrenceServiceError::StoreFailed);
+        }
+
+        let ntriples = response
+            .bytes()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        if ntriples.is_empty() {
+            return Ok(None);
+        }
+
+        let ntriples_text = String::from_utf8(ntriples.to_vec())
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        if ntriples_text.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let nquads = ntriples_text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let line = line.trim();
+
+                let triple_without_dot = line
+                    .strip_suffix('.')
+                    .map(str::trim_end)
+                    .unwrap_or(line);
+
+                format!("{triple_without_dot} <{graph_uri}> .\n")
+            })
+            .collect::<String>();
+
+        Ok(Some(nquads.into_bytes()))
+    }
 }
 
 #[cfg(test)]

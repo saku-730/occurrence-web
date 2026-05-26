@@ -33,12 +33,25 @@ struct BuiltOccurrenceNquads {
     nquads: Vec<u8>,
 }
 
+pub struct GetOccurrenceInput {
+    pub occurrence_id: Uuid,
+}
+
+pub struct GetOccurrenceOutput {
+    pub nquads: Vec<u8>,
+}
+
 #[async_trait::async_trait]
 pub trait OccurrenceRdfStore: Send + Sync { //rdfストアの粗結合実装。fakeでもfusekiでもどっちでも対応できるようにtrait
     async fn save_nquads(
         &self,
         nquads: Vec<u8>,
     ) -> Result<(), OccurrenceServiceError>;
+
+    async fn get_occurrence_nquads(
+        &self,
+        occurrence_uri: &str,
+    ) -> Result<Option<Vec<u8>>, OccurrenceServiceError>;
 }
 
 #[derive(Debug)]
@@ -91,6 +104,22 @@ impl OccurrenceService {
             occurrence_uri: built.occurrence_uri,
             nquads: built.nquads,
         })
+    }
+
+    pub async fn get_occurrence<S>(
+        input: GetOccurrenceInput,
+        store: &S,
+    ) -> Result<Option<GetOccurrenceOutput>, OccurrenceServiceError>
+    where
+        S: OccurrenceRdfStore + ?Sized,
+    {
+        let occurrence_uri = build_occurrence_uri(input.occurrence_id);
+
+        let nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await?;
+
+        Ok(nquads.map(|nquads| GetOccurrenceOutput { nquads }))
     }
 }
 
@@ -256,6 +285,13 @@ fn ensure_rdf_contains_at_least_one_quad( //空のデータを拒否
     }
 
     Ok(())
+}
+
+fn build_occurrence_uri(occurrence_id: Uuid) -> String {
+    format!(
+        "https://bio-database.net/occurrences/{}",
+        occurrence_id
+    )
 }
 
 #[cfg(test)]
