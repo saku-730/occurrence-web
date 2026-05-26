@@ -138,4 +138,4 @@
 ### other
 
 - [x] fuseki.rsがfusekiにrdfを保存できる`fuseki_client_save_nquads_inserts_data_into_fuseki`
-- [ ] fuseki.rsがfusekiに保存したrdfをoccurrence_idで呼び出しできる`fuseki_client_get_occurrence_nquads_returns_only_requested_occurrence`
+- [x] fuseki.rsがfusekiに保存したrdfをoccurrence_idで呼び出しできる`fuseki_client_get_occurrence_nquads_returns_only_requested_occurrence`
