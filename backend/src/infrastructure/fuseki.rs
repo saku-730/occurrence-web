@@ -66,17 +66,20 @@ impl OccurrenceRdfStore for FusekiClient {
         &self,
         occurrence_uri: &str,
     ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+        use oxrdf::{GraphName, NamedNode, Quad};
+        use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
+
         let graph_uri = "https://bio-database.net/graphs/occurrences";
 
         let query = format!(
             r#"
             CONSTRUCT {{
-                <{occurrence_uri}> ?p ?o .
+              <{occurrence_uri}> ?p ?o .
             }}
             WHERE {{
-                GRAPH <{graph_uri}> {{
+              GRAPH <{graph_uri}> {{
                 <{occurrence_uri}> ?p ?o .
-                }}
+              }}
             }}
             "#
         );
@@ -87,7 +90,7 @@ impl OccurrenceRdfStore for FusekiClient {
         );
 
         let response = self
-            .client
+            .http
             .post(sparql_url)
             .basic_auth(&self.config.user, Some(&self.config.password))
             .header(
@@ -116,29 +119,46 @@ impl OccurrenceRdfStore for FusekiClient {
             return Ok(None);
         }
 
-        let ntriples_text = String::from_utf8(ntriples.to_vec())
+        let triples = RdfParser::from_format(RdfFormat::NTriples)
+            .for_slice(&ntriples)
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|_| OccurrenceServiceError::StoreFailed)?;
 
-        if ntriples_text.trim().is_empty() {
+        if triples.is_empty() {
             return Ok(None);
         }
 
-        let nquads = ntriples_text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                let line = line.trim();
+        let graph_name = NamedNode::new(graph_uri)
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
 
-                let triple_without_dot = line
-                    .strip_suffix('.')
-                    .map(str::trim_end)
-                    .unwrap_or(line);
-
-                format!("{triple_without_dot} <{graph_uri}> .\n")
+        let quads = triples
+            .into_iter()
+            .map(|triple| {
+                Quad::new(
+                    triple.subject,
+                    triple.predicate,
+                    triple.object,
+                    GraphName::NamedNode(graph_name.clone()),
+                )
             })
-            .collect::<String>();
+            .collect::<Vec<_>>();
 
-        Ok(Some(nquads.into_bytes()))
+        let mut nquads = Vec::new();
+
+        let mut serializer = RdfSerializer::from_format(RdfFormat::NQuads)
+            .for_writer(&mut nquads);
+
+        for quad in quads {
+            serializer
+                .serialize_quad(&quad)
+                .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        }
+
+        serializer
+            .finish()
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        Ok(Some(nquads))
     }
 }
 
@@ -256,4 +276,128 @@ mod tests {
             "saved N-Quads should be queryable from Fuseki"
         );
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_get_occurrence_nquads_returns_only_requested_occurrence() {
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER")
+                .unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            occurrence_id
+        );
+
+        let other_occurrence_id = uuid::Uuid::new_v4();
+        let other_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            other_occurrence_id
+        );
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "https://example.org/vocab/scientificName";
+        let creator_predicate = "http://purl.org/dc/terms/creator";
+
+        let scientific_name = format!(
+            "Lumbricus terrestris {}",
+            uuid::Uuid::new_v4()
+        );
+
+        let nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+    <{}> <{}> <https://bio-database.net/users/test-user> <{}> .
+    <{}> <{}> "Should not be returned" <{}> .
+    "#,
+            occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            occurrence_uri,
+            creator_predicate,
+            graph_uri,
+            other_occurrence_uri,
+            scientific_name_predicate,
+            graph_uri,
+        );
+
+        client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("test N-Quads should be saved to Fuseki");
+
+        let result = client
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("occurrence N-Quads should be fetched from Fuseki");
+
+        let fetched_nquads = result.expect("existing occurrence should return Some");
+
+        let parsed_quads = oxrdfio::RdfParser::from_format(oxrdfio::RdfFormat::NQuads)
+            .for_slice(&fetched_nquads)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("fetched N-Quads should be valid");
+
+        assert_eq!(
+            parsed_quads.len(),
+            2,
+            "only quads whose subject is the requested occurrence URI should be returned"
+        );
+
+        let expected_subject = format!("<{}>", occurrence_uri);
+        let unexpected_subject = format!("<{}>", other_occurrence_uri);
+        let expected_graph = format!("<{}>", graph_uri);
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.subject.to_string() == expected_subject
+            }),
+            "all returned quads should have the requested occurrence URI as subject"
+        );
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.graph_name.to_string() == expected_graph
+            }),
+            "all returned quads should be in the occurrence graph"
+        );
+
+        assert!(
+            parsed_quads.iter().all(|quad| {
+                quad.subject.to_string() != unexpected_subject
+            }),
+            "quads from other occurrences should not be returned"
+        );
+
+        let has_scientific_name = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == format!("<{}>", scientific_name_predicate)
+                && quad.object.to_string() == format!("\"{}\"", scientific_name)
+        });
+
+        assert!(
+            has_scientific_name,
+            "fetched N-Quads should contain the saved scientificName"
+        );
+
+        let has_creator = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == format!("<{}>", creator_predicate)
+                && quad.object.to_string() == "<https://bio-database.net/users/test-user>"
+        });
+
+        assert!(
+            has_creator,
+            "fetched N-Quads should contain the saved creator"
+        );
+    }
+
 }

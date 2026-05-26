@@ -592,6 +592,13 @@ mod tests {
 
                 Ok(())
             }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(None)
+            }
         }
 
         let frontend_nquads = br#"

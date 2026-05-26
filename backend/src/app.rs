@@ -2475,4 +2475,76 @@ mod tests {
             "response body should be occurrence N-Quads returned from OccurrenceRdfStore"
         );
     }
+
+    #[tokio::test]
+    async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let app = build_app(state);
+
+        let occurrence_id = uuid::Uuid::new_v4();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "occurrence_not_found");
+        assert_eq!(body_json["message"], "Occurrence not found");
+    }
+
+    #[tokio::test]
+    async fn get_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
+        let store = FailingOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(
+            Arc::new(store.clone()),
+        );
+
+        let app = build_app(state);
+
+        let occurrence_id = uuid::Uuid::new_v4();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "rdf_store_error");
+        assert_eq!(body_json["message"], "Failed to save occurrence RDF");
+    }
 }
