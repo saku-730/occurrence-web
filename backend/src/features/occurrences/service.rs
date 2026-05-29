@@ -369,12 +369,16 @@ fn build_occurrence_nquads_with_generated_id(
 }
 
 fn ensure_no_backend_managed_predicates(
-    //ユーザー情報がフロントから送られていないことを確認。
+    // creator / created / modified はbackendが確定するため、フロントからの送信を拒否する。
     quads: &[Quad],
 ) -> Result<(), OccurrenceServiceError> {
-    let has_backend_managed_predicate = quads
-        .iter()
-        .any(|quad| quad.predicate.as_str() == CREATOR_PREDICATE_URI);
+    let has_backend_managed_predicate = quads.iter().any(|quad| {
+        let predicate = quad.predicate.as_str();
+
+        predicate == CREATOR_PREDICATE_URI
+            || predicate == CREATED_PREDICATE_URI
+            || predicate == MODIFIED_PREDICATE_URI
+    });
 
     if has_backend_managed_predicate {
         return Err(OccurrenceServiceError::FrontendManagedPredicateProvided);
@@ -735,6 +739,48 @@ mod tests {
             matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
             "multiple dcterms:accessRights values should be rejected"
         );
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_frontend_backend_managed_predicates() {
+        let cases = [
+            (
+                "creator",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/creator> <https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "created",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/created> "2026-05-29T12:34:56Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "modified",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/modified> "2026-05-29T12:34:56Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+        ];
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        for (predicate_name, frontend_nquads) in cases {
+            let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+            assert!(
+                matches!(
+                    result,
+                    Err(OccurrenceServiceError::FrontendManagedPredicateProvided)
+                ),
+                "frontend-sent dcterms:{predicate_name} should be rejected"
+            );
+        }
     }
 
     #[test]
