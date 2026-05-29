@@ -40,6 +40,7 @@ pub enum OccurrenceHandlerError {
     EmptyRdf,              //空のデータを拒否
     InvalidAccessRights,    //accessRightsが仕様外
     InvalidBlankNodeSubject, //blank node subjectが仕様外
+    InvalidObjectBlankNode,  //object blank nodeは拒否
     NotFound,              //
 }
 
@@ -69,6 +70,7 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::EmptyRdf => Self::EmptyRdf,
             OccurrenceServiceError::InvalidAccessRights => Self::InvalidAccessRights,
             OccurrenceServiceError::InvalidBlankNodeSubject => Self::InvalidBlankNodeSubject,
+            OccurrenceServiceError::InvalidObjectBlankNode => Self::InvalidObjectBlankNode,
         }
     }
 }
@@ -177,6 +179,14 @@ impl IntoResponse for OccurrenceHandlerError {
                 let body = ErrorResponse {
                     error: "invalid_blank_node_subject".to_string(),
                     message: "Invalid blank node subject".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::InvalidObjectBlankNode => {
+                let body = ErrorResponse {
+                    error: "invalid_object_blank_node".to_string(),
+                    message: "Invalid object blank node".to_string(),
                 };
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()

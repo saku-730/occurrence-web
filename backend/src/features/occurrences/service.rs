@@ -61,6 +61,7 @@ pub enum OccurrenceServiceError {
     EmptyRdf,                         //空のデータ送信
     InvalidAccessRights,               //accessRightsの値が仕様外
     InvalidBlankNodeSubject,            //blank node subjectが仕様外
+    InvalidObjectBlankNode,              //object blank nodeは拒否
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -338,6 +339,8 @@ fn build_occurrence_nquads(
 
     ensure_single_blank_node_subject(&quads)?;
 
+    ensure_no_object_blank_node(&quads)?;
+
     ensure_no_backend_managed_predicates(&quads)?;
 
     ensure_access_rights_is_resource(&quads)?;
@@ -389,6 +392,21 @@ fn ensure_single_blank_node_subject(
     // 1リクエストで作成できるoccurrenceは1件だけなので、blank node subjectも1つだけ許可する。
     if blank_node_subjects.len() > 1 {
         return Err(OccurrenceServiceError::InvalidBlankNodeSubject);
+    }
+
+    Ok(())
+}
+
+fn ensure_no_object_blank_node(
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let has_object_blank_node = quads
+        .iter()
+        .any(|quad| matches!(quad.object, Term::BlankNode(_)));
+
+    // object blank node は保存後に参照範囲が曖昧になりやすいためMVPでは拒否する。
+    if has_object_blank_node {
+        return Err(OccurrenceServiceError::InvalidObjectBlankNode);
     }
 
     Ok(())
@@ -827,6 +845,26 @@ mod tests {
         assert!(
             matches!(result, Err(OccurrenceServiceError::InvalidBlankNodeSubject)),
             "multiple blank node subjects should be rejected"
+        );
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_object_blank_node() {
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/relatedObject> _:object <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidObjectBlankNode)),
+            "object blank node should be rejected"
         );
     }
 

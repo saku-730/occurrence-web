@@ -141,6 +141,7 @@
 - [x] フロントからaccessRightsが複数送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_multiple_access_rights`
 - [x] フロントからbackend管理述語 creator / created / modified のいずれかが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_frontend_backend_managed_predicates`
 - [x] フロントから複数のblank node subjectが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_multiple_blank_node_subjects`
+- [x] フロントからobject blank nodeが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_object_blank_node`
 
 ### repository
 
