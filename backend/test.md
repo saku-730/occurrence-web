@@ -111,7 +111,7 @@
 - [x] `POST /occurrences`はCookieがなければ401`create_occurrence_route_requires_login`
 - [x] `POST /occurrences`はCookieが無効なら401`create_occurrence_route_returns_unauthorized_for_invalid_session_cookie`
 - [x] `POST /occurrences`はCookieが有効なら501`create_occurrence_route_with_valid_session_returns_not_implemented` 未実装だから一旦
-- [x] `POST /occurrences`はhttpリクエストのbodyがtext/turtle以外は拒否415`create_occurrence_route_rejects_unsupported_content_type`
+- [x] `POST /occurrences`はhttpリクエストのbodyがN-Quads以外は拒否415`create_occurrence_route_rejects_unsupported_content_type`
 - [x] `POST /occurrences`はhttpリクエストのbodyが空なら400`create_occurrence_route_rejects_empty_body`
 - [x] `POST /occurrences`に有効なユーザーで有効リクエストしたときに201created response`create_occurrence_route_with_valid_session_returns_created`
 - [x] `POST /occurrences`に有効 session と正しい N-Quads を送ると、route 経由で保存用 N-Quads が OccurrenceRdfStore に渡される`create_occurrence_route_with_valid_session_saves_nquads_to_store`
