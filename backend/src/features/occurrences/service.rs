@@ -64,6 +64,7 @@ pub enum OccurrenceServiceError {
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
 const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const CREATED_PREDICATE_URI: &str = "http://purl.org/dc/terms/created";
+const MODIFIED_PREDICATE_URI: &str = "http://purl.org/dc/terms/modified";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 
@@ -198,6 +199,38 @@ fn add_created_quad(
     Ok(())
 }
 
+fn add_modified_quad(
+    quads: &mut Vec<Quad>,
+    occurrence_uri: &str,
+    modified_at: DateTime<Utc>,
+) -> Result<(), OccurrenceServiceError> {
+    let occurrence_subject =
+        NamedNode::new(occurrence_uri).map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
+
+    let modified_predicate = NamedNode::new(MODIFIED_PREDICATE_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+
+    let occurrence_graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidGraphUri)?;
+
+    // 作成時点の更新日時を、RDF仕様側で検証しやすいxsd:dateTimeとして保存する。
+    let modified_literal = Literal::new_typed_literal(
+        modified_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        xsd::DATE_TIME,
+    );
+
+    let quad = Quad::new(
+        occurrence_subject,
+        modified_predicate,
+        modified_literal,
+        GraphName::NamedNode(occurrence_graph),
+    );
+
+    quads.push(quad);
+
+    Ok(())
+}
+
 fn serialize_quads_as_nquads(
     //再度シリアライズ
     quads: &[Quad],
@@ -236,7 +269,10 @@ fn build_occurrence_nquads(
 
     add_create_user_id_quad(&mut quads, occurrence_uri, create_user_id)?;
 
-    add_created_quad(&mut quads, occurrence_uri, Utc::now())?;
+    // 作成直後のcreatedとmodifiedは仕様上同じ時刻にする。
+    let now = Utc::now();
+    add_created_quad(&mut quads, occurrence_uri, now)?;
+    add_modified_quad(&mut quads, occurrence_uri, now)?;
 
     serialize_quads_as_nquads(&quads)
 }
@@ -433,6 +469,53 @@ mod tests {
     }
 
     #[test]
+    fn add_modified_quad_adds_modified_datetime_in_occurrence_graph() {
+        use chrono::{TimeZone, Utc};
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let input = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let modified_at = Utc
+            .with_ymd_and_hms(2026, 5, 29, 12, 34, 56)
+            .single()
+            .expect("valid UTC datetime");
+
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
+
+        let quads = parser
+            .for_slice(input)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("frontend n-quads should be parsed");
+
+        let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)
+            .expect("all subjects should be replaced");
+
+        add_modified_quad(&mut quads, occurrence_uri, modified_at)
+            .expect("modified quad should be added");
+
+        assert_eq!(quads.len(), 2);
+
+        let has_modified_quad = quads.iter().any(|quad| {
+            quad.subject.to_string()
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+                && quad.predicate.to_string() == "<http://purl.org/dc/terms/modified>"
+                && quad.object.to_string()
+                    == "\"2026-05-29T12:34:56Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_modified_quad,
+            "dcterms:modified quad should use backend current time as xsd:dateTime in occurrence graph"
+        );
+    }
+
+    #[test]
     fn serialize_quads_as_nquads_outputs_named_graph_quads() {
         use oxrdfio::{RdfFormat, RdfParser};
 
@@ -518,7 +601,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("built output should be valid n-quads");
 
-        assert_eq!(parsed_again.len(), 4);
+        assert_eq!(parsed_again.len(), 5);
 
         assert!(parsed_again.iter().all(|quad| {
             quad.subject.to_string()
@@ -567,7 +650,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("output n-quads should be valid");
 
-        assert_eq!(parsed_quads.len(), 4);
+        assert_eq!(parsed_quads.len(), 5);
 
         let expected_subject = format!("<{}>", output.occurrence_uri);
 
@@ -657,7 +740,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("saved n-quads should be valid");
 
-        assert_eq!(parsed_quads.len(), 3);
+        assert_eq!(parsed_quads.len(), 4);
 
         let expected_subject = format!("<{}>", output.occurrence_uri);
 

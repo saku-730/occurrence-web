@@ -1586,8 +1586,8 @@ mod tests {
 
         assert_eq!(
             parsed_quads.len(),
-            3,
-            "saved N-Quads should contain frontend quad plus backend creator and created quads"
+            4,
+            "saved N-Quads should contain frontend quad plus backend creator, created, and modified quads"
         );
 
         let expected_subject = format!("<{}>", occurrence_uri);
@@ -1632,6 +1632,17 @@ mod tests {
         assert!(
             has_created_quad,
             "saved N-Quads should contain backend-created timestamp as xsd:dateTime"
+        );
+
+        let has_modified_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/modified>"
+                && quad.object.to_string().contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_modified_quad,
+            "saved N-Quads should contain backend-modified timestamp as xsd:dateTime"
         );
     }
 

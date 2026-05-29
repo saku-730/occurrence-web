@@ -132,8 +132,8 @@
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
 - [x] UUIDを発行してN-Quadsを組み立てできる。``
-- [ ] 現在時刻をもとに、フロントからおくられたN-Quadsにcreatedを付加
-- [ ] 
+- [x] 現在時刻をもとに、フロントからおくられたN-Quadsにcreatedを付加`add_created_quad_adds_created_datetime_in_occurrence_graph`
+- [x] 現在時刻をもとに、フロントからおくられたN-Quadsにmodifiedを付加`add_modified_quad_adds_modified_datetime_in_occurrence_graph`
 
 ### repository
 
