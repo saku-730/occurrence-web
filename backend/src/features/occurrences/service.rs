@@ -869,6 +869,66 @@ mod tests {
     }
 
     #[test]
+    fn build_occurrence_nquads_keeps_valid_access_rights_values() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let cases = [
+            (
+                "public",
+                "https://bio-database.net/terms/access-rights/public",
+            ),
+            (
+                "private",
+                "https://bio-database.net/terms/access-rights/private",
+            ),
+        ];
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        for (label, access_rights_uri) in cases {
+            let frontend_nquads = format!(
+                "_:occurrence <http://purl.org/dc/terms/accessRights> <{}> <https://bio-database.net/graphs/occurrences> .\n",
+                access_rights_uri
+            );
+
+            let built = build_occurrence_nquads(
+                frontend_nquads.as_bytes(),
+                occurrence_uri,
+                create_user_id,
+            )
+            .expect("valid accessRights should be accepted");
+
+            let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+                .for_slice(&built)
+                .collect::<Result<Vec<_>, _>>()
+                .expect("built n-quads should be valid");
+
+            let access_rights_quads = parsed_quads
+                .iter()
+                .filter(|quad| {
+                    quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                access_rights_quads.len(),
+                1,
+                "valid {label} accessRights should not be duplicated"
+            );
+
+            assert_eq!(
+                access_rights_quads[0].object.to_string(),
+                format!("<{}>", access_rights_uri),
+                "valid {label} accessRights should be kept"
+            );
+        }
+    }
+
+    #[test]
     fn serialize_quads_as_nquads_outputs_named_graph_quads() {
         use oxrdfio::{RdfFormat, RdfParser};
 
