@@ -93,7 +93,7 @@
 - [x] `GET /auth/me`に正常 session cookieでユーザー情報取得``
 - [x] `GET /auth/me`に session cookieなしで送ると401`me_route_returns_unauthorized_without_session_cookie`
 - [x] ログアウト済み session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_revoked_session_cookie`
-- [ ] 期限切れ session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_expired_session_cookie`
+- [x] 期限切れ session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_expired_session_cookie`
 
 ### service
 
@@ -132,6 +132,8 @@
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
 - [x] UUIDを発行してN-Quadsを組み立てできる。``
+- [ ] 現在時刻をもとに、フロントからおくられたN-Quadsにcreatedを付加
+- [ ] 
 
 ### repository
 
