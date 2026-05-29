@@ -1,20 +1,11 @@
 use utoipa::OpenApi;
 
 use crate::features::auth::dto::{
-    CompleteRegistrationRequest,
-    CompleteRegistrationResponse,
-    RegisterRequest, 
-    RegisterResponse,
-    ErrorResponse,
-    LoginRequest,
-    LoginResponse,
-    LogoutResponse,
-    CurrentUserResponse,
+    CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse, ErrorResponse,
+    LoginRequest, LoginResponse, LogoutResponse, RegisterRequest, RegisterResponse,
 };
 
-use crate::features::occurrences::{
-    dto::CreateOccurrenceResponse,
-};
+use crate::features::occurrences::dto::CreateOccurrenceResponse;
 
 #[derive(OpenApi)]
 #[openapi(

@@ -28,7 +28,8 @@ impl AuthRepository {
         db: &PgPool,
         email: &str,
         token_hash: &str,
-    ) -> Result<(), sqlx::Error> { //有効期限は30分
+    ) -> Result<(), sqlx::Error> {
+        //有効期限は30分
         sqlx::query(
             r#"
             INSERT INTO pending_registrations (
@@ -97,7 +98,8 @@ impl AuthRepository {
         Ok(())
     }
 
-    pub async fn mark_pending_registration_completed( //本登録完了後、pending_registrationのcompleted_atに時刻をいれる。これが登録完了の印。
+    pub async fn mark_pending_registration_completed(
+        //本登録完了後、pending_registrationのcompleted_atに時刻をいれる。これが登録完了の印。
         db: &PgPool,
         token_hash: &str,
     ) -> Result<(), sqlx::Error> {
@@ -116,10 +118,7 @@ impl AuthRepository {
         Ok(())
     }
 
-    pub async fn user_exists_by_email(
-        db: &PgPool,
-        email: &str,
-    ) -> Result<bool, sqlx::Error> {
+    pub async fn user_exists_by_email(db: &PgPool, email: &str) -> Result<bool, sqlx::Error> {
         let row = sqlx::query!(
             r#"
             SELECT EXISTS(
@@ -221,7 +220,8 @@ impl AuthRepository {
         Ok(())
     }
 
-    pub async fn find_user_by_email( //既存ユーザーをメールで検索
+    pub async fn find_user_by_email(
+        //既存ユーザーをメールで検索
         db: &PgPool,
         email: &str,
     ) -> Result<Option<UserForAuth>, sqlx::Error> {
@@ -240,7 +240,8 @@ impl AuthRepository {
         Ok(row)
     }
 
-    pub async fn create_session( //ログインセッション作成。
+    pub async fn create_session(
+        //ログインセッション作成。
         db: &PgPool,
         user_id: Uuid,
         session_token_hash: &str,
@@ -266,8 +267,9 @@ impl AuthRepository {
 
         Ok(())
     }
-    
-    pub async fn revoke_session_by_token_hash( //ログアウト時にセッションを無効化
+
+    pub async fn revoke_session_by_token_hash(
+        //ログアウト時にセッションを無効化
         db: &PgPool,
         session_token_hash: &str,
     ) -> Result<bool, sqlx::Error> {
@@ -287,7 +289,8 @@ impl AuthRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    pub async fn find_user_by_session_token_hash(//ログイン中のユーザーを確認
+    pub async fn find_user_by_session_token_hash(
+        //ログイン中のユーザーを確認
         db: &PgPool,
         session_token_hash: &str,
     ) -> Result<Option<UserForSession>, sqlx::Error> {
@@ -314,12 +317,10 @@ impl AuthRepository {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::AuthRepository;
-    use sqlx::{postgres::PgPoolOptions, PgPool};
+    use sqlx::{PgPool, postgres::PgPoolOptions};
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -356,8 +357,7 @@ mod tests {
 
         delete_pending_registration_by_token_hash(&db, token_hash).await;
 
-        let result =
-            AuthRepository::create_pending_registration(&db, email, token_hash).await;
+        let result = AuthRepository::create_pending_registration(&db, email, token_hash).await;
 
         assert!(result.is_ok());
 

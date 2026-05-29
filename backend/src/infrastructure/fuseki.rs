@@ -1,8 +1,5 @@
 use crate::config::FusekiConfig;
-use crate::features::occurrences::service::{
-    OccurrenceRdfStore,
-    OccurrenceServiceError,
-};
+use crate::features::occurrences::service::{OccurrenceRdfStore, OccurrenceServiceError};
 
 #[derive(Clone)]
 pub struct FusekiClient {
@@ -24,10 +21,7 @@ impl FusekiClient {
         }
     }
 
-    pub async fn post_nquads(
-        &self,
-        nquads: Vec<u8>,
-    ) -> Result<(), FusekiClientError> {
+    pub async fn post_nquads(&self, nquads: Vec<u8>) -> Result<(), FusekiClientError> {
         let response = self
             .http
             .post(self.config.data_url())
@@ -42,9 +36,7 @@ impl FusekiClient {
             .map_err(FusekiClientError::RequestFailed)?;
 
         if !response.status().is_success() {
-            return Err(FusekiClientError::UnexpectedStatus(
-                response.status(),
-            ));
+            return Err(FusekiClientError::UnexpectedStatus(response.status()));
         }
 
         Ok(())
@@ -53,10 +45,7 @@ impl FusekiClient {
 
 #[async_trait::async_trait]
 impl OccurrenceRdfStore for FusekiClient {
-    async fn save_nquads(
-        &self,
-        nquads: Vec<u8>,
-    ) -> Result<(), OccurrenceServiceError> {
+    async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
         self.post_nquads(nquads)
             .await
             .map_err(|_| OccurrenceServiceError::StoreFailed)
@@ -84,23 +73,14 @@ impl OccurrenceRdfStore for FusekiClient {
             "#
         );
 
-        let sparql_url = format!(
-            "{}/sparql",
-            self.config.base_url.trim_end_matches('/')
-        );
+        let sparql_url = format!("{}/sparql", self.config.base_url.trim_end_matches('/'));
 
         let response = self
             .http
             .post(sparql_url)
             .basic_auth(&self.config.user, Some(&self.config.password))
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/sparql-query",
-            )
-            .header(
-                reqwest::header::ACCEPT,
-                "application/n-triples",
-            )
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/n-triples")
             .body(query)
             .send()
             .await
@@ -128,8 +108,8 @@ impl OccurrenceRdfStore for FusekiClient {
             return Ok(None);
         }
 
-        let graph_name = NamedNode::new(graph_uri)
-            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        let graph_name =
+            NamedNode::new(graph_uri).map_err(|_| OccurrenceServiceError::StoreFailed)?;
 
         let quads = triples
             .into_iter()
@@ -145,8 +125,7 @@ impl OccurrenceRdfStore for FusekiClient {
 
         let mut nquads = Vec::new();
 
-        let mut serializer = RdfSerializer::from_format(RdfFormat::NQuads)
-            .for_writer(&mut nquads);
+        let mut serializer = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(&mut nquads);
 
         for quad in quads {
             serializer
@@ -173,8 +152,7 @@ mod tests {
     async fn post_nquads_posts_to_running_fuseki() {
         dotenvy::dotenv().ok();
 
-        let config = Config::from_env()
-            .expect("config should be loaded from .env");
+        let config = Config::from_env().expect("config should be loaded from .env");
 
         let client = FusekiClient::new(config.fuseki);
 
@@ -199,18 +177,14 @@ mod tests {
         let config = FusekiConfig {
             base_url: std::env::var("FUSEKI_BASE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
-            user: std::env::var("FUSEKI_USER")
-                .unwrap_or_else(|_| "occurrence_backend".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
             password: std::env::var("FUSEKI_PASSWORD")
                 .unwrap_or_else(|_| "change_me_backend_password".to_string()),
         };
 
         let client = FusekiClient::new(config);
 
-        let occurrence_uri = format!(
-            "https://bio-database.net/occurrences/{}",
-            Uuid::new_v4()
-        );
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", Uuid::new_v4());
 
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let predicate_uri = "https://example.org/vocab/scientificName";
@@ -219,10 +193,7 @@ mod tests {
         let nquads = format!(
             r#"<{}> <{}> "{}" <{}> .
 "#,
-            occurrence_uri,
-            predicate_uri,
-            scientific_name,
-            graph_uri
+            occurrence_uri, predicate_uri, scientific_name, graph_uri
         );
 
         client
@@ -238,23 +209,14 @@ mod tests {
                 }}
             }}
             "#,
-            graph_uri,
-            occurrence_uri,
-            predicate_uri,
-            scientific_name
+            graph_uri, occurrence_uri, predicate_uri, scientific_name
         );
 
         let response = reqwest::Client::new()
             .post("http://127.0.0.1:3033/occurrence/sparql")
             .basic_auth("occurrence_backend", Some("change_me_backend_password"))
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/sparql-query",
-            )
-            .header(
-                reqwest::header::ACCEPT,
-                "application/sparql-results+json",
-            )
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/sparql-results+json")
             .body(query)
             .send()
             .await
@@ -285,8 +247,7 @@ mod tests {
         let config = FusekiConfig {
             base_url: std::env::var("FUSEKI_BASE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
-            user: std::env::var("FUSEKI_USER")
-                .unwrap_or_else(|_| "occurrence_backend".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
             password: std::env::var("FUSEKI_PASSWORD")
                 .unwrap_or_else(|_| "change_me_backend_password".to_string()),
         };
@@ -294,10 +255,7 @@ mod tests {
         let client = FusekiClient::new(config);
 
         let occurrence_id = uuid::Uuid::new_v4();
-        let occurrence_uri = format!(
-            "https://bio-database.net/occurrences/{}",
-            occurrence_id
-        );
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
 
         let other_occurrence_id = uuid::Uuid::new_v4();
         let other_occurrence_uri = format!(
@@ -309,10 +267,7 @@ mod tests {
         let scientific_name_predicate = "https://example.org/vocab/scientificName";
         let creator_predicate = "http://purl.org/dc/terms/creator";
 
-        let scientific_name = format!(
-            "Lumbricus terrestris {}",
-            uuid::Uuid::new_v4()
-        );
+        let scientific_name = format!("Lumbricus terrestris {}", uuid::Uuid::new_v4());
 
         let nquads = format!(
             r#"<{}> <{}> "{}" <{}> .
@@ -359,23 +314,23 @@ mod tests {
         let expected_graph = format!("<{}>", graph_uri);
 
         assert!(
-            parsed_quads.iter().all(|quad| {
-                quad.subject.to_string() == expected_subject
-            }),
+            parsed_quads
+                .iter()
+                .all(|quad| { quad.subject.to_string() == expected_subject }),
             "all returned quads should have the requested occurrence URI as subject"
         );
 
         assert!(
-            parsed_quads.iter().all(|quad| {
-                quad.graph_name.to_string() == expected_graph
-            }),
+            parsed_quads
+                .iter()
+                .all(|quad| { quad.graph_name.to_string() == expected_graph }),
             "all returned quads should be in the occurrence graph"
         );
 
         assert!(
-            parsed_quads.iter().all(|quad| {
-                quad.subject.to_string() != unexpected_subject
-            }),
+            parsed_quads
+                .iter()
+                .all(|quad| { quad.subject.to_string() != unexpected_subject }),
             "quads from other occurrences should not be returned"
         );
 
@@ -399,5 +354,4 @@ mod tests {
             "fetched N-Quads should contain the saved creator"
         );
     }
-
 }

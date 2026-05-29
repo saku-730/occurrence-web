@@ -1,8 +1,6 @@
 use sqlx::postgres::PgPoolOptions;
 
-use backend::{
-    app::build_app, config::Config, infrastructure::fuseki, state::AppState
-};
+use backend::{app::build_app, config::Config, infrastructure::fuseki, state::AppState};
 use std::sync::Arc;
 
 use backend::infrastructure::fuseki::FusekiClient;
@@ -14,21 +12,21 @@ async fn main() {
     let posgre = PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.posgre.url)
-        .await.expect("failed to connect postgresql server");
+        .await
+        .expect("failed to connect postgresql server");
 
     let bind_addr = config.app.bind_addr();
 
-    let occurrence_rdf_store = Arc::new( //for fuseki
-        FusekiClient::new(config.fuseki.clone())
+    let occurrence_rdf_store = Arc::new(
+        //for fuseki
+        FusekiClient::new(config.fuseki.clone()),
     );
 
-    let state = AppState::new(config, posgre,occurrence_rdf_store);
+    let state = AppState::new(config, posgre, occurrence_rdf_store);
     let app = build_app(state);
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
-    println!("listening on http://{}",bind_addr);
+    println!("listening on http://{}", bind_addr);
     axum::serve(listener, app).await.unwrap();
 }

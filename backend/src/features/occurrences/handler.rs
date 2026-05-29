@@ -1,14 +1,12 @@
 use axum::{
+    Json,
     body::Bytes,
-    extract::{State,Path},
+    extract::{Path, State},
     http::{
-        header::{CONTENT_TYPE,COOKIE,},
-        HeaderMap,
-        StatusCode,
-        header,
+        HeaderMap, StatusCode, header,
+        header::{CONTENT_TYPE, COOKIE},
     },
     response::{IntoResponse, Response},
-    Json,
 };
 use uuid::Uuid;
 
@@ -23,27 +21,24 @@ use crate::{
 use super::{
     dto::CreateOccurrenceResponse,
     service::{
-        CreateOccurrenceInput,
-        OccurrenceService,
-        OccurrenceServiceError,
-        GetOccurrenceInput,
+        CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
     },
 };
 
 #[derive(Debug)]
 pub enum OccurrenceHandlerError {
-    InvalidSession, //セッションを持っていないなど
-    Database(sqlx::Error),   //posgre側のエラー トークン認証など
-    NotImplemented, //
-    UnsupportedMediaType, //httpリクエストのbodyがtext/turtle以外など
-    EmptyBody, //httpリクエストのbodyが空
-    InternalServerError, //サーバー側の処理エラーなど
-    InvalidRdf, //フロントから送信されたN-Quadsが壊れている
-    RdfStoreError, //
-    ForbiddenRdfPredicate,//禁止されている述語を含むRDFを拒否
-    ForbiddenRdfGraph,//グラフ名が間違っている場合拒否
-    EmptyRdf,//空のデータを拒否
-    NotFound//
+    InvalidSession,        //セッションを持っていないなど
+    Database(sqlx::Error), //posgre側のエラー トークン認証など
+    NotImplemented,        //
+    UnsupportedMediaType,  //httpリクエストのbodyがtext/turtle以外など
+    EmptyBody,             //httpリクエストのbodyが空
+    InternalServerError,   //サーバー側の処理エラーなど
+    InvalidRdf,            //フロントから送信されたN-Quadsが壊れている
+    RdfStoreError,         //
+    ForbiddenRdfPredicate, //禁止されている述語を含むRDFを拒否
+    ForbiddenRdfGraph,     //グラフ名が間違っている場合拒否
+    EmptyRdf,              //空のデータを拒否
+    NotFound,              //
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -85,7 +80,7 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::UNAUTHORIZED, Json(body)).into_response()
             }
-            
+
             OccurrenceHandlerError::Database(_) => {
                 let body = ErrorResponse {
                     error: "internal_server_error".to_string(),
@@ -150,16 +145,14 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
-            Self::InvalidRdf => {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_rdf".to_string(),
-                        message: "Invalid RDF body".to_string(),
-                    }),
-                )
-                    .into_response()
-            }
+            Self::InvalidRdf => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_rdf".to_string(),
+                    message: "Invalid RDF body".to_string(),
+                }),
+            )
+                .into_response(),
             OccurrenceHandlerError::EmptyRdf => {
                 let body = ErrorResponse {
                     error: "empty_rdf".to_string(),
@@ -230,11 +223,7 @@ pub async fn create_occurrence(
 ) -> Result<(StatusCode, Json<CreateOccurrenceResponse>), OccurrenceHandlerError> {
     let session_token = extract_session_token(&headers)?;
 
-    let current_user = AuthService::current_user(
-        &state.posgre,
-        session_token,
-    )
-    .await?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
     let content_type = ensure_supported_rdf_content_type(&headers)?;
     ensure_non_empty_body(&body)?;
@@ -245,11 +234,8 @@ pub async fn create_occurrence(
         rdf_body: body.to_vec(),
     };
 
-    let output = OccurrenceService::create_occurrence(
-        input,
-        state.occurrence_rdf_store.as_ref(),
-    )
-    .await?;
+    let output =
+        OccurrenceService::create_occurrence(input, state.occurrence_rdf_store.as_ref()).await?;
 
     let response = CreateOccurrenceResponse {
         occurrence_id: output.occurrence_id.to_string(),
@@ -263,15 +249,10 @@ pub async fn get_occurrence(
     State(state): State<AppState>,
     Path(occurrence_id): Path<Uuid>,
 ) -> Result<Response, OccurrenceHandlerError> {
-    let input = GetOccurrenceInput {
-        occurrence_id,
-    };
+    let input = GetOccurrenceInput { occurrence_id };
 
-    let output = OccurrenceService::get_occurrence(
-        input,
-        state.occurrence_rdf_store.as_ref(),
-    )
-    .await?;
+    let output =
+        OccurrenceService::get_occurrence(input, state.occurrence_rdf_store.as_ref()).await?;
 
     let Some(output) = output else {
         return Err(OccurrenceHandlerError::NotFound);
@@ -285,14 +266,16 @@ pub async fn get_occurrence(
         .into_response())
 }
 
-fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> { //トークン取り出し ヘルパー
+fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> {
+    //トークン取り出し ヘルパー
     let cookie_header = headers
         .get(COOKIE)
         .ok_or(OccurrenceHandlerError::InvalidSession)?
         .to_str()
         .map_err(|_| OccurrenceHandlerError::InvalidSession)?;
 
-    for cookie in cookie_header.split(';') { //session=asdfasdf; user=asdfasdf;...って感じのヘッダー
+    for cookie in cookie_header.split(';') {
+        //session=asdfasdf; user=asdfasdf;...って感じのヘッダー
         let cookie = cookie.trim(); //cookie整形
 
         if let Some(session_token) = cookie.strip_prefix("session=") {
@@ -307,7 +290,8 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandle
     Err(OccurrenceHandlerError::InvalidSession)
 }
 
-fn ensure_supported_rdf_content_type( //content-typeを確認 text/turtle以外はエラー
+fn ensure_supported_rdf_content_type(
+    //content-typeを確認 text/turtle以外はエラー
     headers: &HeaderMap,
 ) -> Result<String, OccurrenceHandlerError> {
     let content_type = headers

@@ -1,35 +1,23 @@
 use axum::{
-    routing::{get, post}, 
-    Router
+    Router,
+    routing::{get, post},
 };
 
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-
 use crate::{
     features::{
-        auth::handler::{
-            pre_register,
-            complete_registration,
-            login,
-            logout,
-            me,
-        },
-        occurrences::handler::{
-            create_occurrence,
-            get_occurrence,
-        },
+        auth::handler::{complete_registration, login, logout, me, pre_register},
+        occurrences::handler::{create_occurrence, get_occurrence},
     },
+    openapi::ApiDoc,
     state::AppState,
-    openapi::ApiDoc
 };
-
 
 pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
-        
         .route("/health", get(health))
         .route("/info", get(info))
         //auth
@@ -41,11 +29,7 @@ pub fn build_app(state: AppState) -> Router {
         //occurrence
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/{occurrence_id}", get(get_occurrence))
-        .merge(
-            SwaggerUi::new("/swagger-ui")
-                .url("/openapi.json", ApiDoc::openapi()),
-        )
-
+        .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }
 
@@ -63,43 +47,35 @@ async fn info(State(state): State<AppState>) -> String {
     state.config.app.app_base_url.clone()
 }
 
-
-#[cfg(test)]//test section
+#[cfg(test)] //test section
 mod tests {
     use super::build_app;
-    use crate::config::{AppConfig, Config, PosgreConfig, SmtpConfig, FusekiConfig};
-    use crate::state::AppState;
+    use crate::config::{AppConfig, Config, FusekiConfig, PosgreConfig, SmtpConfig};
     use crate::features::auth::repository::AuthRepository;
-    use crate::features::auth::service::{
-        hash_password,
-        hash_token,
-        AuthService
-    };
+    use crate::features::auth::service::{AuthService, hash_password, hash_token};
     use crate::infrastructure::fuseki::FusekiClient;
+    use crate::state::AppState;
 
+    use axum::http::header::{CONTENT_TYPE, COOKIE, SET_COOKIE};
     use axum::{
-        body::{to_bytes, Body},
-        http::{Request, StatusCode,Method,header},
+        body::{Body, to_bytes},
+        http::{Method, Request, StatusCode, header},
     };
-    use axum::http::header::{CONTENT_TYPE, SET_COOKIE, COOKIE};
-    use sqlx::{postgres::PgPoolOptions, PgPool};
-    use tower::util::ServiceExt; // oneshot
     use sha2::Digest;
+    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use tower::util::ServiceExt; // oneshot
 
-    use crate::features::occurrences::service::{
-        OccurrenceRdfStore,
-        OccurrenceServiceError,
-    };
-    use std::sync::{Arc, Mutex};
-    use std::collections::HashMap;
+    use crate::features::occurrences::service::{OccurrenceRdfStore, OccurrenceServiceError};
     use oxrdfio::{RdfFormat, RdfParser};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for app tests");
-            
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for app tests");
+
         let config = Config {
             app: AppConfig {
                 host: "127.0.0.1".to_string(),
@@ -110,7 +86,7 @@ mod tests {
                 url: database_url.clone(),
             },
 
-            smtp: SmtpConfig{
+            smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
                 username: "".to_string(),
@@ -119,21 +95,21 @@ mod tests {
                 from: "no-replay@example.com".to_string(),
             },
 
-            fuseki: FusekiConfig{
+            fuseki: FusekiConfig {
                 base_url: std::env::var("FUSEKI_BASE_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
                 user: std::env::var("FUSEKI_USER")
                     .unwrap_or_else(|_| "occurrence_backend".to_string()),
                 password: std::env::var("FUSEKI_PASSWORD")
-                    .unwrap_or_else(|_| "change_me_backend_password".to_string())
-            }
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
         };
 
         let posgre = PgPoolOptions::new()
-        .connect_lazy(&config.posgre.url)
-        .expect("failed to create lazy database pool");
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
 
-        AppState::new(config,posgre,Arc::new(NoopOccurrenceRdfStore),)
+        AppState::new(config, posgre, Arc::new(NoopOccurrenceRdfStore))
     }
 
     #[derive(Clone, Default)]
@@ -141,10 +117,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl OccurrenceRdfStore for NoopOccurrenceRdfStore {
-        async fn save_nquads(
-            &self,
-            _nquads: Vec<u8>,
-        ) -> Result<(), OccurrenceServiceError> {
+        async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
             Ok(())
         }
 
@@ -161,8 +134,8 @@ mod tests {
     ) -> AppState {
         dotenvy::dotenv().ok();
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for app tests");
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for app tests");
 
         let config = Config {
             app: AppConfig {
@@ -195,17 +168,13 @@ mod tests {
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
-        AppState::new(
-            config,
-            posgre,
-            occurrence_rdf_store,
-        )
+        AppState::new(config, posgre, occurrence_rdf_store)
     }
 
     #[derive(Clone, Default)]
     struct FakeOccurrenceRdfStore {
-    saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
-    occurrence_nquads_by_uri: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
+        occurrence_nquads_by_uri: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     }
 
     impl FakeOccurrenceRdfStore {
@@ -223,10 +192,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
-        async fn save_nquads(
-            &self,
-            nquads: Vec<u8>,
-        ) -> Result<(), OccurrenceServiceError> {
+        async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
             self.saved_nquads
                 .lock()
                 .expect("mutex should not be poisoned")
@@ -248,19 +214,17 @@ mod tests {
         }
     }
 
-
-
     async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
-    sqlx::query(
-        r#"
+        sqlx::query(
+            r#"
         DELETE FROM pending_registrations
         WHERE email = $1
         "#,
-    )
-    .bind(email)
-    .execute(db)
-    .await
-    .expect("failed to delete pending registration");
+        )
+        .bind(email)
+        .execute(db)
+        .await
+        .expect("failed to delete pending registration");
     }
 
     async fn count_pending_registration_by_email(db: &PgPool, email: &str) -> i64 {
@@ -309,10 +273,7 @@ mod tests {
             .await
             .expect("failed to parse Mailpit messages response");
 
-        body["messages"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        body["messages"].as_array().cloned().unwrap_or_default()
     }
 
     async fn fetch_mailpit_message(message_id: &str) -> serde_json::Value {
@@ -341,10 +302,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl OccurrenceRdfStore for FailingOccurrenceRdfStore {
-        async fn save_nquads(
-            &self,
-            nquads: Vec<u8>,
-        ) -> Result<(), OccurrenceServiceError> {
+        async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
             self.attempted_nquads
                 .lock()
                 .expect("mutex should not be poisoned")
@@ -366,12 +324,7 @@ mod tests {
         let app = build_app(test_state());
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -420,7 +373,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&body[..], br#"{"message":"temporary registration accepted","email":"test@example.com"}"#);
+        assert_eq!(
+            &body[..],
+            br#"{"message":"temporary registration accepted","email":"test@example.com"}"#
+        );
     }
 
     #[tokio::test]
@@ -440,7 +396,7 @@ mod tests {
 
         assert!(response.status().is_client_error());
     }
-    
+
     #[tokio::test]
     async fn register_route_returns_created_json_for_valid_email() {
         let app = build_app(test_state());
@@ -518,7 +474,7 @@ mod tests {
         assert!(json["components"]["schemas"]["RegisterResponse"].is_object());
         assert!(json["components"]["schemas"]["ErrorResponse"].is_object());
     }
-    
+
     #[tokio::test]
     async fn openapi_json_includes_complete_registration_response_statuses() {
         let app = build_app(test_state());
@@ -536,9 +492,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body = String::from_utf8(body.to_vec()).unwrap();
 
@@ -577,7 +531,7 @@ mod tests {
             "OpenAPI JSON should contain CompleteRegistrationResponse schema"
         );
     }
-        
+
     #[tokio::test]
     async fn pre_register_route_creates_pending_registration() {
         let state = test_state();
@@ -608,9 +562,6 @@ mod tests {
 
         delete_pending_registration_by_email(&db, &email).await;
     }
-
-    
-    
 
     #[tokio::test]
     async fn pre_register_route_rejects_invalid_email_and_does_not_create_pending_registration() {
@@ -712,15 +663,17 @@ mod tests {
 
         let message = mailpit_messages
             .iter()
-            .find(|message| message["To"] //宛先で特定のメール探索
-                .as_array()
-                .is_some_and(|to| {
-                    to.iter().any(|recipient| {
-                        recipient["Address"]
-                            .as_str()
-                            .is_some_and(|address| address == email)
+            .find(|message| {
+                message["To"] //宛先で特定のメール探索
+                    .as_array()
+                    .is_some_and(|to| {
+                        to.iter().any(|recipient| {
+                            recipient["Address"]
+                                .as_str()
+                                .is_some_and(|address| address == email)
+                        })
                     })
-                }))
+            })
             .expect("registration completion email was not sent");
 
         let subject = message["Subject"].as_str().unwrap_or("");
@@ -774,13 +727,9 @@ mod tests {
         let token_hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
         let email = format!("route-complete-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         let body = serde_json::json!({
             "token": token,
@@ -830,18 +779,16 @@ mod tests {
         let token_hash = hex::encode(sha2::Sha256::digest(token.as_bytes()));
         let email = format!("route-duplicate-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         AuthRepository::create_user(
             &db,
             &email,
-            "existing_user", "$argon2id$dummy-existing-password-hash",)
+            "existing_user",
+            "$argon2id$dummy-existing-password-hash",
+        )
         .await
         .expect("existing user should be created");
 
@@ -865,12 +812,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "email_already_registered");
         assert_eq!(body["message"], "Email already registered");
@@ -914,17 +859,11 @@ mod tests {
         let email = format!("route-login-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
         let body = serde_json::json!({
             "email": email,
@@ -945,12 +884,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["message"], "login successful");
         assert_eq!(body["email"], email);
@@ -981,17 +918,15 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "invalid_credentials");
         assert_eq!(body["message"], "Invalid credential");
     }
-    
+
     #[tokio::test]
     async fn login_route_sets_session_cookie_for_registered_user() {
         let state = test_state();
@@ -1001,17 +936,11 @@ mod tests {
         let email = format!("route-login-cookie-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
         let body = serde_json::json!({
             "email": email,
@@ -1077,12 +1006,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "invalid_session");
         assert_eq!(body["message"], "Invalid session");
@@ -1097,25 +1024,15 @@ mod tests {
         let email = format!("route-logout-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let login_output = AuthService::login(
-            &db,
-            email,
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email, password.to_string())
+            .await
+            .expect("login should succeed");
 
         let session_token = login_output.session_token.clone();
 
@@ -1174,12 +1091,10 @@ mod tests {
             "logout should mark session as revoked"
         );
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["message"], "logout successful");
     }
@@ -1202,12 +1117,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "invalid_session");
         assert_eq!(body["message"], "Invalid session");
@@ -1222,15 +1135,11 @@ mod tests {
         let email = format!("route-me-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        ) .await .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
         let user = sqlx::query!(
             r#"
             SELECT id
@@ -1243,13 +1152,9 @@ mod tests {
         .await
         .expect("user should exist");
 
-        let login_output = AuthService::login(
-            &db,
-            email.clone(),
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email.clone(), password.to_string())
+            .await
+            .expect("login should succeed");
 
         let response = app
             .oneshot(
@@ -1265,12 +1170,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["user_id"], user.id.to_string());
         assert_eq!(body["email"], email);
@@ -1287,32 +1190,19 @@ mod tests {
         let email = format!("route-me-revoked-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let login_output = AuthService::login(
-            &db,
-            email,
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email, password.to_string())
+            .await
+            .expect("login should succeed");
 
-        AuthService::logout(
-            &db,
-            login_output.session_token.clone(),
-        )
-        .await
-        .expect("logout should succeed");
+        AuthService::logout(&db, login_output.session_token.clone())
+            .await
+            .expect("logout should succeed");
 
         let response = app
             .oneshot(
@@ -1328,12 +1218,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "invalid_session");
         assert_eq!(body["message"], "Invalid session");
@@ -1348,25 +1236,15 @@ mod tests {
         let email = format!("route-me-expired-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
 
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let login_output = AuthService::login(
-            &db,
-            email,
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email, password.to_string())
+            .await
+            .expect("login should succeed");
 
         let session_token_hash = hash_token(&login_output.session_token);
 
@@ -1396,12 +1274,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
-        let body: serde_json::Value = serde_json::from_slice(&body)
-            .expect("response body should be JSON");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
 
         assert_eq!(body["error"], "invalid_session");
         assert_eq!(body["message"], "Invalid session");
@@ -1430,9 +1306,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1465,9 +1339,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1483,8 +1355,7 @@ mod tests {
 
         let email = format!("occurrence-user-{}@example.com", uuid::Uuid::new_v4());
         let user_name = "occurrence-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -1550,8 +1421,7 @@ mod tests {
 
         let email = format!("occurrence-user-{}@example.com", uuid::Uuid::new_v4());
         let user_name = "occurrence-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -1603,9 +1473,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1618,17 +1486,14 @@ mod tests {
             .as_str()
             .expect("occurrence_uri should be string");
 
-        assert!(
-            occurrence_uri.starts_with("https://bio-database.net/occurrences/")
-        );
+        assert!(occurrence_uri.starts_with("https://bio-database.net/occurrences/"));
 
         assert!(
             occurrence_uri.ends_with(occurrence_id),
             "occurrence_uri should contain occurrence_id"
         );
 
-        uuid::Uuid::parse_str(occurrence_id)
-            .expect("occurrence_id should be valid UUID");
+        uuid::Uuid::parse_str(occurrence_id).expect("occurrence_id should be valid UUID");
     }
 
     #[tokio::test]
@@ -1640,8 +1505,7 @@ mod tests {
 
         let email = format!("occurrence-store-user-{}@example.com", uuid::Uuid::new_v4());
         let user_name = "occurrence-store-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -1693,9 +1557,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1724,16 +1586,16 @@ mod tests {
 
         assert_eq!(
             parsed_quads.len(),
-            2,
-            "saved N-Quads should contain frontend quad plus backend creator quad"
+            3,
+            "saved N-Quads should contain frontend quad plus backend creator and created quads"
         );
 
         let expected_subject = format!("<{}>", occurrence_uri);
 
         assert!(
-            parsed_quads.iter().all(|quad| {
-                quad.subject.to_string() == expected_subject
-            }),
+            parsed_quads
+                .iter()
+                .all(|quad| { quad.subject.to_string() == expected_subject }),
             "all saved quads should use backend-issued occurrence URI as subject"
         );
 
@@ -1748,8 +1610,7 @@ mod tests {
             "saved N-Quads should contain the frontend occurrence data"
         );
 
-        let expected_creator_object =
-            format!("<https://bio-database.net/users/{}>", user_id);
+        let expected_creator_object = format!("<https://bio-database.net/users/{}>", user_id);
 
         let has_creator_quad = parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
@@ -1761,15 +1622,24 @@ mod tests {
             has_creator_quad,
             "saved N-Quads should contain backend-confirmed creator user URI"
         );
+
+        let has_created_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/created>"
+                && quad.object.to_string().contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_created_quad,
+            "saved N-Quads should contain backend-created timestamp as xsd:dateTime"
+        );
     }
 
     #[tokio::test]
     async fn create_occurrence_route_with_invalid_nquads_returns_bad_request_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let db = state.posgre.clone();
 
@@ -1778,8 +1648,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-invalid-rdf-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -1831,9 +1700,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1857,9 +1724,7 @@ mod tests {
     async fn create_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
         let store = FailingOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let db = state.posgre.clone();
 
@@ -1868,8 +1733,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-rdf-store-fail-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -1921,9 +1785,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -1947,9 +1809,7 @@ mod tests {
     async fn create_occurrence_route_rejects_frontend_creator_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let db = state.posgre.clone();
 
@@ -1958,8 +1818,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-reject-creator-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -2012,9 +1871,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -2041,9 +1898,7 @@ mod tests {
     async fn create_occurrence_route_rejects_non_occurrence_graph_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let db = state.posgre.clone();
 
@@ -2052,8 +1907,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-wrong-graph-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -2105,9 +1959,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -2134,9 +1986,7 @@ mod tests {
     async fn create_occurrence_route_rejects_empty_rdf_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let db = state.posgre.clone();
 
@@ -2145,8 +1995,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-empty-rdf-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -2199,9 +2048,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -2217,11 +2064,7 @@ mod tests {
             .lock()
             .expect("mutex should not be poisoned");
 
-        assert_eq!(
-            saved.len(),
-            0,
-            "empty RDF should not be saved"
-        );
+        assert_eq!(saved.len(), 0, "empty RDF should not be saved");
     }
 
     #[tokio::test]
@@ -2229,8 +2072,8 @@ mod tests {
     async fn create_occurrence_route_saves_data_to_real_fuseki() {
         dotenvy::dotenv().ok();
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration test");
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration test");
 
         let config = Config {
             app: AppConfig {
@@ -2265,11 +2108,7 @@ mod tests {
 
         let fuseki_client = FusekiClient::new(config.fuseki.clone());
 
-        let state = AppState::new(
-            config.clone(),
-            posgre,
-            Arc::new(fuseki_client),
-        );
+        let state = AppState::new(config.clone(), posgre, Arc::new(fuseki_client));
 
         let db = state.posgre.clone();
 
@@ -2278,8 +2117,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let user_name = "occurrence-real-fuseki-user";
-        let password_hash = hash_password("password123")
-            .expect("password should be hashed");
+        let password_hash = hash_password("password123").expect("password should be hashed");
 
         let user_id = sqlx::query_scalar!(
             r#"
@@ -2312,10 +2150,7 @@ mod tests {
 
         let app = build_app(state);
 
-        let scientific_name = format!(
-            "Lumbricus terrestris {}",
-            uuid::Uuid::new_v4()
-        );
+        let scientific_name = format!("Lumbricus terrestris {}", uuid::Uuid::new_v4());
 
         let frontend_nquads = format!(
             r#"
@@ -2339,9 +2174,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -2373,22 +2206,13 @@ mod tests {
             expected_user_uri
         );
 
-        let sparql_url = format!(
-            "{}/sparql",
-            config.fuseki.base_url.trim_end_matches('/')
-        );
+        let sparql_url = format!("{}/sparql", config.fuseki.base_url.trim_end_matches('/'));
 
         let ask_response = reqwest::Client::new()
             .post(sparql_url)
             .basic_auth(&config.fuseki.user, Some(&config.fuseki.password))
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/sparql-query",
-            )
-            .header(
-                reqwest::header::ACCEPT,
-                "application/sparql-results+json",
-            )
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/sparql-results+json")
             .body(ask_query)
             .send()
             .await
@@ -2416,27 +2240,19 @@ mod tests {
         let store = FakeOccurrenceRdfStore::default();
 
         let occurrence_id = uuid::Uuid::new_v4();
-        let occurrence_uri = format!(
-            "https://bio-database.net/occurrences/{}",
-            occurrence_id
-        );
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
 
         let expected_nquads = format!(
             r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
     <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/test-user> <https://bio-database.net/graphs/occurrences> .
     "#,
-            occurrence_uri,
-            occurrence_uri,
+            occurrence_uri, occurrence_uri,
         );
 
-        store.insert_occurrence_nquads(
-            occurrence_uri.clone(),
-            expected_nquads.clone().into_bytes(),
-        );
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), expected_nquads.clone().into_bytes());
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let app = build_app(state);
 
@@ -2465,9 +2281,7 @@ mod tests {
             "GET /occurrences/{{occurrence_id}} should return application/n-quads"
         );
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         assert_eq!(
             body.as_ref(),
@@ -2480,9 +2294,7 @@ mod tests {
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let app = build_app(state);
 
@@ -2501,9 +2313,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");
@@ -2516,9 +2326,7 @@ mod tests {
     async fn get_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
         let store = FailingOccurrenceRdfStore::default();
 
-        let state = test_state_with_occurrence_rdf_store(
-            Arc::new(store.clone()),
-        );
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
 
         let app = build_app(state);
 
@@ -2537,9 +2345,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let body_json: serde_json::Value =
             serde_json::from_slice(&body).expect("response body should be JSON");

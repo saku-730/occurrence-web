@@ -5,7 +5,7 @@ use std::fmt;
 pub struct Config {
     pub app: AppConfig,
     pub posgre: PosgreConfig,
-    pub smtp: SmtpConfig, //メール関係
+    pub smtp: SmtpConfig,     //メール関係
     pub fuseki: FusekiConfig, //Fuseki関係
 }
 
@@ -61,10 +61,7 @@ impl FusekiConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     MissingVar(&'static str),
-    InvalidVar {
-        key: &'static str,
-        value: String,
-    },
+    InvalidVar { key: &'static str, value: String },
 }
 
 impl fmt::Display for ConfigError {
@@ -86,13 +83,14 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let _ = dotenvy::dotenv(); //.envから環境変数へ
 
-        let app = AppConfig { //アプリの基本情報
+        let app = AppConfig {
+            //アプリの基本情報
             host: get_env_or("APP_HOST", "127.0.0.1"),
             port: parse_u16_env_or("APP_PORT", 3000)?,
             app_base_url: get_env_or("APP_BASE_URL", "http://127.0.0.1:3000"),
         };
 
-        let posgre = PosgreConfig{
+        let posgre = PosgreConfig {
             url: get_required_env("DATABASE_URL")?,
         };
 
@@ -104,14 +102,19 @@ impl Config {
             tls: get_env_or("SMTP_TLS", "none"),
             from: get_env_or("MAIL_FROM", "no-reply@example.com"),
         };
-        
+
         let fuseki = FusekiConfig {
             base_url: get_required_env("FUSEKI_BASE_URL")?,
             user: get_required_env("FUSEKI_USER")?,
             password: get_required_env("FUSEKI_PASSWORD")?,
         };
 
-        Ok(Self { app, posgre, smtp, fuseki })
+        Ok(Self {
+            app,
+            posgre,
+            smtp,
+            fuseki,
+        })
     }
 }
 
@@ -129,15 +132,11 @@ fn get_required_env(key: &'static str) -> Result<String, ConfigError> {
     }
 }
 
-
 fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError> {
     match env::var(key) {
-        Ok(value) if !value.trim().is_empty() => {
-            value.parse::<u16>().map_err(|_| ConfigError::InvalidVar {
-                key,
-                value,
-            })
-        }
+        Ok(value) if !value.trim().is_empty() => value
+            .parse::<u16>()
+            .map_err(|_| ConfigError::InvalidVar { key, value }),
         _ => Ok(default),
     }
 }

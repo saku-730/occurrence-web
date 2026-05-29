@@ -1,44 +1,30 @@
+use axum::http::{
+    HeaderMap, HeaderValue, StatusCode,
+    header::{COOKIE, SET_COOKIE},
+};
 use axum::{
-    response::{
-        IntoResponse,
-        Response,
-    },
     Json,
     extract::State,
-};
-use axum::http::{
-    header::{SET_COOKIE,COOKIE},
-    HeaderMap,
-    HeaderValue,
-    StatusCode,
+    response::{IntoResponse, Response},
 };
 
 use super::{
     dto::{
-    RegisterRequest,
-    RegisterResponse,
-    ErrorResponse,
-    CompleteRegistrationRequest,
-    CompleteRegistrationResponse,
-    LoginRequest,
-    LoginResponse,
-    LogoutResponse,
-    CurrentUserResponse,
-},
-    service::{
-        AuthService,
-        AuthServiceError
-},
-    mail::{send_mail, MailError},
+        CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
+        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, RegisterRequest,
+        RegisterResponse,
+    },
+    mail::{MailError, send_mail},
+    service::{AuthService, AuthServiceError},
 };
 
 use crate::state::AppState;
 
 #[derive(Debug)]
-pub enum AuthHandlerError{
+pub enum AuthHandlerError {
     InvalidEmail,
     Database(sqlx::Error),
-    Mail(MailError),   
+    Mail(MailError),
     InvalidToken,
     InvalidPassword,
     InvalidUserName,
@@ -49,7 +35,8 @@ pub enum AuthHandlerError{
     InvalidSession,
 }
 
-impl From<AuthServiceError> for AuthHandlerError{ //.await?用
+impl From<AuthServiceError> for AuthHandlerError {
+    //.await?用
     fn from(error: AuthServiceError) -> Self {
         match error {
             AuthServiceError::InvalidEmail => Self::InvalidEmail,
@@ -65,16 +52,18 @@ impl From<AuthServiceError> for AuthHandlerError{ //.await?用
     }
 }
 
-impl From<MailError> for AuthHandlerError { //.await?用
+impl From<MailError> for AuthHandlerError {
+    //.await?用
     fn from(error: MailError) -> Self {
-        Self::Mail(error)        
+        Self::Mail(error)
     }
 }
 
-impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変換 axumのやつ
+impl IntoResponse for AuthHandlerError {
+    //エラーをhttpレスポンスに変換 axumのやつ
     fn into_response(self) -> Response {
         match self {
-            AuthHandlerError::InvalidEmail => { 
+            AuthHandlerError::InvalidEmail => {
                 let body = ErrorResponse {
                     error: "invalid_email".to_string(),
                     message: "Invalid email".to_string(),
@@ -101,7 +90,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
 
-            AuthHandlerError::InvalidToken => { 
+            AuthHandlerError::InvalidToken => {
                 let body = ErrorResponse {
                     error: "invalid_token".to_string(),
                     message: "Invalid token".to_string(),
@@ -110,7 +99,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
             }
 
-            AuthHandlerError::InvalidPassword => { 
+            AuthHandlerError::InvalidPassword => {
                 let body = ErrorResponse {
                     error: "invalid_password".to_string(),
                     message: "Invalid password".to_string(),
@@ -119,7 +108,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
             }
 
-            AuthHandlerError::InvalidUserName => { 
+            AuthHandlerError::InvalidUserName => {
                 let body = ErrorResponse {
                     error: "invalid_username".to_string(),
                     message: "Invalid username".to_string(),
@@ -128,7 +117,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
                 (StatusCode::BAD_REQUEST, Json(body)).into_response() //400
             }
 
-            AuthHandlerError::PasswordHash => { 
+            AuthHandlerError::PasswordHash => {
                 let body = ErrorResponse {
                     error: "invalid_server_error".to_string(),
                     message: "Invalid server_error".to_string(),
@@ -136,7 +125,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response() //400
             }
-            AuthHandlerError::EmailAlreadyRegistered => { 
+            AuthHandlerError::EmailAlreadyRegistered => {
                 let body = ErrorResponse {
                     error: "email_already_registered".to_string(),
                     message: "Email already registered".to_string(),
@@ -144,7 +133,7 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::CONFLICT, Json(body)).into_response() //400
             }
-            AuthHandlerError::InvalidCredentials => { 
+            AuthHandlerError::InvalidCredentials => {
                 let body = ErrorResponse {
                     error: "invalid_credentials".to_string(),
                     message: "Invalid credential".to_string(),
@@ -161,15 +150,15 @@ impl IntoResponse for AuthHandlerError { //エラーをhttpレスポンスに変
 
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
             }
-            
-            AuthHandlerError::InvalidSession=> {
+
+            AuthHandlerError::InvalidSession => {
                 let body = ErrorResponse {
                     error: "invalid_session".to_string(),
                     message: "Invalid session".to_string(),
                 };
 
                 (StatusCode::UNAUTHORIZED, Json(body)).into_response()
-            }           
+            }
         }
     }
 }
@@ -201,12 +190,9 @@ pub async fn pre_register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AuthHandlerError> {
-    let output = AuthService::pre_register(
-        &state.posgre,
-        &state.config.app.app_base_url,
-        payload.email,
-    )
-    .await?;
+    let output =
+        AuthService::pre_register(&state.posgre, &state.config.app.app_base_url, payload.email)
+            .await?;
 
     send_mail(&output.mail, &state.config.smtp).await?; //メール送信
 
@@ -245,7 +231,7 @@ pub async fn pre_register(
 pub async fn complete_registration(
     State(state): State<AppState>,
     Json(payload): Json<CompleteRegistrationRequest>,
-    ) -> Result<(StatusCode, Json<CompleteRegistrationResponse>), AuthHandlerError> {
+) -> Result<(StatusCode, Json<CompleteRegistrationResponse>), AuthHandlerError> {
     AuthService::complete_registration(
         &state.posgre,
         payload.token,
@@ -289,13 +275,8 @@ pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AuthHandlerError> {
-    let output = AuthService::login(
-        &state.posgre,
-        payload.email,
-        payload.password,
-    )
-    .await?;
-    
+    let output = AuthService::login(&state.posgre, payload.email, payload.password).await?;
+
     let session_cookie = format!(
         "session={}; HttpOnly; SameSite=Lax; Path=/; Max_Age=604800", //Max_Ageは秒数 7日
         output.session_token
@@ -305,7 +286,8 @@ pub async fn login(
 
     headers.insert(
         SET_COOKIE,
-        HeaderValue::from_str(&session_cookie).map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
+        HeaderValue::from_str(&session_cookie)
+            .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
     );
 
     let response = LoginResponse {
@@ -314,7 +296,7 @@ pub async fn login(
         user_name: output.user_name,
     };
 
-    Ok((StatusCode::OK,headers, Json(response)))
+    Ok((StatusCode::OK, headers, Json(response)))
 }
 
 #[utoipa::path(
@@ -340,26 +322,22 @@ pub async fn login(
     tag = "auth"
 )]
 
-pub async fn logout( // path /auth/logout
+pub async fn logout(
+    // path /auth/logout
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, HeaderMap, Json<LogoutResponse>), AuthHandlerError> {
     let session_token = extract_session_token(&headers)?;
 
-    AuthService::logout(
-        &state.posgre,
-        session_token,
-    )
-    .await?;
+    AuthService::logout(&state.posgre, session_token).await?;
 
     let mut response_headers = HeaderMap::new();
 
-    response_headers.insert( //http レスポンスヘッダー作成
+    response_headers.insert(
+        //http レスポンスヘッダー作成
         SET_COOKIE,
-        HeaderValue::from_str(
-            "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
-        )
-        .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
+        HeaderValue::from_str("session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+            .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
     );
 
     let response = LogoutResponse {
@@ -392,19 +370,17 @@ pub async fn logout( // path /auth/logout
     tag = "auth"
 )]
 
-pub async fn me( // path /auth/me
+pub async fn me(
+    // path /auth/me
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CurrentUserResponse>), AuthHandlerError> {
     let session_token = extract_session_token(&headers)?; //トークン取り出し
 
-    let output = AuthService::current_user(
-        &state.posgre,
-        session_token,
-    )
-    .await?;
+    let output = AuthService::current_user(&state.posgre, session_token).await?;
 
-    let response = CurrentUserResponse { //httpレスポンス組み立て
+    let response = CurrentUserResponse {
+        //httpレスポンス組み立て
         user_id: output.user_id,
         email: output.email,
         user_name: output.user_name,
@@ -414,7 +390,8 @@ pub async fn me( // path /auth/me
     Ok((StatusCode::OK, Json(response)))
 }
 
-fn extract_session_token(headers: &HeaderMap) -> Result<String, AuthHandlerError> { //セッションcookieを取り出す。
+fn extract_session_token(headers: &HeaderMap) -> Result<String, AuthHandlerError> {
+    //セッションcookieを取り出す。
     let cookie_header = headers
         .get(COOKIE)
         .ok_or(AuthHandlerError::InvalidSession)?

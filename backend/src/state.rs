@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-use crate::{
-    config::Config,
-    features::occurrences::service::OccurrenceRdfStore,
-};
+use crate::{config::Config, features::occurrences::service::OccurrenceRdfStore};
 
 #[derive(Clone)]
 pub struct AppState {

@@ -1,33 +1,27 @@
 use super::dto::RegisterResponse;
 use super::repository::AuthRepository;
-use crate::features::auth::mail::{build_registration_completion_email, MailMessage};
+use crate::features::auth::mail::{MailMessage, build_registration_completion_email};
 
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use email_address::EmailAddress;
-use sha2::{Digest,Sha256};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
-use argon2::{
-    password_hash::{
-        rand_core::OsRng,
-        PasswordHash,
-        PasswordHasher,
-        PasswordVerifier,
-        SaltString,
-    },
-    Argon2,
-};
 
 #[derive(Debug)]
 pub enum AuthServiceError {
     InvalidEmail,
     Database(sqlx::Error),
-    InvalidToken, //トークンエラー トークンが空とか
-    InvalidPassword, //パスワードが空、空白だけ
-    InvalidUserName, //ユーザー名が空か空白だけ
-    PasswordHash, //ハッシュ化したパスワードのエラー
+    InvalidToken,           //トークンエラー トークンが空とか
+    InvalidPassword,        //パスワードが空、空白だけ
+    InvalidUserName,        //ユーザー名が空か空白だけ
+    PasswordHash,           //ハッシュ化したパスワードのエラー
     EmailAlreadyRegistered, //メールがすでに使われている場合
-    InvalidCredentials, //メールアドレスまたはパスワードが間違いの場合
-    InvalidSession,   //セッショントークンが空など
+    InvalidCredentials,     //メールアドレスまたはパスワードが間違いの場合
+    InvalidSession,         //セッショントークンが空など
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,23 +51,25 @@ impl From<sqlx::Error> for AuthServiceError {
     }
 }
 
-impl From<argon2::password_hash::Error> for AuthServiceError {//hash_password用
+impl From<argon2::password_hash::Error> for AuthServiceError {
+    //hash_password用
     fn from(_error: argon2::password_hash::Error) -> Self {
         Self::PasswordHash
     }
 }
 
-pub struct AuthService;//とりあえずメソッド用に作っておく。
+pub struct AuthService; //とりあえずメソッド用に作っておく。
 
 impl AuthService {
     pub async fn pre_register(
-        db: &PgPool,  
-        app_base_url: &str, 
+        db: &PgPool,
+        app_base_url: &str,
         email: String,
     ) -> Result<PreRegisterOutput, AuthServiceError> {
-        let email = email.trim().to_lowercase();//前後空白を削除&小文字化
+        let email = email.trim().to_lowercase(); //前後空白を削除&小文字化
 
-        if !EmailAddress::is_valid(&email){ //メールアドレスのvalidation
+        if !EmailAddress::is_valid(&email) {
+            //メールアドレスのvalidation
             return Err(AuthServiceError::InvalidEmail);
         }
 
@@ -81,7 +77,7 @@ impl AuthService {
         let token_hash = hash_token(&token);
 
         AuthRepository::create_pending_registration(db, &email, &token_hash).await?; //データベース書き込み
-                                                                                     //
+        //
         let response = RegisterResponse {
             message: "temporary registration accepted".to_string(),
             email: email.clone(),
@@ -89,10 +85,11 @@ impl AuthService {
 
         let mail = build_registration_completion_email(&email, app_base_url, &token);
 
-        Ok(PreRegisterOutput{ response, mail })
+        Ok(PreRegisterOutput { response, mail })
     }
 
-    pub async fn complete_registration( //登録を完了するための関数
+    pub async fn complete_registration(
+        //登録を完了するための関数
         db: &PgPool,
         token: String,
         user_name: String,
@@ -111,18 +108,19 @@ impl AuthService {
         if user_name.trim().is_empty() {
             return Err(AuthServiceError::InvalidUserName);
         }
-        
+
         let token_hash = hash_token(token);
 
         let mut tx = db.begin().await?;
 
-        let pending_registration = AuthRepository::find_pending_registration_by_token_hash_in_tx(&mut tx, &token_hash).await?; //pending_registrationからトークンでemail検索
+        let pending_registration =
+            AuthRepository::find_pending_registration_by_token_hash_in_tx(&mut tx, &token_hash)
+                .await?; //pending_registrationからトークンでemail検索
 
-        let pending_registration = pending_registration
-    .ok_or(AuthServiceError::InvalidToken)?; //pending_registrationの取り出し
+        let pending_registration = pending_registration.ok_or(AuthServiceError::InvalidToken)?; //pending_registrationの取り出し
 
-
-        if AuthRepository::user_exists_by_email_in_tx( //メールの重複確認
+        if AuthRepository::user_exists_by_email_in_tx(
+            //メールの重複確認
             &mut tx,
             &pending_registration.email,
         )
@@ -134,7 +132,8 @@ impl AuthService {
         let user_name = user_name.trim();
         let password_hash = hash_password(password.trim())?;
 
-        AuthRepository::create_user_in_tx( //ユーザー本作成処理
+        AuthRepository::create_user_in_tx(
+            //ユーザー本作成処理
             &mut tx,
             &pending_registration.email,
             user_name,
@@ -142,7 +141,8 @@ impl AuthService {
         )
         .await?;
 
-        AuthRepository::mark_pending_registration_completed_in_tx( //完了処理
+        AuthRepository::mark_pending_registration_completed_in_tx(
+            //完了処理
             &mut tx,
             &token_hash,
         )
@@ -168,18 +168,17 @@ impl AuthService {
             return Err(AuthServiceError::InvalidCredentials);
         }
 
-        let user = AuthRepository::find_user_by_email(db, &email)
-            .await?;
+        let user = AuthRepository::find_user_by_email(db, &email).await?;
 
         let user = user.ok_or(AuthServiceError::InvalidCredentials)?; //ユーザーが見つからなかったらエラー
 
         verify_password(&password, &user.password_hash)?;
 
-
         let session_token = Uuid::new_v4().to_string(); //トークン作成
         let session_token_hash = hash_token(&session_token); //トークン　ハッシュ化
 
-        AuthRepository::create_session( //データベースにセッション保存
+        AuthRepository::create_session(
+            //データベースにセッション保存
             db,
             user.id,
             &session_token_hash,
@@ -193,32 +192,28 @@ impl AuthService {
         })
     }
 
-    pub async fn logout(
-    db: &PgPool,
-    session_token: String,
-    ) -> Result<(), AuthServiceError> {
-    let session_token = session_token.trim(); //セッショントークン整形
+    pub async fn logout(db: &PgPool, session_token: String) -> Result<(), AuthServiceError> {
+        let session_token = session_token.trim(); //セッショントークン整形
 
-    if session_token.is_empty() { //セッショントークンが空だったらエラー
-        return Err(AuthServiceError::InvalidSession);
+        if session_token.is_empty() {
+            //セッショントークンが空だったらエラー
+            return Err(AuthServiceError::InvalidSession);
+        }
+
+        let session_token_hash = hash_token(session_token);
+
+        let revoked = AuthRepository::revoke_session_by_token_hash(db, &session_token_hash).await?;
+
+        if !revoked {
+            //無効化されていなかったらエラー
+            return Err(AuthServiceError::InvalidSession);
+        }
+
+        Ok(())
     }
 
-    let session_token_hash = hash_token(session_token);
-
-    let revoked = AuthRepository::revoke_session_by_token_hash(
-        db,
-        &session_token_hash,
-    )
-    .await?;
-
-    if !revoked { //無効化されていなかったらエラー
-        return Err(AuthServiceError::InvalidSession);
-    }
-
-    Ok(())
-    }
-
-    pub async fn current_user( //現在ログイン中のユーザー情報取得
+    pub async fn current_user(
+        //現在ログイン中のユーザー情報取得
         db: &PgPool,
         session_token: String,
     ) -> Result<CurrentUserOutput, AuthServiceError> {
@@ -230,7 +225,8 @@ impl AuthService {
 
         let session_token_hash = hash_token(session_token);
 
-        let user = AuthRepository::find_user_by_session_token_hash( //ユーザー検索
+        let user = AuthRepository::find_user_by_session_token_hash(
+            //ユーザー検索
             db,
             &session_token_hash,
         )
@@ -262,12 +258,9 @@ pub fn hash_password(password: &str) -> Result<String, AuthServiceError> {
     Ok(password_hash)
 }
 
-fn verify_password(
-    password: &str,
-    password_hash: &str,
-) -> Result<(), AuthServiceError> {
-    let parsed_hash = PasswordHash::new(password_hash)
-        .map_err(|_| AuthServiceError::InvalidCredentials)?;
+fn verify_password(password: &str, password_hash: &str) -> Result<(), AuthServiceError> {
+    let parsed_hash =
+        PasswordHash::new(password_hash).map_err(|_| AuthServiceError::InvalidCredentials)?;
 
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed_hash)
@@ -280,11 +273,11 @@ fn verify_password(
 mod tests {
 
     use super::{AuthService, AuthServiceError};
-    use sqlx::{postgres::PgPoolOptions, PgPool};
     use crate::features::auth::repository::AuthRepository;
-    use crate::features::auth::service::hash_token;
     use crate::features::auth::service::hash_password;
+    use crate::features::auth::service::hash_token;
     use chrono;
+    use sqlx::{PgPool, postgres::PgPoolOptions};
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -298,7 +291,8 @@ mod tests {
             .await
             .expect("failed to connect test database");
 
-        sqlx::query!(  //データベースをきれいにしてから。実データ入っている本番環境ではアウト
+        sqlx::query!(
+            //データベースをきれいにしてから。実データ入っている本番環境ではアウト
             r#"
             TRUNCATE users, pending_registrations, sessions
             RESTART IDENTITY
@@ -307,8 +301,8 @@ mod tests {
         )
         .execute(&db)
         .await
-        .expect("test database should be cleaned"); 
-        
+        .expect("test database should be cleaned");
+
         db
     }
 
@@ -366,10 +360,9 @@ mod tests {
         let app_base_url = "http://127.0.0.1:3000";
         let email = format!("service-valid-{}@example.com", uuid::Uuid::new_v4());
 
-
         //delete_pending_registration_by_email(&db, email).await;
 
-        let result = AuthService::pre_register(&db,app_base_url, email.to_string()).await;
+        let result = AuthService::pre_register(&db, app_base_url, email.to_string()).await;
 
         assert!(result.is_ok());
 
@@ -391,7 +384,8 @@ mod tests {
 
         delete_pending_registration_by_email(&db, normalized_email).await;
 
-        let result = AuthService::pre_register(&db, app_base_url,  "  TEST@EXAMPLE.COM  ".to_string()).await;
+        let result =
+            AuthService::pre_register(&db, app_base_url, "  TEST@EXAMPLE.COM  ".to_string()).await;
 
         assert!(result.is_ok());
 
@@ -409,7 +403,7 @@ mod tests {
         let db = test_db_pool().await;
         let app_base_url = "http://127.0.0.1:3000";
 
-        let result = AuthService::pre_register(&db, app_base_url,"   ".to_string()).await;
+        let result = AuthService::pre_register(&db, app_base_url, "   ".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
@@ -419,7 +413,8 @@ mod tests {
         let db = test_db_pool().await;
         let app_base_url = "http://127.0.0.1:3000";
 
-        let result = AuthService::pre_register(&db, app_base_url,  "invalid-email".to_string()).await;
+        let result =
+            AuthService::pre_register(&db, app_base_url, "invalid-email".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
@@ -429,7 +424,7 @@ mod tests {
         let db = test_db_pool().await;
         let app_base_url = "http://127.0.0.1:3000";
 
-        let result = AuthService::pre_register(&db, app_base_url,"@example.com".to_string()).await;
+        let result = AuthService::pre_register(&db, app_base_url, "@example.com".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
@@ -439,7 +434,7 @@ mod tests {
         let db = test_db_pool().await;
         let app_base_url = "http://127.0.0.1:3000";
 
-        let result = AuthService::pre_register(&db, app_base_url,  "test@".to_string()).await;
+        let result = AuthService::pre_register(&db, app_base_url, "test@".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
@@ -449,7 +444,8 @@ mod tests {
         let db = test_db_pool().await;
         let app_base_url = "http://127.0.0.1:3000";
 
-        let result = AuthService::pre_register(&db, app_base_url, "test@@example.com".to_string()).await;
+        let result =
+            AuthService::pre_register(&db, app_base_url, "test@@example.com".to_string()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
     }
@@ -462,7 +458,7 @@ mod tests {
 
         delete_pending_registration_by_email(&db, email).await;
 
-        let result = AuthService::pre_register(&db,app_base_url,email.to_string()).await;
+        let result = AuthService::pre_register(&db, app_base_url, email.to_string()).await;
 
         assert!(result.is_ok());
 
@@ -482,7 +478,7 @@ mod tests {
 
         delete_pending_registration_by_email(&db, &invalid_email).await;
 
-        let result = AuthService::pre_register(&db, app_base_url,invalid_email.clone()).await;
+        let result = AuthService::pre_register(&db, app_base_url, invalid_email.clone()).await;
 
         assert!(matches!(result, Err(AuthServiceError::InvalidEmail)));
 
@@ -534,12 +530,9 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidToken)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidToken)));
     }
-    
+
     #[tokio::test]
     async fn complete_registration_rejects_unknown_token() {
         let db = test_db_pool().await;
@@ -552,10 +545,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidToken)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidToken)));
     }
 
     #[tokio::test]
@@ -570,10 +560,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidPassword)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidPassword)));
     }
 
     #[tokio::test]
@@ -588,10 +575,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidPassword)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidPassword)));
     }
 
     #[tokio::test]
@@ -606,10 +590,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidUserName)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidUserName)));
     }
 
     #[tokio::test]
@@ -624,10 +605,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidUserName)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidUserName)));
     }
 
     #[tokio::test]
@@ -638,13 +616,9 @@ mod tests {
         let token_hash = hash_token(token);
         let email = format!("complete-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         let result = AuthService::complete_registration(
             &db,
@@ -686,13 +660,9 @@ mod tests {
         let token_hash = hash_token(&token);
         let email = format!("completed-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         AuthService::complete_registration(
             &db,
@@ -716,7 +686,7 @@ mod tests {
         .expect("pending registration should exist");
 
         assert!(
-            row.completed_at.is_some(),//completed_atがnullでなければok
+            row.completed_at.is_some(), //completed_atがnullでなければok
             "completed_at should be set after complete_registration"
         );
     }
@@ -729,13 +699,9 @@ mod tests {
         let token_hash = hash_token(&token);
         let email = format!("reuse-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         AuthService::complete_registration(
             &db,
@@ -746,7 +712,8 @@ mod tests {
         .await
         .expect("first complete_registration should succeed");
 
-        let result = AuthService::complete_registration( //二回目の本登録。同じトークンなので失敗するはず。
+        let result = AuthService::complete_registration(
+            //二回目の本登録。同じトークンなので失敗するはず。
             &db,
             token,
             "another_user".to_string(),
@@ -754,10 +721,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidToken)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidToken)));
     }
 
     #[tokio::test]
@@ -768,7 +732,8 @@ mod tests {
         let token_hash = hash_token(&token);
         let email = format!("expired-{}@example.com", uuid::Uuid::new_v4());
 
-        sqlx::query!( //pending_registrationsにトークン期限、現在時刻-1分で登録。
+        sqlx::query!(
+            //pending_registrationsにトークン期限、現在時刻-1分で登録。
             r#"
             INSERT INTO pending_registrations (
                 email,
@@ -796,10 +761,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidToken)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidToken)));
     }
 
     #[tokio::test]
@@ -810,25 +772,16 @@ mod tests {
         let token_hash = hash_token(&token);
         let email = format!("duplicate-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
-        let existing_password_hash = hash_password("oldpassword123")
-            .expect("password hash should be created");
+        let existing_password_hash =
+            hash_password("oldpassword123").expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "existing_user",
-            &existing_password_hash,
-        )
-        .await
-        .expect("existing user should be created");
+        AuthRepository::create_user(&db, &email, "existing_user", &existing_password_hash)
+            .await
+            .expect("existing user should be created");
 
         let result = AuthService::complete_registration(
             &db,
@@ -855,11 +808,7 @@ mod tests {
         .await
         .expect("user count should be fetched");
 
-        assert_eq!(
-            user_count.count,
-            1,
-            "duplicate user should not be created"
-        );
+        assert_eq!(user_count.count, 1, "duplicate user should not be created");
 
         let pending_registration = sqlx::query!(
             r#"
@@ -886,13 +835,9 @@ mod tests {
         let token_hash = hash_token(&token);
         let email = format!("rollback-{}@example.com", uuid::Uuid::new_v4());
 
-        AuthRepository::create_pending_registration(
-            &db,
-            &email,
-            &token_hash,
-        )
-        .await
-        .expect("pending registration should be created");
+        AuthRepository::create_pending_registration(&db, &email, &token_hash)
+            .await
+            .expect("pending registration should be created");
 
         sqlx::query(
             r#"
@@ -902,7 +847,7 @@ mod tests {
                 RAISE EXCEPTION 'forced pending registration completion failure';
             END;
             $$ LANGUAGE plpgsql;
-            "#
+            "#,
         )
         .execute(&db)
         .await
@@ -916,7 +861,7 @@ mod tests {
             FOR EACH ROW
             WHEN (NEW.completed_at IS NOT NULL)
             EXECUTE FUNCTION fail_pending_registration_completion();
-            "#
+            "#,
         )
         .execute(&db)
         .await
@@ -934,7 +879,7 @@ mod tests {
             r#"
             DROP TRIGGER IF EXISTS fail_pending_registration_completion_trigger
             ON pending_registrations;
-            "#
+            "#,
         )
         .execute(&db)
         .await
@@ -943,7 +888,7 @@ mod tests {
         sqlx::query(
             r#"
             DROP FUNCTION IF EXISTS fail_pending_registration_completion();
-            "#
+            "#,
         )
         .execute(&db)
         .await
@@ -967,8 +912,7 @@ mod tests {
         .expect("user count should be fetched");
 
         assert_eq!(
-            user_count.count,
-            0,
+            user_count.count, 0,
             "user should be rolled back when pending registration completion fails"
         );
 
@@ -990,7 +934,6 @@ mod tests {
         );
     }
 
-
     //Session
     #[tokio::test]
     async fn login_accepts_registered_user_with_correct_password() {
@@ -998,24 +941,13 @@ mod tests {
 
         let email = format!("login-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let result = AuthService::login(
-            &db,
-            email.clone(),
-            password.to_string(),
-        )
-        .await;
+        let result = AuthService::login(&db, email.clone(), password.to_string()).await;
 
         assert!(
             result.is_ok(),
@@ -1034,29 +966,16 @@ mod tests {
         let db = test_db_pool().await;
 
         let email = format!("login-wrong-password-{}@example.com", uuid::Uuid::new_v4());
-        let password_hash = hash_password("correct-password")
-            .expect("password hash should be created");
+        let password_hash =
+            hash_password("correct-password").expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let result = AuthService::login(
-            &db,
-            email,
-            "wrong-password".to_string(),
-        )
-        .await;
+        let result = AuthService::login(&db, email, "wrong-password".to_string()).await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidCredentials)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidCredentials)));
     }
 
     #[tokio::test]
@@ -1070,10 +989,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(AuthServiceError::InvalidCredentials)
-        ));
+        assert!(matches!(result, Err(AuthServiceError::InvalidCredentials)));
     }
 
     #[tokio::test]
@@ -1082,10 +998,10 @@ mod tests {
 
         let email = format!("login-session-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user( //repositoryで直接データベース操作でユーザー作成
+        AuthRepository::create_user(
+            //repositoryで直接データベース操作でユーザー作成
             &db,
             &email,
             "saku",
@@ -1094,7 +1010,8 @@ mod tests {
         .await
         .expect("user should be created");
 
-        let result = AuthService::login( //作ったユーザーでログイン処理
+        let result = AuthService::login(
+            //作ったユーザーでログイン処理
             &db,
             email.clone(),
             password.to_string(),
@@ -1118,7 +1035,8 @@ mod tests {
 
         let session_token_hash = hash_token(&output.session_token);
 
-        let session = sqlx::query!( //メールからセッション,ユーザー検索
+        let session = sqlx::query!(
+            //メールからセッション,ユーザー検索
             r#"
             SELECT s.session_token_hash, s.expires_at, s.revoked_at
             FROM sessions s
@@ -1148,32 +1066,19 @@ mod tests {
 
         let email = format!("logout-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
-        let login_output = AuthService::login(
-            &db,
-            email,
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email, password.to_string())
+            .await
+            .expect("login should succeed");
 
-        AuthService::logout(
-            &db,
-            login_output.session_token.clone(),
-        )
-        .await
-        .expect("logout should succeed");
+        AuthService::logout(&db, login_output.session_token.clone())
+            .await
+            .expect("logout should succeed");
 
         let session_token_hash = hash_token(&login_output.session_token);
 
@@ -1189,10 +1094,7 @@ mod tests {
         .await
         .expect("session should exist");
 
-        assert!(
-            session.revoked_at.is_some(),
-            "logout should set revoked_at"
-        );
+        assert!(session.revoked_at.is_some(), "logout should set revoked_at");
     }
 
     #[tokio::test]
@@ -1201,17 +1103,11 @@ mod tests {
 
         let email = format!("me-{}@example.com", uuid::Uuid::new_v4());
         let password = "password123";
-        let password_hash = hash_password(password)
-            .expect("password hash should be created");
+        let password_hash = hash_password(password).expect("password hash should be created");
 
-        AuthRepository::create_user(
-            &db,
-            &email,
-            "saku",
-            &password_hash,
-        )
-        .await
-        .expect("user should be created");
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
 
         let user = sqlx::query!(
             r#"
@@ -1225,19 +1121,11 @@ mod tests {
         .await
         .expect("user should exist");
 
-        let login_output = AuthService::login(
-            &db,
-            email.clone(),
-            password.to_string(),
-        )
-        .await
-        .expect("login should succeed");
+        let login_output = AuthService::login(&db, email.clone(), password.to_string())
+            .await
+            .expect("login should succeed");
 
-        let result = AuthService::current_user(
-            &db,
-            login_output.session_token,
-        )
-        .await;
+        let result = AuthService::current_user(&db, login_output.session_token).await;
 
         assert!(
             result.is_ok(),
