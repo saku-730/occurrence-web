@@ -138,6 +138,7 @@
 - [x] フロントからaccessRightsが送られていたらaccessRightsを追加しない`add_default_access_rights_quad_if_missing_keeps_frontend_access_rights`
 - [x] フロントからaccessRightsがリテラルで送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_literal_access_rights`
 - [x] フロントからaccessRightsが許可URI以外で送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_unknown_access_rights_uri`
+- [x] フロントからaccessRightsが複数送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_multiple_access_rights`
 
 ### repository
 

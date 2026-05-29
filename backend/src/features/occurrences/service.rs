@@ -275,11 +275,19 @@ fn add_default_access_rights_quad_if_missing(
 fn ensure_access_rights_is_resource(
     quads: &[Quad],
 ) -> Result<(), OccurrenceServiceError> {
-    for quad in quads
+    let access_rights_quads = quads
         .iter()
         .filter(|quad| quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI)
-    {
-        let access_rights_uri = match &quad.object { //access_rightsがuriであることの確認
+        .collect::<Vec<_>>();
+
+    // accessRightsは1つだけ許可する。複数あると公開範囲を一意に決められない。
+    if access_rights_quads.len() > 1 {
+        return Err(OccurrenceServiceError::InvalidAccessRights);
+    }
+
+    for quad in access_rights_quads {
+        let access_rights_uri = match &quad.object {
+            // accessRightsがURIであることを確認する。
             Term::NamedNode(access_rights_uri) => access_rights_uri.as_str(),
             _ => return Err(OccurrenceServiceError::InvalidAccessRights),
         };
@@ -705,6 +713,27 @@ mod tests {
         assert!(
             matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
             "unknown dcterms:accessRights URI should be rejected"
+        );
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_multiple_access_rights() {
+        let frontend_nquads = br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
+            "multiple dcterms:accessRights values should be rejected"
         );
     }
 
