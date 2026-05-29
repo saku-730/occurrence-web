@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use oxrdf::{GraphName, Literal, NamedNode, Quad, vocab::xsd};
+use oxrdf::{GraphName, Literal, NamedNode, Quad, Term, vocab::xsd};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use uuid::Uuid;
 
@@ -68,6 +68,7 @@ const CREATED_PREDICATE_URI: &str = "http://purl.org/dc/terms/created";
 const MODIFIED_PREDICATE_URI: &str = "http://purl.org/dc/terms/modified";
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
 const PUBLIC_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/public";
+const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 
@@ -274,13 +275,21 @@ fn add_default_access_rights_quad_if_missing(
 fn ensure_access_rights_is_resource(
     quads: &[Quad],
 ) -> Result<(), OccurrenceServiceError> {
-    let has_literal_access_rights = quads.iter().any(|quad| {
-        quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI
-            && !quad.object.is_named_node()
-    });
+    for quad in quads
+        .iter()
+        .filter(|quad| quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI)
+    {
+        let access_rights_uri = match &quad.object { //access_rightsがuriであることの確認
+            Term::NamedNode(access_rights_uri) => access_rights_uri.as_str(),
+            _ => return Err(OccurrenceServiceError::InvalidAccessRights),
+        };
 
-    if has_literal_access_rights {
-        return Err(OccurrenceServiceError::InvalidAccessRights);
+        // accessRightsはMVP仕様で定義したpublic/private URIだけ許可する。
+        if access_rights_uri != PUBLIC_ACCESS_RIGHTS_URI
+            && access_rights_uri != PRIVATE_ACCESS_RIGHTS_URI
+        {
+            return Err(OccurrenceServiceError::InvalidAccessRights);
+        }
     }
 
     Ok(())
@@ -676,6 +685,26 @@ mod tests {
         assert!(
             matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
             "literal dcterms:accessRights should be rejected"
+        );
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_unknown_access_rights_uri() {
+        let frontend_nquads = br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://example.org/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
+            "unknown dcterms:accessRights URI should be rejected"
         );
     }
 
