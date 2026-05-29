@@ -135,6 +135,8 @@
 - [x] 現在時刻をもとに、フロントからおくられたN-Quadsにcreatedを付加`add_created_quad_adds_created_datetime_in_occurrence_graph`
 - [x] 現在時刻をもとに、フロントからおくられたN-Quadsにmodifiedを付加`add_modified_quad_adds_modified_datetime_in_occurrence_graph`
 - [x] フロントからaccessRightsが送られていなかったらpublicのaccessRightsを付加`add_default_access_rights_quad_if_missing_adds_public_access_rights`
+- [x] フロントからaccessRightsが送られていたらaccessRightsを追加しない`add_default_access_rights_quad_if_missing_keeps_frontend_access_rights`
+- [x] フロントからaccessRightsがリテラルで送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_literal_access_rights`
 
 ### repository
 

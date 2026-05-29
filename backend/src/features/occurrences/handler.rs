@@ -38,6 +38,7 @@ pub enum OccurrenceHandlerError {
     ForbiddenRdfPredicate, //禁止されている述語を含むRDFを拒否
     ForbiddenRdfGraph,     //グラフ名が間違っている場合拒否
     EmptyRdf,              //空のデータを拒否
+    InvalidAccessRights,    //accessRightsが仕様外
     NotFound,              //
 }
 
@@ -65,6 +66,7 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::FrontendManagedPredicateProvided => Self::ForbiddenRdfPredicate,
             OccurrenceServiceError::ForbiddenRdfGraph => Self::ForbiddenRdfGraph,
             OccurrenceServiceError::EmptyRdf => Self::EmptyRdf,
+            OccurrenceServiceError::InvalidAccessRights => Self::InvalidAccessRights,
         }
     }
 }
@@ -157,6 +159,14 @@ impl IntoResponse for OccurrenceHandlerError {
                 let body = ErrorResponse {
                     error: "empty_rdf".to_string(),
                     message: "Occurrence RDF must contain at least one quad".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::InvalidAccessRights => {
+                let body = ErrorResponse {
+                    error: "invalid_access_rights".to_string(),
+                    message: "Invalid access rights".to_string(),
                 };
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()

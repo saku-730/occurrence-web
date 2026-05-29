@@ -59,6 +59,7 @@ pub enum OccurrenceServiceError {
     FrontendManagedPredicateProvided, //フロントから誤ってユーザー情報が送られた場合。ユーザー偽装
     ForbiddenRdfGraph,                //グラフの名前がoccurrence空間以外
     EmptyRdf,                         //空のデータ送信
+    InvalidAccessRights,               //accessRightsの値が仕様外
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -270,6 +271,21 @@ fn add_default_access_rights_quad_if_missing(
     Ok(())
 }
 
+fn ensure_access_rights_is_resource(
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let has_literal_access_rights = quads.iter().any(|quad| {
+        quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI
+            && !quad.object.is_named_node()
+    });
+
+    if has_literal_access_rights {
+        return Err(OccurrenceServiceError::InvalidAccessRights);
+    }
+
+    Ok(())
+}
+
 fn serialize_quads_as_nquads(
     //再度シリアライズ
     quads: &[Quad],
@@ -303,6 +319,8 @@ fn build_occurrence_nquads(
     ensure_only_occurrence_graph(&quads)?;
 
     ensure_no_backend_managed_predicates(&quads)?;
+
+    ensure_access_rights_is_resource(&quads)?;
 
     let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)?;
 
@@ -593,6 +611,71 @@ mod tests {
         assert!(
             has_access_rights_quad,
             "missing dcterms:accessRights should default to public URI in occurrence graph"
+        );
+    }
+
+    #[test]
+    fn add_default_access_rights_quad_if_missing_keeps_frontend_access_rights() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let input = br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
+
+        let quads = parser
+            .for_slice(input)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("frontend n-quads should be parsed");
+
+        let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)
+            .expect("all subjects should be replaced");
+
+        add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)
+            .expect("existing access rights should be kept");
+
+        assert_eq!(
+            quads.len(),
+            1,
+            "accessRights already sent by frontend should not be duplicated"
+        );
+
+        let has_private_access_rights_quad = quads.iter().any(|quad| {
+            quad.subject.to_string()
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+                && quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                && quad.object.to_string()
+                    == "<https://bio-database.net/terms/access-rights/private>"
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_private_access_rights_quad,
+            "frontend-provided dcterms:accessRights should be kept as-is"
+        );
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_literal_access_rights() {
+        let frontend_nquads = br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> "public" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidAccessRights)),
+            "literal dcterms:accessRights should be rejected"
         );
     }
 
