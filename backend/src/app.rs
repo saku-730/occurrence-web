@@ -1586,8 +1586,8 @@ mod tests {
 
         assert_eq!(
             parsed_quads.len(),
-            4,
-            "saved N-Quads should contain frontend quad plus backend creator, created, and modified quads"
+            5,
+            "saved N-Quads should contain frontend quad plus backend creator, created, modified, and accessRights quads"
         );
 
         let expected_subject = format!("<{}>", occurrence_uri);
@@ -1643,6 +1643,18 @@ mod tests {
         assert!(
             has_modified_quad,
             "saved N-Quads should contain backend-modified timestamp as xsd:dateTime"
+        );
+
+        let has_access_rights_quad = parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                && quad.object.to_string()
+                    == "<https://bio-database.net/terms/access-rights/public>"
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_access_rights_quad,
+            "saved N-Quads should default missing accessRights to public"
         );
     }
 

@@ -65,6 +65,8 @@ const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
 const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const CREATED_PREDICATE_URI: &str = "http://purl.org/dc/terms/created";
 const MODIFIED_PREDICATE_URI: &str = "http://purl.org/dc/terms/modified";
+const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
+const PUBLIC_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/public";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 
@@ -231,6 +233,43 @@ fn add_modified_quad(
     Ok(())
 }
 
+fn add_default_access_rights_quad_if_missing(
+    quads: &mut Vec<Quad>,
+    occurrence_uri: &str,
+) -> Result<(), OccurrenceServiceError> {
+    let already_has_access_rights = quads
+        .iter()
+        .any(|quad| quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI);
+
+    if already_has_access_rights {//フロントからアクセス権限情報が送られていればなにもしない。
+        return Ok(());
+    }
+
+    let occurrence_subject =
+        NamedNode::new(occurrence_uri).map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
+
+    let access_rights_predicate = NamedNode::new(ACCESS_RIGHTS_PREDICATE_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+
+    let public_access_rights = NamedNode::new(PUBLIC_ACCESS_RIGHTS_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+
+    let occurrence_graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidGraphUri)?;
+
+    // accessRights未指定時は、MVP仕様に従ってpublicをbackend側で明示する。
+    let quad = Quad::new(
+        occurrence_subject,
+        access_rights_predicate,
+        public_access_rights,
+        GraphName::NamedNode(occurrence_graph),
+    );
+
+    quads.push(quad);
+
+    Ok(())
+}
+
 fn serialize_quads_as_nquads(
     //再度シリアライズ
     quads: &[Quad],
@@ -273,6 +312,7 @@ fn build_occurrence_nquads(
     let now = Utc::now();
     add_created_quad(&mut quads, occurrence_uri, now)?;
     add_modified_quad(&mut quads, occurrence_uri, now)?;
+    add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)?;
 
     serialize_quads_as_nquads(&quads)
 }
@@ -516,6 +556,47 @@ mod tests {
     }
 
     #[test]
+    fn add_default_access_rights_quad_if_missing_adds_public_access_rights() {
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let input = br#"
+    _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let parser = RdfParser::from_format(RdfFormat::NQuads);
+
+        let quads = parser
+            .for_slice(input)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("frontend n-quads should be parsed");
+
+        let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)
+            .expect("all subjects should be replaced");
+
+        add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)
+            .expect("default access rights quad should be added");
+
+        assert_eq!(quads.len(), 2);
+
+        let has_access_rights_quad = quads.iter().any(|quad| {
+            quad.subject.to_string()
+                == "<https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000>"
+                && quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                && quad.object.to_string()
+                    == "<https://bio-database.net/terms/access-rights/public>"
+                && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
+        });
+
+        assert!(
+            has_access_rights_quad,
+            "missing dcterms:accessRights should default to public URI in occurrence graph"
+        );
+    }
+
+    #[test]
     fn serialize_quads_as_nquads_outputs_named_graph_quads() {
         use oxrdfio::{RdfFormat, RdfParser};
 
@@ -601,7 +682,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("built output should be valid n-quads");
 
-        assert_eq!(parsed_again.len(), 5);
+        assert_eq!(parsed_again.len(), 6);
 
         assert!(parsed_again.iter().all(|quad| {
             quad.subject.to_string()
@@ -650,7 +731,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("output n-quads should be valid");
 
-        assert_eq!(parsed_quads.len(), 5);
+        assert_eq!(parsed_quads.len(), 6);
 
         let expected_subject = format!("<{}>", output.occurrence_uri);
 
@@ -740,7 +821,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("saved n-quads should be valid");
 
-        assert_eq!(parsed_quads.len(), 4);
+        assert_eq!(parsed_quads.len(), 5);
 
         let expected_subject = format!("<{}>", output.occurrence_uri);
 
