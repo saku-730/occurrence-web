@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use oxrdf::{GraphName, Literal, NamedNode, Quad, Term, vocab::xsd};
+use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term, vocab::xsd};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use uuid::Uuid;
 
@@ -60,6 +60,7 @@ pub enum OccurrenceServiceError {
     ForbiddenRdfGraph,                //グラフの名前がoccurrence空間以外
     EmptyRdf,                         //空のデータ送信
     InvalidAccessRights,               //accessRightsの値が仕様外
+    InvalidBlankNodeSubject,            //blank node subjectが仕様外
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -335,6 +336,8 @@ fn build_occurrence_nquads(
 
     ensure_only_occurrence_graph(&quads)?;
 
+    ensure_single_blank_node_subject(&quads)?;
+
     ensure_no_backend_managed_predicates(&quads)?;
 
     ensure_access_rights_is_resource(&quads)?;
@@ -366,6 +369,29 @@ fn build_occurrence_nquads_with_generated_id(
         occurrence_uri,
         nquads,
     })
+}
+
+fn ensure_single_blank_node_subject(
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let mut blank_node_subjects = Vec::new();
+
+    for quad in quads {
+        if let NamedOrBlankNode::BlankNode(blank_node) = &quad.subject {
+            let blank_node_id = blank_node.as_str();
+
+            if !blank_node_subjects.contains(&blank_node_id) {
+                blank_node_subjects.push(blank_node_id);
+            }
+        }
+    }
+
+    // 1リクエストで作成できるoccurrenceは1件だけなので、blank node subjectも1つだけ許可する。
+    if blank_node_subjects.len() > 1 {
+        return Err(OccurrenceServiceError::InvalidBlankNodeSubject);
+    }
+
+    Ok(())
 }
 
 fn ensure_no_backend_managed_predicates(
@@ -781,6 +807,27 @@ mod tests {
                 "frontend-sent dcterms:{predicate_name} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_multiple_blank_node_subjects() {
+        let frontend_nquads = br#"
+    _:occurrence_a <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence_b <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidBlankNodeSubject)),
+            "multiple blank node subjects should be rejected"
+        );
     }
 
     #[test]

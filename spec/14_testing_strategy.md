@@ -104,12 +104,14 @@
 - empty RDF rejected
 - Turtle rejected
 - N-Quads parse success
-- graph name in input rejected
+- missing graph name rejected
+- non-occurrence graph name rejected
+- occurrence graph name accepted
 - exactly one blank node subject accepted
 - multiple blank node subjects rejected
 - object blank node rejected
 - backend replaces blank node with occurrence URI
-- backend adds occurrence graph
+- backend preserves occurrence graph
 - frontend-sent `dcterms:creator` rejected
 - frontend-sent `dcterms:created` rejected
 - frontend-sent `dcterms:modified` rejected

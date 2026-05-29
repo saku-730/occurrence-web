@@ -114,7 +114,9 @@ RDF本文は N-Quads とする。
 
 - Turtle不可
 - 空RDF不可
-- graph name不可
+- graph name必須
+- graph name は occurrence graph のみ可
+- occurrence graph は `https://{APP_PUBLIC_BASE_URL}/graphs/occurrences`
 
 成功レスポンス例。
 

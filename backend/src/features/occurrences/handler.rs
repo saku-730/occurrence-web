@@ -39,6 +39,7 @@ pub enum OccurrenceHandlerError {
     ForbiddenRdfGraph,     //グラフ名が間違っている場合拒否
     EmptyRdf,              //空のデータを拒否
     InvalidAccessRights,    //accessRightsが仕様外
+    InvalidBlankNodeSubject, //blank node subjectが仕様外
     NotFound,              //
 }
 
@@ -67,6 +68,7 @@ impl From<OccurrenceServiceError> for OccurrenceHandlerError {
             OccurrenceServiceError::ForbiddenRdfGraph => Self::ForbiddenRdfGraph,
             OccurrenceServiceError::EmptyRdf => Self::EmptyRdf,
             OccurrenceServiceError::InvalidAccessRights => Self::InvalidAccessRights,
+            OccurrenceServiceError::InvalidBlankNodeSubject => Self::InvalidBlankNodeSubject,
         }
     }
 }
@@ -167,6 +169,14 @@ impl IntoResponse for OccurrenceHandlerError {
                 let body = ErrorResponse {
                     error: "invalid_access_rights".to_string(),
                     message: "Invalid access rights".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
+            OccurrenceHandlerError::InvalidBlankNodeSubject => {
+                let body = ErrorResponse {
+                    error: "invalid_blank_node_subject".to_string(),
+                    message: "Invalid blank node subject".to_string(),
                 };
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
