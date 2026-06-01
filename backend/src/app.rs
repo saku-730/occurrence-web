@@ -2028,6 +2028,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_occurrence_route_rejects_frontend_created_or_modified_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-reject-managed-time-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-reject-managed-time-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let cases = [
+            (
+                "created",
+                br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://purl.org/dc/terms/created> "2026-06-01T12:34:56Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "modified",
+                br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://purl.org/dc/terms/modified> "2026-06-01T12:34:56Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+        ];
+
+        for (predicate_name, frontend_nquads) in cases {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/occurrences")
+                        .header(CONTENT_TYPE, "application/n-quads")
+                        .header(COOKIE, format!("session={}", session_token))
+                        .body(Body::from(frontend_nquads.to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "frontend-supplied {predicate_name} should return 400"
+            );
+
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+            let body_json: serde_json::Value =
+                serde_json::from_slice(&body).expect("response body should be JSON");
+
+            assert_eq!(body_json["error"], "forbidden_rdf_predicate");
+            assert_eq!(
+                body_json["message"],
+                "Frontend RDF must not contain backend-managed predicates"
+            );
+        }
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF containing frontend-supplied created or modified should not be saved"
+        );
+    }
+
+    #[tokio::test]
     async fn create_occurrence_route_rejects_non_occurrence_graph_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
@@ -2200,6 +2308,195 @@ mod tests {
             saved.len(),
             0,
             "RDF without graph name should not be saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_invalid_blank_node_subject_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-invalid-subject-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-invalid-subject-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let cases = [
+            (
+                "named node subject",
+                br#"
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "multiple blank node subjects",
+                br#"
+    _:occurrence_a <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence_b <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+        ];
+
+        for (case_name, frontend_nquads) in cases {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/occurrences")
+                        .header(CONTENT_TYPE, "application/n-quads")
+                        .header(COOKIE, format!("session={}", session_token))
+                        .body(Body::from(frontend_nquads.to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{case_name} should return 400"
+            );
+
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+            let body_json: serde_json::Value =
+                serde_json::from_slice(&body).expect("response body should be JSON");
+
+            assert_eq!(body_json["error"], "invalid_blank_node_subject");
+            assert_eq!(body_json["message"], "Invalid blank node subject");
+        }
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF with invalid blank node subject should not be saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_object_blank_node_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-object-blank-node-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-object-blank-node-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/relatedObject> _:object <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "invalid_object_blank_node");
+        assert_eq!(body_json["message"], "Invalid object blank node");
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF with object blank node should not be saved"
         );
     }
 
