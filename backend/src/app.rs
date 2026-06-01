@@ -1744,6 +1744,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_occurrence_route_rejects_invalid_access_rights_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-invalid-access-rights-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-invalid-access-rights-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let cases = [
+            (
+                "literal accessRights",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> "public" <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "unknown accessRights URI",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://example.org/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+            (
+                "multiple accessRights",
+                br#"
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "# as &[u8],
+            ),
+        ];
+
+        for (case_name, frontend_nquads) in cases {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/occurrences")
+                        .header(CONTENT_TYPE, "application/n-quads")
+                        .header(COOKIE, format!("session={}", session_token))
+                        .body(Body::from(frontend_nquads.to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{case_name} should return 400"
+            );
+
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+            let body_json: serde_json::Value =
+                serde_json::from_slice(&body).expect("response body should be JSON");
+
+            assert_eq!(body_json["error"], "invalid_access_rights");
+            assert_eq!(body_json["message"], "Invalid access rights");
+        }
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "invalid accessRights requests should not be saved to OccurrenceRdfStore"
+        );
+    }
+
+    #[tokio::test]
     async fn create_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
         let store = FailingOccurrenceRdfStore::default();
 

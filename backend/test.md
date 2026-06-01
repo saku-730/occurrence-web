@@ -116,6 +116,7 @@
 - [x] `POST /occurrences`に有効なユーザーで有効リクエストしたときに201created response`create_occurrence_route_with_valid_session_returns_created`
 - [x] `POST /occurrences`に有効 session と正しい N-Quads を送ると、route 経由で保存用 N-Quads が OccurrenceRdfStore に渡される`create_occurrence_route_with_valid_session_saves_nquads_to_store`
 - [x] `POST /occurrences`に有効 session と壊れた N-Quads を送ると、400 Bad Request を返し、OccurrenceRdfStore には保存されない。`create_occurrence_route_with_invalid_nquads_returns_bad_request_and_does_not_save`
+- [x] `POST /occurrences`にaccessRightsのリテラル、不正URI、複数指定を送ると400 Bad Requestを返し、OccurrenceRdfStoreには保存されない`create_occurrence_route_rejects_invalid_access_rights_and_does_not_save`
 - [x] `POST /occurrences`に有効 session と正しい N-Quads を送ったが、OccurrenceRdfStore の保存処理が失敗した場合、502 Bad Gateway`create_occurrence_route_when_rdf_store_fails_returns_bad_gateway`
 - [x] `POST /occurrences`にfrontend が backend 管理 predicate を送ってきたら拒否する`create_occurrence_route_rejects_frontend_creator_and_does_not_save`
 - [x] N-Quadsのグラフ名が`<https://bio-database.net/graphs/occurrences>`以外拒否で400 `create_occurrence_route_rejects_non_occurrence_graph_and_does_not_save`
