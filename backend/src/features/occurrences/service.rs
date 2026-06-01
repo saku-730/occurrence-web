@@ -1258,6 +1258,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_propagates_store_failed_error() {
+        struct FailingOccurrenceRdfStore;
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FailingOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Err(OccurrenceServiceError::StoreFailed)
+            }
+        }
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let store = FailingOccurrenceRdfStore;
+
+        let result = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
+            .await;
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::StoreFailed)),
+            "store failure should be propagated from get_occurrence"
+        );
+    }
+
+    #[tokio::test]
     async fn create_occurrence_saves_built_nquads_to_store() {
         use oxrdfio::{RdfFormat, RdfParser};
         use std::sync::{Arc, Mutex};

@@ -167,6 +167,7 @@
 ### Service
 
 - [x] `OccurrenceService::get_occurrence` は指定された occurrence_id から occurrence_uri を組み立て、OccurrenceRdfStore から該当 N-Quads を取得できる`get_occurrence_returns_nquads_for_requested_occurrence_uri`
-- [ ] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがNoneを返したらOk(None)を返す`get_occurrence_returns_none_when_store_returns_none`
+- [x] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがNoneを返したらOk(None)を返す`get_occurrence_returns_none_when_store_returns_none`
+- [x] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがStoreFailedを返したらそのエラーを伝播する`get_occurrence_propagates_store_failed_error`
 
 ### other
