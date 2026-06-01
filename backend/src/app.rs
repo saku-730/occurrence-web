@@ -2906,6 +2906,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_route_allows_editor_to_view_own_private_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-own-private-viewer-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-own-private-viewer";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let expected_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri, occurrence_uri, user_id, occurrence_uri,
+        );
+
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), expected_nquads.clone().into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/n-quads"),
+            "own private occurrence detail should be returned as N-Quads"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        assert_eq!(
+            body.as_ref(),
+            expected_nquads.as_bytes(),
+            "editor should receive own private occurrence N-Quads"
+        );
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 
