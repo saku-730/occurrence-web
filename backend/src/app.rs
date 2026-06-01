@@ -3001,6 +3001,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_route_hides_other_users_private_occurrence_from_editor() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-other-private-viewer-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-other-private-viewer";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let viewer_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("viewer user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            viewer_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let creator_user_id = uuid::Uuid::new_v4();
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let private_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri, occurrence_uri, creator_user_id, occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri, private_nquads.into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "occurrence_not_found");
+        assert_eq!(body_json["message"], "Occurrence not found");
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 

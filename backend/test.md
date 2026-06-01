@@ -163,6 +163,7 @@
 - [x] 非ログインユーザーはpublic occurrenceを閲覧できる`get_occurrence_route_allows_anonymous_user_to_view_public_occurrence`
 - [x] 非ログインユーザーはprivate occurrenceを閲覧できず404 Not Foundを返す`get_occurrence_route_hides_private_occurrence_from_anonymous_user`
 - [x] editorは自分のprivate occurrenceを閲覧できる`get_occurrence_route_allows_editor_to_view_own_private_occurrence`
+- [x] editorは他人のprivate occurrenceを閲覧できず404 Not Foundを返す`get_occurrence_route_hides_other_users_private_occurrence_from_editor`
 - [x] `GET /occurrences/{occurrence_id}`で存在しないoccurrence_idのとき404`get_occurrence_route_returns_not_found_for_missing_occurrence`
 - [x] `GET /occurrences/{occurrence_id}`でoccurrence_idがUUIDではないとき400 Bad Requestを返す`get_occurrence_route_returns_bad_request_for_invalid_occurrence_id`
 - [x] `GET /occurrences/{occurrence_id}`でFusekiへの問い合わせ失敗で502`get_occurrence_route_when_rdf_store_fails_returns_bad_gateway`

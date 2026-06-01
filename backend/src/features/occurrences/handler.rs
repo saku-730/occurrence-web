@@ -301,11 +301,25 @@ pub async fn get_occurrence(
         return Err(OccurrenceHandlerError::NotFound);
     };
 
-    if nquads_contains_private_access_rights(&output.nquads)?
-        && optional_session_token(&headers).is_none()
-    {
-        // private occurrenceは存在自体を隠す仕様なので、非ログインには404を返す。
-        return Err(OccurrenceHandlerError::NotFound);
+    if nquads_contains_private_access_rights(&output.nquads)? {
+        let Some(session_token) = optional_session_token(&headers) else {
+            // private occurrenceは存在自体を隠す仕様なので、非ログインには404を返す。
+            return Err(OccurrenceHandlerError::NotFound);
+        };
+
+        let current_user = match AuthService::current_user(&state.posgre, session_token).await {
+            Ok(current_user) => current_user,
+            Err(AuthServiceError::InvalidSession) => return Err(OccurrenceHandlerError::NotFound),
+            Err(error) => return Err(error.into()),
+        };
+
+        let Some(creator_user_id) = nquads_creator_user_id(&output.nquads)? else {
+            return Err(OccurrenceHandlerError::NotFound);
+        };
+
+        if current_user.role != "admin" && current_user.user_id != creator_user_id {
+            return Err(OccurrenceHandlerError::NotFound);
+        }
     }
 
     Ok((
@@ -317,7 +331,9 @@ pub async fn get_occurrence(
 }
 
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
+const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
+const USER_URI_BASE: &str = "https://bio-database.net/users/";
 
 fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, OccurrenceHandlerError> {
     let quads = RdfParser::from_format(RdfFormat::NQuads)
@@ -333,6 +349,30 @@ fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, Occurren
                     if access_rights.as_str() == PRIVATE_ACCESS_RIGHTS_URI
             )
     }))
+}
+
+fn nquads_creator_user_id(nquads: &[u8]) -> Result<Option<Uuid>, OccurrenceHandlerError> { //nquadsからuseridだけ取り出し
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceHandlerError::InternalServerError)?;
+
+    let creator_user_id = quads.iter().find_map(|quad| {
+        if quad.predicate.as_str() != CREATOR_PREDICATE_URI {
+            return None;
+        }
+
+        let Term::NamedNode(creator) = &quad.object else {
+            return None;
+        };
+
+        creator //取り出した、uriのuser_idを整形
+            .as_str()
+            .strip_prefix(USER_URI_BASE)
+            .and_then(|user_id| Uuid::parse_str(user_id).ok())
+    });
+
+    Ok(creator_user_id)
 }
 
 fn optional_session_token(headers: &HeaderMap) -> Option<String> {
