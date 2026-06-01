@@ -2116,6 +2116,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_occurrence_route_rejects_missing_graph_name_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-missing-graph-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-missing-graph-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" .
+    "#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "forbidden_rdf_graph");
+        assert_eq!(
+            body_json["message"],
+            "Occurrence RDF must use the occurrence graph"
+        );
+
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(
+            saved.len(),
+            0,
+            "RDF without graph name should not be saved"
+        );
+    }
+
+    #[tokio::test]
     async fn create_occurrence_route_rejects_empty_rdf_and_does_not_save() {
         let store = FakeOccurrenceRdfStore::default();
 
