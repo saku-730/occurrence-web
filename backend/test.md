@@ -160,6 +160,8 @@
 ### app
 
 - [x] `GET /occurrences/{occurrence_id}`指定された occurrence_id から occurrence_uri を組み立てる。OccurrenceRdfStore からその occurrence_uri の N-Quads を取得する。存在すれば 200 OK / application/n-quads で返す`get_occurrence_route_returns_nquads_for_existing_occurrence`
+- [x] 非ログインユーザーはpublic occurrenceを閲覧できる`get_occurrence_route_allows_anonymous_user_to_view_public_occurrence`
+- [x] 非ログインユーザーはprivate occurrenceを閲覧できず404 Not Foundを返す`get_occurrence_route_hides_private_occurrence_from_anonymous_user`
 - [x] `GET /occurrences/{occurrence_id}`で存在しないoccurrence_idのとき404`get_occurrence_route_returns_not_found_for_missing_occurrence`
 - [x] `GET /occurrences/{occurrence_id}`でoccurrence_idがUUIDではないとき400 Bad Requestを返す`get_occurrence_route_returns_bad_request_for_invalid_occurrence_id`
 - [x] `GET /occurrences/{occurrence_id}`でFusekiへの問い合わせ失敗で502`get_occurrence_route_when_rdf_store_fails_returns_bad_gateway`

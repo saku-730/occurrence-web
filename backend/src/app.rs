@@ -2809,6 +2809,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_route_allows_anonymous_user_to_view_public_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let expected_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri, occurrence_uri,
+        );
+
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), expected_nquads.clone().into_bytes());
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/n-quads"),
+            "public occurrence detail should be returned as N-Quads"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        assert_eq!(
+            body.as_ref(),
+            expected_nquads.as_bytes(),
+            "anonymous user should receive public occurrence N-Quads"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_occurrence_route_hides_private_occurrence_from_anonymous_user() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let private_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri, occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri, private_nquads.into_bytes());
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body_json["error"], "occurrence_not_found");
+        assert_eq!(body_json["message"], "Occurrence not found");
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 

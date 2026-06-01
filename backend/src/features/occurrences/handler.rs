@@ -8,6 +8,8 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
+use oxrdf::Term;
+use oxrdfio::{RdfFormat, RdfParser};
 use uuid::Uuid;
 
 use crate::{
@@ -287,6 +289,7 @@ pub async fn create_occurrence(
 
 pub async fn get_occurrence(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(occurrence_id): Path<Uuid>,
 ) -> Result<Response, OccurrenceHandlerError> {
     let input = GetOccurrenceInput { occurrence_id };
@@ -298,12 +301,42 @@ pub async fn get_occurrence(
         return Err(OccurrenceHandlerError::NotFound);
     };
 
+    if nquads_contains_private_access_rights(&output.nquads)?
+        && optional_session_token(&headers).is_none()
+    {
+        // private occurrenceは存在自体を隠す仕様なので、非ログインには404を返す。
+        return Err(OccurrenceHandlerError::NotFound);
+    }
+
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/n-quads")],
         output.nquads,
     )
         .into_response())
+}
+
+const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
+const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
+
+fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, OccurrenceHandlerError> {
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceHandlerError::InternalServerError)?;
+
+    Ok(quads.iter().any(|quad| {
+        quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI
+            && matches!(
+                &quad.object,
+                Term::NamedNode(access_rights)
+                    if access_rights.as_str() == PRIVATE_ACCESS_RIGHTS_URI
+            )
+    }))
+}
+
+fn optional_session_token(headers: &HeaderMap) -> Option<String> {
+    extract_session_token(headers).ok()
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandlerError> {
