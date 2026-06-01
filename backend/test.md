@@ -104,7 +104,7 @@
 - [x] ログアウトしたら、posgre sessionsテーブルのrevokedが更新されてセッションが無効になる。`me_route_returns_current_user_for_valid_session_cookie`
 - [x] セッショントークンで現在のユーザーを参照できる。`current_user_returns_user_for_valid_session`
 
-## Occurrence data
+## Occurrence data register
 
 ### app
 
@@ -126,9 +126,6 @@
 - [x] `POST /occurrences`にobject blank nodeを含むN-Quadsを送ると400 Bad Requestを返し、OccurrenceRdfStoreには保存されない`create_occurrence_route_rejects_object_blank_node_and_does_not_save`
 - [x] `POST /occurrences`に空のデータが送信されたときに、データがつくられない。creatorだけつくられることがない`create_occurrence_route_rejects_empty_rdf_and_does_not_save`
 - [x] `POST /occurrences` に有効 session と正しい N-Quads を送ると、実 Fuseki に保存され、SPARQL ASK で取得できる。
-- [x] `GET /occurrences/{occurrence_id}`指定された occurrence_id から occurrence_uri を組み立てる。OccurrenceRdfStore からその occurrence_uri の N-Quads を取得する。存在すれば 200 OK / application/n-quads で返す`get_occurrence_route_returns_nquads_for_existing_occurrence`
-- [x] `GET /occurrences/{occurrence_id}`で存在しないoccurrence_idのとき404`get_occurrence_route_returns_not_found_for_missing_occurrence`
-- [x] `GET /occurrences/{occurrence_id}`でFusekiへの問い合わせ失敗で502`get_occurrence_route_when_rdf_store_fails_returns_bad_gateway`
 
 ### service
 
@@ -157,3 +154,17 @@
 
 - [x] fuseki.rsがfusekiにrdfを保存できる`fuseki_client_save_nquads_inserts_data_into_fuseki`
 - [x] fuseki.rsがfusekiに保存したrdfをoccurrence_idで呼び出しできる`fuseki_client_get_occurrence_nquads_returns_only_requested_occurrence`
+
+## Occurrence data detail
+
+### app
+
+- [x] `GET /occurrences/{occurrence_id}`指定された occurrence_id から occurrence_uri を組み立てる。OccurrenceRdfStore からその occurrence_uri の N-Quads を取得する。存在すれば 200 OK / application/n-quads で返す`get_occurrence_route_returns_nquads_for_existing_occurrence`
+- [x] `GET /occurrences/{occurrence_id}`で存在しないoccurrence_idのとき404`get_occurrence_route_returns_not_found_for_missing_occurrence`
+- [x] `GET /occurrences/{occurrence_id}`でFusekiへの問い合わせ失敗で502`get_occurrence_route_when_rdf_store_fails_returns_bad_gateway`
+
+### Service
+
+- [x] `OccurrenceService::get_occurrence` は指定された occurrence_id から occurrence_uri を組み立て、OccurrenceRdfStore から該当 N-Quads を取得できる`get_occurrence_returns_nquads_for_requested_occurrence_uri`
+
+### other

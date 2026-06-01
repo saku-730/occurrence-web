@@ -1166,6 +1166,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_returns_nquads_for_requested_occurrence_uri() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct FakeOccurrenceRdfStore {
+            expected_occurrence_uri: String,
+            nquads: Vec<u8>,
+            requested_occurrence_uris: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                self.requested_occurrence_uris
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .push(occurrence_uri.to_string());
+
+                if occurrence_uri == self.expected_occurrence_uri {
+                    Ok(Some(self.nquads.clone()))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        let occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let expected_nquads = format!(
+            "<{}> <https://example.org/vocab/scientificName> \"Lumbricus terrestris\" <https://bio-database.net/graphs/occurrences> .\n",
+            occurrence_uri
+        )
+        .into_bytes();
+
+        let requested_occurrence_uris = Arc::new(Mutex::new(Vec::new()));
+        let store = FakeOccurrenceRdfStore {
+            expected_occurrence_uri: occurrence_uri.clone(),
+            nquads: expected_nquads.clone(),
+            requested_occurrence_uris: requested_occurrence_uris.clone(),
+        };
+
+        let output = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
+            .await
+            .expect("get occurrence should succeed")
+            .expect("requested occurrence should exist");
+
+        assert_eq!(output.nquads, expected_nquads);
+
+        let requested = requested_occurrence_uris
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(requested.as_slice(), &[occurrence_uri]);
+    }
+
+    #[tokio::test]
     async fn create_occurrence_saves_built_nquads_to_store() {
         use oxrdfio::{RdfFormat, RdfParser};
         use std::sync::{Arc, Mutex};
