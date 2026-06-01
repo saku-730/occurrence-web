@@ -1230,6 +1230,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_returns_none_when_store_returns_none() {
+        struct EmptyOccurrenceRdfStore;
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for EmptyOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(None)
+            }
+        }
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let store = EmptyOccurrenceRdfStore;
+
+        let output = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
+            .await
+            .expect("get occurrence should succeed even when occurrence is missing");
+
+        assert!(output.is_none());
+    }
+
+    #[tokio::test]
     async fn create_occurrence_saves_built_nquads_to_store() {
         use oxrdfio::{RdfFormat, RdfParser};
         use std::sync::{Arc, Mutex};

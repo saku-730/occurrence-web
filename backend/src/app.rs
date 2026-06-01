@@ -2841,6 +2841,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_occurrence_route_returns_bad_request_for_invalid_occurrence_id() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/occurrences/not-a-uuid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_when_rdf_store_fails_returns_bad_gateway() {
         let store = FailingOccurrenceRdfStore::default();
 
