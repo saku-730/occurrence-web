@@ -128,7 +128,7 @@
 
 ### service
 
-- [x] フロントエンドから送られた、N-Quadsの主語なんでもをバックエンドが、発行した、オカレンスuuidに差し替え`replace_all_subjects_with_occurrence_uri_replaces_any_frontend_subject`
+- [x] フロントエンドから送られたN-Quadsのblank node subjectをバックエンドが発行したオカレンスuuidに差し替え`replace_all_subjects_with_occurrence_uri_replaces_blank_node_subjects`
 - [x] フロントから送られた、N-Quadsにcreate_user_idを付加`add_create_user_id_quad_adds_creator_resource_in_occurrence_graph`
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
@@ -140,7 +140,9 @@
 - [x] フロントからaccessRightsがリテラルで送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_literal_access_rights`
 - [x] フロントからaccessRightsが許可URI以外で送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_unknown_access_rights_uri`
 - [x] フロントからaccessRightsが複数送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_multiple_access_rights`
+- [x] フロントからlicenseにCreative Commons以外のURIが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_non_creative_commons_license_uri`
 - [x] フロントからbackend管理述語 creator / created / modified のいずれかが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_frontend_backend_managed_predicates`
+- [x] フロントからsubjectがblank nodeではなくURIで送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_named_node_subject`
 - [x] フロントから複数のblank node subjectが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_multiple_blank_node_subjects`
 - [x] フロントからobject blank nodeが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_object_blank_node`
 - [x] フロントからvalidなaccessRights public/privateが送られていたらbuild後も保持される`build_occurrence_nquads_keeps_valid_access_rights_values`

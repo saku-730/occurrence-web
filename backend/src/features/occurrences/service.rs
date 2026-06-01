@@ -60,6 +60,7 @@ pub enum OccurrenceServiceError {
     ForbiddenRdfGraph,                //グラフの名前がoccurrence空間以外
     EmptyRdf,                         //空のデータ送信
     InvalidAccessRights,               //accessRightsの値が仕様外
+    InvalidLicense,                    //licenseの値が仕様外
     InvalidBlankNodeSubject,            //blank node subjectが仕様外
     InvalidObjectBlankNode,              //object blank nodeは拒否
 }
@@ -69,6 +70,8 @@ const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const CREATED_PREDICATE_URI: &str = "http://purl.org/dc/terms/created";
 const MODIFIED_PREDICATE_URI: &str = "http://purl.org/dc/terms/modified";
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
+const LICENSE_PREDICATE_URI: &str = "http://purl.org/dc/terms/license";
+const CREATIVE_COMMONS_LICENSE_URI_PREFIX: &str = "https://creativecommons.org/";
 const PUBLIC_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/public";
 const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
@@ -305,6 +308,34 @@ fn ensure_access_rights_is_resource(
     Ok(())
 }
 
+fn ensure_license_is_creative_commons_resource(
+    quads: &[Quad],
+) -> Result<(), OccurrenceServiceError> {
+    let license_quads = quads
+        .iter()
+        .filter(|quad| quad.predicate.as_str() == LICENSE_PREDICATE_URI)
+        .collect::<Vec<_>>();
+
+    // licenseは1つだけ許可する。複数あると適用される利用条件が曖昧になる。
+    if license_quads.len() > 1 {
+        return Err(OccurrenceServiceError::InvalidLicense);
+    }
+
+    for quad in license_quads {
+        let license_uri = match &quad.object {
+            // licenseは機械的に判定できるCreative Commons URIだけを許可する。
+            Term::NamedNode(license_uri) => license_uri.as_str(),
+            _ => return Err(OccurrenceServiceError::InvalidLicense),
+        };
+
+        if !license_uri.starts_with(CREATIVE_COMMONS_LICENSE_URI_PREFIX) {
+            return Err(OccurrenceServiceError::InvalidLicense);
+        }
+    }
+
+    Ok(())
+}
+
 fn serialize_quads_as_nquads(
     //再度シリアライズ
     quads: &[Quad],
@@ -345,6 +376,8 @@ fn build_occurrence_nquads(
 
     ensure_access_rights_is_resource(&quads)?;
 
+    ensure_license_is_creative_commons_resource(&quads)?;
+
     let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)?;
 
     add_create_user_id_quad(&mut quads, occurrence_uri, create_user_id)?;
@@ -380,17 +413,20 @@ fn ensure_single_blank_node_subject(
     let mut blank_node_subjects = Vec::new();
 
     for quad in quads {
-        if let NamedOrBlankNode::BlankNode(blank_node) = &quad.subject {
-            let blank_node_id = blank_node.as_str();
+        let NamedOrBlankNode::BlankNode(blank_node) = &quad.subject else {
+            // frontendは保存前の仮subjectとしてblank nodeだけを送る。URI subjectは偽装防止のため拒否する。
+            return Err(OccurrenceServiceError::InvalidBlankNodeSubject);
+        };
 
-            if !blank_node_subjects.contains(&blank_node_id) {
-                blank_node_subjects.push(blank_node_id);
-            }
+        let blank_node_id = blank_node.as_str();
+
+        if !blank_node_subjects.contains(&blank_node_id) {
+            blank_node_subjects.push(blank_node_id);
         }
     }
 
     // 1リクエストで作成できるoccurrenceは1件だけなので、blank node subjectも1つだけ許可する。
-    if blank_node_subjects.len() > 1 {
+    if blank_node_subjects.len() != 1 {
         return Err(OccurrenceServiceError::InvalidBlankNodeSubject);
     }
 
@@ -467,12 +503,12 @@ fn build_occurrence_uri(occurrence_id: Uuid) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn replace_all_subjects_with_occurrence_uri_replaces_any_frontend_subject() {
+    fn replace_all_subjects_with_occurrence_uri_replaces_blank_node_subjects() {
         use oxrdfio::{RdfFormat, RdfParser};
 
         let input = br#"
     _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
-    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
     "#;
 
         let occurrence_uri =
@@ -786,6 +822,26 @@ mod tests {
     }
 
     #[test]
+    fn build_occurrence_nquads_rejects_non_creative_commons_license_uri() {
+        let frontend_nquads = br#"
+    _:occurrence <http://purl.org/dc/terms/license> <https://example.org/license/custom> <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidLicense)),
+            "license URI outside Creative Commons should be rejected"
+        );
+    }
+
+    #[test]
     fn build_occurrence_nquads_rejects_frontend_backend_managed_predicates() {
         let cases = [
             (
@@ -825,6 +881,26 @@ mod tests {
                 "frontend-sent dcterms:{predicate_name} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_named_node_subject() {
+        let frontend_nquads = br#"
+    <https://evil.example/fake-occurrence> <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+
+        let create_user_id =
+            uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let result = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id);
+
+        assert!(
+            matches!(result, Err(OccurrenceServiceError::InvalidBlankNodeSubject)),
+            "frontend subject should be the single blank node for the occurrence"
+        );
     }
 
     #[test]
@@ -983,7 +1059,7 @@ mod tests {
 
         let frontend_nquads = br#"
     _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
-    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
     "#;
 
         let occurrence_uri =
@@ -1028,7 +1104,7 @@ mod tests {
 
         let frontend_nquads = br#"
     _:occurrence <https://example.org/vocab/taxonName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
-    <https://evil.example/fake-occurrence> <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <https://example.org/vocab/locality> "somewhere" <https://bio-database.net/graphs/occurrences> .
     "#;
 
         let create_user_id =
