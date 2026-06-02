@@ -21,9 +21,10 @@ use crate::{
 };
 
 use super::{
-    dto::CreateOccurrenceResponse,
+    dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
     service::{
         CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
+        SearchOccurrencesInput,
     },
 };
 
@@ -285,6 +286,21 @@ pub async fn create_occurrence(
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub async fn search_occurrences(
+    State(state): State<AppState>,
+    Json(request): Json<SearchOccurrencesRequest>,
+) -> Result<Json<SearchOccurrencesResponse>, OccurrenceHandlerError> {
+    let input = SearchOccurrencesInput {
+        limit: request.page.limit,
+        cursor: request.page.cursor,
+    };
+
+    let output =
+        OccurrenceService::search_occurrences(input, state.occurrence_rdf_store.as_ref()).await?;
+
+    Ok(Json(output))
 }
 
 #[utoipa::path(

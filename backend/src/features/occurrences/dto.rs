@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -37,4 +37,25 @@ pub struct SearchOccurrencesPage {
 pub struct SearchOccurrencesResponse {
     pub items: Vec<SearchOccurrenceItem>,
     pub page: SearchOccurrencesPage,
+}
+
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SearchOccurrencesRequest {
+    pub filters: Vec<SearchOccurrenceFilter>,
+    pub page: SearchOccurrencesRequestPage,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SearchOccurrenceFilter {
+    pub predicate: String,
+    pub value: String,
+    pub value_type: String,
+    pub r#match: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SearchOccurrencesRequestPage {
+    pub limit: u32,
+    pub cursor: Option<String>,
 }

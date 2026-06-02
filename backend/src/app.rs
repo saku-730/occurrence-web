@@ -9,7 +9,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     features::{
         auth::handler::{complete_registration, login, logout, me, pre_register},
-        occurrences::handler::{create_occurrence, get_occurrence},
+        occurrences::handler::{create_occurrence, get_occurrence, search_occurrences},
     },
     openapi::ApiDoc,
     state::AppState,
@@ -28,6 +28,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/me", get(me))
         //occurrence
         .route("/occurrences", post(create_occurrence))
+        .route("/occurrences/search", post(search_occurrences))
         .route("/occurrences/{occurrence_id}", get(get_occurrence))
         .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
@@ -65,7 +66,10 @@ mod tests {
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use tower::util::ServiceExt; // oneshot
 
-    use crate::features::occurrences::service::{OccurrenceRdfStore, OccurrenceServiceError};
+    use crate::features::occurrences::service::{
+        OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceStoreRow,
+        SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
+    };
     use oxrdfio::{RdfFormat, RdfParser};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -175,6 +179,8 @@ mod tests {
     struct FakeOccurrenceRdfStore {
         saved_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
         occurrence_nquads_by_uri: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        search_page: Arc<Mutex<Option<SearchOccurrencesStorePage>>>,
+        requested_search_inputs: Arc<Mutex<Vec<(u32, Option<String>)>>>,
     }
 
     impl FakeOccurrenceRdfStore {
@@ -187,6 +193,20 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .insert(occurrence_uri.into(), nquads.into());
+        }
+
+        fn set_search_page(&self, page: SearchOccurrencesStorePage) {
+            *self
+                .search_page
+                .lock()
+                .expect("mutex should not be poisoned") = Some(page);
+        }
+
+        fn requested_search_inputs(&self) -> Vec<(u32, Option<String>)> {
+            self.requested_search_inputs
+                .lock()
+                .expect("mutex should not be poisoned")
+                .clone()
         }
     }
 
@@ -211,6 +231,22 @@ mod tests {
                 .expect("mutex should not be poisoned")
                 .get(occurrence_uri)
                 .cloned())
+        }
+
+        async fn search_occurrences(
+            &self,
+            input: SearchOccurrencesStoreInput,
+        ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
+            self.requested_search_inputs
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push((input.limit, input.cursor));
+
+            self.search_page
+                .lock()
+                .expect("mutex should not be poisoned")
+                .clone()
+                .ok_or(OccurrenceServiceError::StoreFailed)
         }
     }
 
@@ -3297,6 +3333,82 @@ mod tests {
             }),
             "GET /occurrences/{{occurrence_id}} should return public accessRights from real Fuseki"
         );
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_returns_store_results_for_empty_search() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![SearchOccurrenceStoreRow {
+                occurrence_id,
+                occurrence_uri: occurrence_uri.clone(),
+                scientific_name: Some("Quercus serrata".to_string()),
+                basis_of_record: Some("PreservedSpecimen".to_string()),
+                recorded_by: Some("Yamada Taro".to_string()),
+                created: Some("2026-06-02T10:20:30Z".to_string()),
+                modified: Some("2026-06-02T10:20:30Z".to_string()),
+                access_rights: Some("public".to_string()),
+            }],
+            limit: 50,
+            next_cursor: Some("opaque-cursor-string".to_string()),
+            has_next: true,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"filters":[],"page":{"limit":50,"cursor":null}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/json"),
+            "search occurrence response should be JSON"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body_json["items"][0]["occurrence_id"], occurrence_id.to_string());
+        assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
+        assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
+        assert_eq!(body_json["items"][0]["basis_of_record"], "PreservedSpecimen");
+        assert_eq!(body_json["items"][0]["recorded_by"], "Yamada Taro");
+        assert_eq!(body_json["items"][0]["created"], "2026-06-02T10:20:30Z");
+        assert_eq!(body_json["items"][0]["modified"], "2026-06-02T10:20:30Z");
+        assert_eq!(body_json["items"][0]["access_rights"], "public");
+
+        assert_eq!(body_json["page"]["limit"], 50);
+        assert_eq!(body_json["page"]["next_cursor"], "opaque-cursor-string");
+        assert_eq!(body_json["page"]["has_next"], true);
+
+        assert_eq!(store.requested_search_inputs(), vec![(50, None)]);
     }
 
     #[tokio::test]

@@ -182,6 +182,7 @@
 
 ### app
 
+- [x] `POST /occurrences/search`に空filters / limit 50 / cursor nullを送ると、OccurrenceRdfStoreの検索結果を200 OKのJSONで返す`search_occurrences_route_returns_store_results_for_empty_search`
 
 ### service
 
