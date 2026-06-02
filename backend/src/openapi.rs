@@ -16,6 +16,7 @@ use crate::features::occurrences::dto::CreateOccurrenceResponse;
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
         crate::features::occurrences::handler::create_occurrence,
+        crate::features::occurrences::handler::get_occurrence,
     ),
     components(
         schemas(

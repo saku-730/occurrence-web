@@ -129,6 +129,72 @@ RDF本文は N-Quads とする。
 
 ---
 
+## occurrence 検索・一覧API方針
+
+Endpoint。
+
+```http
+POST /occurrences/search
+Content-Type: application/json
+```
+
+空検索は一覧取得として扱う。
+検索結果には閲覧可能な occurrence のみを含める。
+
+Request。
+
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
+      "value": "Quercus serrata",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "cursor": null
+  }
+}
+```
+
+`filters` は空配列を許可する。
+`filters[].predicate` は絶対URIとし、MVP UIでは `dwc:scientificName` のみ選択可能にするが、backend API は任意 predicate URI を受け取れる形にする。
+`filters[].value_type` は `literal` または `uri` とする。
+`filters[].match` は MVP では `exact` のみとする。
+
+Response。
+
+```json
+{
+  "items": [
+    {
+      "occurrence_id": "uuid",
+      "occurrence_uri": "https://bio-database.net/occurrences/uuid",
+      "scientific_name": "Quercus serrata",
+      "basis_of_record": "PreservedSpecimen",
+      "recorded_by": "Yamada Taro",
+      "created": "2026-06-02T10:20:30Z",
+      "modified": "2026-06-02T10:20:30Z",
+      "access_rights": "public"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "next_cursor": "opaque-cursor-string",
+    "has_next": true
+  }
+}
+```
+
+`items` は一覧表示用の代表フィールドのみ返す。
+該当する RDF predicate が存在しないフィールドは `null` を返す。
+RDF全文が必要な場合は `GET /occurrences/{occurrence_id}` を使う。
+
+---
+
 ## occurrence 削除API方針
 
 ```json

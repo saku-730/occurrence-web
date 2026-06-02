@@ -177,3 +177,12 @@
 - [x] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがStoreFailedを返したらそのエラーを伝播する`get_occurrence_propagates_store_failed_error`
 
 ### other
+
+## Occurrence data list
+
+### app
+
+
+### service
+
+- [x] `OccurrenceService::search_occurrences` はOccurrenceRdfStoreの検索結果を一覧レスポンスDTOへ変換する`search_occurrences_maps_store_rows_to_response_dto`

@@ -3,17 +3,21 @@
 ## 基本方針
 
 - MVPでは検索述語を選べるUIを想定する
-- ただし、MVPで選択できる述語は `dwc:scientificName` のみ
+- ただし、MVPでUIから選択できる述語は `dwc:scientificName` のみ
+- backend API は任意の predicate URI を検索条件として受け取れる形にする
 - 空検索は一覧取得として扱う
 - 検索結果は閲覧権限に従ってフィルタする
 
 ---
 
-## MVP検索対象
+## MVP UI検索対象
 
 ```text
 http://rs.tdwg.org/dwc/terms/scientificName
 ```
+
+backend は `filters[].predicate` に絶対URIを受け取る。
+MVP UIでは `dwc:scientificName` のみを選択肢として出すが、API contract は将来の任意述語検索に備えて固定しない。
 
 ---
 
@@ -116,10 +120,12 @@ MVPでは Jena の推論エンジンは使わない。
 
 ## ページネーション
 
-- `limit` / `offset` を使う
+- cursor-based pagination を使う
 - default limit は 50
 - max limit は 100
-- offset の default は 0
+- `cursor` が `null` または未指定の場合は先頭ページを返す
+- cursor は opaque string とし、frontend は中身を解釈しない
+- 並び順は `created desc, occurrence_id desc` を基本とし、同一 `created` のデータでもページ境界が安定するようにする
 
 ---
 
@@ -136,11 +142,83 @@ MVPでは Jena の推論エンジンは使わない。
 ## API例
 
 ```http
-GET /occurrences?predicate=dwc:scientificName&value=Lumbricus%20terrestris&limit=50&offset=0
+POST /occurrences/search
+Content-Type: application/json
+```
+
+空検索、つまり一覧取得。
+
+```json
+{
+  "filters": [],
+  "page": {
+    "limit": 50,
+    "cursor": null
+  }
+}
+```
+
+任意 predicate の検索。
+
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
+      "value": "Lumbricus terrestris",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "cursor": null
+  }
+}
 ```
 
 URI検索の例。
 
-```http
-GET /occurrences?predicate=dwc:scientificName&value=https%3A%2F%2Fexample.org%2Ftaxon%2FMammalia&limit=50&offset=0
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
+      "value": "https://example.org/taxon/Mammalia",
+      "value_type": "uri",
+      "match": "exact"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "cursor": null
+  }
+}
 ```
+
+Response。
+
+```json
+{
+  "items": [
+    {
+      "occurrence_id": "uuid",
+      "occurrence_uri": "https://bio-database.net/occurrences/uuid",
+      "scientific_name": "Quercus serrata",
+      "basis_of_record": "PreservedSpecimen",
+      "recorded_by": "Yamada Taro",
+      "created": "2026-06-02T10:20:30Z",
+      "modified": "2026-06-02T10:20:30Z",
+      "access_rights": "public"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "next_cursor": "opaque-cursor-string",
+    "has_next": true
+  }
+}
+```
+
+一覧用 response は表示に必要な代表フィールドのみ返す。
+RDF全文が必要な場合は `GET /occurrences/{occurrence_id}` で detail を取得する。

@@ -154,7 +154,7 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 - MVPでは選択肢は `dwc:scientificName` のみ
 - 検索値入力
 - 空検索で一覧表示
-- limit/offsetページング
+- cursor-based pagination
 
 ---
 

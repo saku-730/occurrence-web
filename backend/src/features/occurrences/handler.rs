@@ -287,6 +287,46 @@ pub async fn create_occurrence(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/occurrences/{occurrence_id}",
+    params(
+        (
+            "occurrence_id" = Uuid,
+            Path,
+            description = "Occurrence UUID"
+        )
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Occurrence RDF in N-Quads format",
+            body = String,
+            content_type = "application/n-quads"
+        ),
+        (
+            status = 400,
+            description = "Invalid occurrence UUID",
+            body = ErrorResponse
+        ),
+        (
+            status = 404,
+            description = "Occurrence not found or private occurrence is hidden",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Failed to read occurrence RDF from RDF store",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "occurrences"
+)]
 pub async fn get_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,

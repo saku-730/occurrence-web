@@ -3,6 +3,8 @@ use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term, vocab::
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use uuid::Uuid;
 
+use super::dto::{SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesResponse};
+
 #[derive(Debug)]
 pub struct CreateOccurrenceInput {
     //occurrenceデータ作成時の構造体
@@ -35,6 +37,36 @@ pub struct GetOccurrenceOutput {
     pub nquads: Vec<u8>,
 }
 
+pub struct SearchOccurrencesInput {
+    pub limit: u32,
+    pub cursor: Option<String>,
+}
+
+pub struct SearchOccurrencesStoreInput {
+    pub limit: u32,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchOccurrenceStoreRow {
+    pub occurrence_id: Uuid,
+    pub occurrence_uri: String,
+    pub scientific_name: Option<String>,
+    pub basis_of_record: Option<String>,
+    pub recorded_by: Option<String>,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+    pub access_rights: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchOccurrencesStorePage {
+    pub rows: Vec<SearchOccurrenceStoreRow>,
+    pub limit: u32,
+    pub next_cursor: Option<String>,
+    pub has_next: bool,
+}
+
 #[async_trait::async_trait]
 pub trait OccurrenceRdfStore: Send + Sync {
     //rdfストアの粗結合実装。fakeでもfusekiでもどっちでも対応できるようにtrait
@@ -44,6 +76,13 @@ pub trait OccurrenceRdfStore: Send + Sync {
         &self,
         occurrence_uri: &str,
     ) -> Result<Option<Vec<u8>>, OccurrenceServiceError>;
+
+    async fn search_occurrences(
+        &self,
+        _input: SearchOccurrencesStoreInput,
+    ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
+        Err(OccurrenceServiceError::NotImplemented)
+    }
 }
 
 #[derive(Debug)]
@@ -119,6 +158,45 @@ impl OccurrenceService {
         let nquads = store.get_occurrence_nquads(&occurrence_uri).await?;
 
         Ok(nquads.map(|nquads| GetOccurrenceOutput { nquads }))
+    }
+
+    pub async fn search_occurrences<S>(
+        input: SearchOccurrencesInput,
+        store: &S,
+    ) -> Result<SearchOccurrencesResponse, OccurrenceServiceError>
+    where
+        S: OccurrenceRdfStore + ?Sized,
+    {
+        let store_page = store
+            .search_occurrences(SearchOccurrencesStoreInput {
+                limit: input.limit,
+                cursor: input.cursor,
+            })
+            .await?;
+
+        let items = store_page
+            .rows
+            .into_iter()
+            .map(|row| SearchOccurrenceItem {
+                occurrence_id: row.occurrence_id.to_string(),
+                occurrence_uri: row.occurrence_uri,
+                scientific_name: row.scientific_name,
+                basis_of_record: row.basis_of_record,
+                recorded_by: row.recorded_by,
+                created: row.created,
+                modified: row.modified,
+                access_rights: row.access_rights,
+            })
+            .collect();
+
+        Ok(SearchOccurrencesResponse {
+            items,
+            page: SearchOccurrencesPage {
+                limit: store_page.limit,
+                next_cursor: store_page.next_cursor,
+                has_next: store_page.has_next,
+            },
+        })
     }
 }
 
@@ -1285,6 +1363,82 @@ mod tests {
             matches!(result, Err(OccurrenceServiceError::StoreFailed)),
             "store failure should be propagated from get_occurrence"
         );
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_maps_store_rows_to_response_dto() {
+        struct FakeOccurrenceRdfStore {
+            page: SearchOccurrencesStorePage,
+        }
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(None)
+            }
+
+            async fn search_occurrences(
+                &self,
+                input: SearchOccurrencesStoreInput,
+            ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
+                assert_eq!(input.limit, 50);
+                assert_eq!(input.cursor, None);
+                Ok(self.page.clone())
+            }
+        }
+
+        let occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let store = FakeOccurrenceRdfStore {
+            page: SearchOccurrencesStorePage {
+                rows: vec![SearchOccurrenceStoreRow {
+                    occurrence_id,
+                    occurrence_uri: occurrence_uri.clone(),
+                    scientific_name: Some("Quercus serrata".to_string()),
+                    basis_of_record: Some("PreservedSpecimen".to_string()),
+                    recorded_by: Some("Yamada Taro".to_string()),
+                    created: Some("2026-06-02T10:20:30Z".to_string()),
+                    modified: Some("2026-06-02T10:20:30Z".to_string()),
+                    access_rights: Some("public".to_string()),
+                }],
+                limit: 50,
+                next_cursor: Some("opaque-cursor-string".to_string()),
+                has_next: true,
+            },
+        };
+
+        let output = OccurrenceService::search_occurrences(
+            SearchOccurrencesInput {
+                limit: 50,
+                cursor: None,
+            },
+            &store,
+        )
+        .await
+        .expect("search occurrence should succeed");
+
+        assert_eq!(output.items.len(), 1);
+        assert_eq!(output.items[0].occurrence_id, occurrence_id.to_string());
+        assert_eq!(output.items[0].occurrence_uri, occurrence_uri);
+        assert_eq!(output.items[0].scientific_name.as_deref(), Some("Quercus serrata"));
+        assert_eq!(output.items[0].basis_of_record.as_deref(), Some("PreservedSpecimen"));
+        assert_eq!(output.items[0].recorded_by.as_deref(), Some("Yamada Taro"));
+        assert_eq!(output.items[0].created.as_deref(), Some("2026-06-02T10:20:30Z"));
+        assert_eq!(output.items[0].modified.as_deref(), Some("2026-06-02T10:20:30Z"));
+        assert_eq!(output.items[0].access_rights.as_deref(), Some("public"));
+
+        assert_eq!(output.page.limit, 50);
+        assert_eq!(output.page.next_cursor.as_deref(), Some("opaque-cursor-string"));
+        assert!(output.page.has_next);
     }
 
     #[tokio::test]
