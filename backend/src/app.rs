@@ -3084,6 +3084,222 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn get_occurrence_route_allows_admin_to_view_other_users_private_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-admin-private-viewer-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "admin";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let admin_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("admin user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            admin_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let creator_user_id = uuid::Uuid::new_v4();
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+
+        let expected_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+    <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+    "#,
+            occurrence_uri, occurrence_uri, creator_user_id, occurrence_uri,
+        );
+
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), expected_nquads.clone().into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/n-quads"),
+            "admin should receive private occurrence detail as N-Quads"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        assert_eq!(
+            body.as_ref(),
+            expected_nquads.as_bytes(),
+            "admin should receive other user's private occurrence N-Quads"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn get_occurrence_route_returns_nquads_from_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration test");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let fuseki_client = FusekiClient::new(config.fuseki.clone());
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let scientific_name = format!("Real Fuseki detail {}", uuid::Uuid::new_v4());
+
+        let stored_nquads = format!(
+            r#"<{}> <https://example.org/vocab/scientificName> "{}" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri, scientific_name, occurrence_uri,
+        );
+
+        fuseki_client
+            .save_nquads(stored_nquads.into_bytes())
+            .await
+            .expect("test occurrence should be saved to real Fuseki");
+
+        let state = AppState::new(config, posgre, Arc::new(fuseki_client));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/n-quads"),
+            "real Fuseki occurrence detail should be returned as N-Quads"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(body.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("response body should be valid N-Quads");
+
+        let expected_subject = format!("<{}>", occurrence_uri);
+
+        assert!(
+            parsed_quads.iter().any(|quad| {
+                quad.subject.to_string() == expected_subject
+                    && quad.predicate.to_string() == "<https://example.org/vocab/scientificName>"
+                    && quad.object.to_string() == format!("\"{}\"", scientific_name)
+                    && quad.graph_name.to_string()
+                        == "<https://bio-database.net/graphs/occurrences>"
+            }),
+            "GET /occurrences/{{occurrence_id}} should return scientificName from real Fuseki"
+        );
+
+        assert!(
+            parsed_quads.iter().any(|quad| {
+                quad.subject.to_string() == expected_subject
+                    && quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                    && quad.object.to_string()
+                        == "<https://bio-database.net/terms/access-rights/public>"
+                    && quad.graph_name.to_string()
+                        == "<https://bio-database.net/graphs/occurrences>"
+            }),
+            "GET /occurrences/{{occurrence_id}} should return public accessRights from real Fuseki"
+        );
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 
