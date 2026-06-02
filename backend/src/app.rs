@@ -237,16 +237,38 @@ mod tests {
             &self,
             input: SearchOccurrencesStoreInput,
         ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
+            let SearchOccurrencesStoreInput {
+                filters,
+                limit,
+                cursor,
+            } = input;
+
             self.requested_search_inputs
                 .lock()
                 .expect("mutex should not be poisoned")
-                .push((input.limit, input.cursor));
+                .push((limit, cursor));
 
-            self.search_page
+            let mut page = self
+                .search_page
                 .lock()
                 .expect("mutex should not be poisoned")
                 .clone()
-                .ok_or(OccurrenceServiceError::StoreFailed)
+                .ok_or(OccurrenceServiceError::StoreFailed)?;
+
+            if !filters.is_empty() {
+                page.rows.retain(|row| {
+                    filters.iter().all(|filter| {
+                        filter.predicate == "http://rs.tdwg.org/dwc/terms/scientificName"
+                            && filter.value_type == "literal"
+                            && filter.match_type == "exact"
+                            && row.scientific_name.as_deref() == Some(filter.value.as_str())
+                    })
+                });
+                page.has_next = false;
+                page.next_cursor = None;
+            }
+
+            Ok(page)
         }
     }
 
@@ -3409,6 +3431,95 @@ mod tests {
         assert_eq!(body_json["page"]["has_next"], true);
 
         assert_eq!(store.requested_search_inputs(), vec![(50, None)]);
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_applies_filter_to_store_results() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let matching_occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let matching_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            matching_occurrence_id
+        );
+
+        let other_occurrence_id =
+            uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let other_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            other_occurrence_id
+        );
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![
+                SearchOccurrenceStoreRow {
+                    occurrence_id: matching_occurrence_id,
+                    occurrence_uri: matching_occurrence_uri.clone(),
+                    scientific_name: Some("Quercus serrata".to_string()),
+                    basis_of_record: Some("PreservedSpecimen".to_string()),
+                    recorded_by: Some("Yamada Taro".to_string()),
+                    created: Some("2026-06-02T10:20:30Z".to_string()),
+                    modified: Some("2026-06-02T10:20:30Z".to_string()),
+                    access_rights: Some("public".to_string()),
+                },
+                SearchOccurrenceStoreRow {
+                    occurrence_id: other_occurrence_id,
+                    occurrence_uri: other_occurrence_uri,
+                    scientific_name: Some("Acer palmatum".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Suzuki Jiro".to_string()),
+                    created: Some("2026-06-02T10:20:31Z".to_string()),
+                    modified: Some("2026-06-02T10:20:31Z".to_string()),
+                    access_rights: Some("public".to_string()),
+                },
+            ],
+            limit: 50,
+            next_cursor: Some("opaque-cursor-string".to_string()),
+            has_next: true,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "filters":[{
+                                "predicate":"http://rs.tdwg.org/dwc/terms/scientificName",
+                                "value":"Quercus serrata",
+                                "value_type":"literal",
+                                "match":"exact"
+                            }],
+                            "page":{"limit":50,"cursor":null}
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body_json["items"][0]["occurrence_id"],
+            matching_occurrence_id.to_string()
+        );
+        assert_eq!(body_json["items"][0]["occurrence_uri"], matching_occurrence_uri);
+        assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
+        assert_eq!(body_json["page"]["limit"], 50);
+        assert_eq!(body_json["page"]["next_cursor"], serde_json::Value::Null);
+        assert_eq!(body_json["page"]["has_next"], false);
     }
 
     #[tokio::test]
