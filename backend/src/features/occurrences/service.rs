@@ -38,11 +38,21 @@ pub struct GetOccurrenceOutput {
 }
 
 pub struct SearchOccurrencesInput {
+    pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
     pub cursor: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchOccurrenceFilterInput {
+    pub predicate: String,
+    pub value: String,
+    pub value_type: String,
+    pub match_type: String,
+}
+
 pub struct SearchOccurrencesStoreInput {
+    pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
     pub cursor: Option<String>,
 }
@@ -169,6 +179,7 @@ impl OccurrenceService {
     {
         let store_page = store
             .search_occurrences(SearchOccurrencesStoreInput {
+                filters: input.filters,
                 limit: input.limit,
                 cursor: input.cursor,
             })
@@ -1418,6 +1429,7 @@ mod tests {
 
         let output = OccurrenceService::search_occurrences(
             SearchOccurrencesInput {
+                filters: Vec::new(),
                 limit: 50,
                 cursor: None,
             },
@@ -1439,6 +1451,68 @@ mod tests {
         assert_eq!(output.page.limit, 50);
         assert_eq!(output.page.next_cursor.as_deref(), Some("opaque-cursor-string"));
         assert!(output.page.has_next);
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_passes_filters_to_store() {
+        struct FakeOccurrenceRdfStore;
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(None)
+            }
+
+            async fn search_occurrences(
+                &self,
+                input: SearchOccurrencesStoreInput,
+            ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
+                assert_eq!(input.limit, 50);
+                assert_eq!(input.cursor, None);
+                assert_eq!(input.filters.len(), 1);
+                assert_eq!(
+                    input.filters[0],
+                    SearchOccurrenceFilterInput {
+                        predicate: "http://rs.tdwg.org/dwc/terms/scientificName".to_string(),
+                        value: "Quercus serrata".to_string(),
+                        value_type: "literal".to_string(),
+                        match_type: "exact".to_string(),
+                    }
+                );
+
+                Ok(SearchOccurrencesStorePage {
+                    rows: Vec::new(),
+                    limit: 50,
+                    next_cursor: None,
+                    has_next: false,
+                })
+            }
+        }
+
+        let store = FakeOccurrenceRdfStore;
+
+        OccurrenceService::search_occurrences(
+            SearchOccurrencesInput {
+                filters: vec![SearchOccurrenceFilterInput {
+                    predicate: "http://rs.tdwg.org/dwc/terms/scientificName".to_string(),
+                    value: "Quercus serrata".to_string(),
+                    value_type: "literal".to_string(),
+                    match_type: "exact".to_string(),
+                }],
+                limit: 50,
+                cursor: None,
+            },
+            &store,
+        )
+        .await
+        .expect("search occurrence should pass filters to store");
     }
 
     #[tokio::test]

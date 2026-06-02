@@ -187,3 +187,4 @@
 ### service
 
 - [x] `OccurrenceService::search_occurrences` はOccurrenceRdfStoreの検索結果を一覧レスポンスDTOへ変換する`search_occurrences_maps_store_rows_to_response_dto`
+- [x] `OccurrenceService::search_occurrences` はfiltersのpredicate/value/value_type/matchをOccurrenceRdfStoreへ渡す`search_occurrences_passes_filters_to_store`

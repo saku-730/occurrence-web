@@ -24,7 +24,7 @@ use super::{
     dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
     service::{
         CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
-        SearchOccurrencesInput,
+        SearchOccurrenceFilterInput, SearchOccurrencesInput,
     },
 };
 
@@ -292,7 +292,19 @@ pub async fn search_occurrences(
     State(state): State<AppState>,
     Json(request): Json<SearchOccurrencesRequest>,
 ) -> Result<Json<SearchOccurrencesResponse>, OccurrenceHandlerError> {
+    let filters = request
+        .filters
+        .into_iter()
+        .map(|filter| SearchOccurrenceFilterInput {
+            predicate: filter.predicate,
+            value: filter.value,
+            value_type: filter.value_type,
+            match_type: filter.r#match,
+        })
+        .collect();
+
     let input = SearchOccurrencesInput {
+        filters,
         limit: request.page.limit,
         cursor: request.page.cursor,
     };
