@@ -290,6 +290,7 @@ pub async fn create_occurrence(
 
 pub async fn search_occurrences(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<SearchOccurrencesRequest>,
 ) -> Result<Json<SearchOccurrencesResponse>, OccurrenceHandlerError> {
     let filters = request
@@ -309,8 +310,12 @@ pub async fn search_occurrences(
         cursor: request.page.cursor,
     };
 
-    let output =
+    let mut output =
         OccurrenceService::search_occurrences(input, state.occurrence_rdf_store.as_ref()).await?;
+
+    if optional_session_token(&headers).is_none() {
+        output.items.retain(|item| item.access_rights.as_deref() != Some("private"));
+    }
 
     Ok(Json(output))
 }

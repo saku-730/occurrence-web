@@ -3523,6 +3523,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_occurrences_route_hides_private_occurrences_from_anonymous_user() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let public_occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let public_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            public_occurrence_id
+        );
+
+        let private_occurrence_id =
+            uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            private_occurrence_id
+        );
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![
+                SearchOccurrenceStoreRow {
+                    occurrence_id: public_occurrence_id,
+                    occurrence_uri: public_occurrence_uri.clone(),
+                    scientific_name: Some("Quercus serrata".to_string()),
+                    basis_of_record: Some("PreservedSpecimen".to_string()),
+                    recorded_by: Some("Yamada Taro".to_string()),
+                    created: Some("2026-06-02T10:20:30Z".to_string()),
+                    modified: Some("2026-06-02T10:20:30Z".to_string()),
+                    access_rights: Some("public".to_string()),
+                },
+                SearchOccurrenceStoreRow {
+                    occurrence_id: private_occurrence_id,
+                    occurrence_uri: private_occurrence_uri,
+                    scientific_name: Some("Acer palmatum".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Suzuki Jiro".to_string()),
+                    created: Some("2026-06-02T10:20:31Z".to_string()),
+                    modified: Some("2026-06-02T10:20:31Z".to_string()),
+                    access_rights: Some("private".to_string()),
+                },
+            ],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"filters":[],"page":{"limit":50,"cursor":null}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body_json["items"][0]["occurrence_id"],
+            public_occurrence_id.to_string()
+        );
+        assert_eq!(body_json["items"][0]["occurrence_uri"], public_occurrence_uri);
+        assert_eq!(body_json["items"][0]["access_rights"], "public");
+    }
+
+    #[tokio::test]
     async fn get_occurrence_route_returns_not_found_for_missing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 
