@@ -3369,6 +3369,7 @@ mod tests {
             rows: vec![SearchOccurrenceStoreRow {
                 occurrence_id,
                 occurrence_uri: occurrence_uri.clone(),
+                creator_user_id: None,
                 scientific_name: Some("Quercus serrata".to_string()),
                 basis_of_record: Some("PreservedSpecimen".to_string()),
                 recorded_by: Some("Yamada Taro".to_string()),
@@ -3456,6 +3457,7 @@ mod tests {
                 SearchOccurrenceStoreRow {
                     occurrence_id: matching_occurrence_id,
                     occurrence_uri: matching_occurrence_uri.clone(),
+                    creator_user_id: None,
                     scientific_name: Some("Quercus serrata".to_string()),
                     basis_of_record: Some("PreservedSpecimen".to_string()),
                     recorded_by: Some("Yamada Taro".to_string()),
@@ -3466,6 +3468,7 @@ mod tests {
                 SearchOccurrenceStoreRow {
                     occurrence_id: other_occurrence_id,
                     occurrence_uri: other_occurrence_uri,
+                    creator_user_id: None,
                     scientific_name: Some("Acer palmatum".to_string()),
                     basis_of_record: Some("HumanObservation".to_string()),
                     recorded_by: Some("Suzuki Jiro".to_string()),
@@ -3545,6 +3548,7 @@ mod tests {
                 SearchOccurrenceStoreRow {
                     occurrence_id: public_occurrence_id,
                     occurrence_uri: public_occurrence_uri.clone(),
+                    creator_user_id: None,
                     scientific_name: Some("Quercus serrata".to_string()),
                     basis_of_record: Some("PreservedSpecimen".to_string()),
                     recorded_by: Some("Yamada Taro".to_string()),
@@ -3555,6 +3559,7 @@ mod tests {
                 SearchOccurrenceStoreRow {
                     occurrence_id: private_occurrence_id,
                     occurrence_uri: private_occurrence_uri,
+                    creator_user_id: None,
                     scientific_name: Some("Acer palmatum".to_string()),
                     basis_of_record: Some("HumanObservation".to_string()),
                     recorded_by: Some("Suzuki Jiro".to_string()),
@@ -3598,6 +3603,136 @@ mod tests {
         );
         assert_eq!(body_json["items"][0]["occurrence_uri"], public_occurrence_uri);
         assert_eq!(body_json["items"][0]["access_rights"], "public");
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_hides_other_users_private_occurrences_from_editor() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-search-private-viewer-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-search-private-viewer";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let viewer_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("viewer user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            viewer_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let public_occurrence_id = uuid::Uuid::new_v4();
+        let public_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            public_occurrence_id
+        );
+        let own_private_occurrence_id = uuid::Uuid::new_v4();
+        let own_private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            own_private_occurrence_id
+        );
+        let other_private_occurrence_id = uuid::Uuid::new_v4();
+        let other_private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            other_private_occurrence_id
+        );
+        let other_creator_user_id = uuid::Uuid::new_v4();
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![
+                SearchOccurrenceStoreRow {
+                    occurrence_id: public_occurrence_id,
+                    occurrence_uri: public_occurrence_uri.clone(),
+                    creator_user_id: Some(other_creator_user_id),
+                    scientific_name: Some("Quercus serrata".to_string()),
+                    basis_of_record: Some("PreservedSpecimen".to_string()),
+                    recorded_by: Some("Yamada Taro".to_string()),
+                    created: Some("2026-06-02T10:20:30Z".to_string()),
+                    modified: Some("2026-06-02T10:20:30Z".to_string()),
+                    access_rights: Some("public".to_string()),
+                },
+                SearchOccurrenceStoreRow {
+                    occurrence_id: own_private_occurrence_id,
+                    occurrence_uri: own_private_occurrence_uri.clone(),
+                    creator_user_id: Some(viewer_user_id),
+                    scientific_name: Some("Acer palmatum".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Suzuki Jiro".to_string()),
+                    created: Some("2026-06-02T10:20:31Z".to_string()),
+                    modified: Some("2026-06-02T10:20:31Z".to_string()),
+                    access_rights: Some("private".to_string()),
+                },
+                SearchOccurrenceStoreRow {
+                    occurrence_id: other_private_occurrence_id,
+                    occurrence_uri: other_private_occurrence_uri,
+                    creator_user_id: Some(other_creator_user_id),
+                    scientific_name: Some("Pinus densiflora".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Sato Saburo".to_string()),
+                    created: Some("2026-06-02T10:20:32Z".to_string()),
+                    modified: Some("2026-06-02T10:20:32Z".to_string()),
+                    access_rights: Some("private".to_string()),
+                },
+            ],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(
+                        r#"{"filters":[],"page":{"limit":50,"cursor":null}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let items = body_json["items"].as_array().expect("items should be array");
+
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|item| item["occurrence_id"] == public_occurrence_id.to_string()));
+        assert!(items.iter().any(|item| item["occurrence_id"] == own_private_occurrence_id.to_string()));
+        assert!(!items.iter().any(|item| item["occurrence_id"] == other_private_occurrence_id.to_string()));
     }
 
     #[tokio::test]

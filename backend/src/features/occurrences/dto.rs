@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PrepareOccurrenceResponse {
@@ -18,6 +19,8 @@ pub struct CreateOccurrenceResponse {
 pub struct SearchOccurrenceItem {
     pub occurrence_id: String,
     pub occurrence_uri: String,
+    #[serde(skip_serializing)]
+    pub creator_user_id: Option<Uuid>,
     pub scientific_name: Option<String>,
     pub basis_of_record: Option<String>,
     pub recorded_by: Option<String>,

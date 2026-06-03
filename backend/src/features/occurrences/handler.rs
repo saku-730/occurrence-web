@@ -313,8 +313,26 @@ pub async fn search_occurrences(
     let mut output =
         OccurrenceService::search_occurrences(input, state.occurrence_rdf_store.as_ref()).await?;
 
-    if optional_session_token(&headers).is_none() {
-        output.items.retain(|item| item.access_rights.as_deref() != Some("private"));
+    match optional_session_token(&headers) { //private確認
+        None => {
+            output.items.retain(|item| item.access_rights.as_deref() != Some("private")); //sessionなければprivate除外
+        }
+        Some(session_token) => {
+            let current_user = match AuthService::current_user(&state.posgre, session_token).await {
+                Ok(current_user) => current_user,
+                Err(AuthServiceError::InvalidSession) => {
+                    output.items.retain(|item| item.access_rights.as_deref() != Some("private"));
+                    return Ok(Json(output));
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            output.items.retain(|item| {
+                item.access_rights.as_deref() != Some("private")
+                    || current_user.role == "admin"
+                    || item.creator_user_id == Some(current_user.user_id)
+            });
+        }
     }
 
     Ok(Json(output))

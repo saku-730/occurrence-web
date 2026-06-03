@@ -61,6 +61,7 @@ pub struct SearchOccurrencesStoreInput {
 pub struct SearchOccurrenceStoreRow {
     pub occurrence_id: Uuid,
     pub occurrence_uri: String,
+    pub creator_user_id: Option<Uuid>,
     pub scientific_name: Option<String>,
     pub basis_of_record: Option<String>,
     pub recorded_by: Option<String>,
@@ -191,6 +192,7 @@ impl OccurrenceService {
             .map(|row| SearchOccurrenceItem {
                 occurrence_id: row.occurrence_id.to_string(),
                 occurrence_uri: row.occurrence_uri,
+                creator_user_id: row.creator_user_id,
                 scientific_name: row.scientific_name,
                 basis_of_record: row.basis_of_record,
                 recorded_by: row.recorded_by,
@@ -1414,6 +1416,7 @@ mod tests {
                 rows: vec![SearchOccurrenceStoreRow {
                     occurrence_id,
                     occurrence_uri: occurrence_uri.clone(),
+                    creator_user_id: None,
                     scientific_name: Some("Quercus serrata".to_string()),
                     basis_of_record: Some("PreservedSpecimen".to_string()),
                     recorded_by: Some("Yamada Taro".to_string()),
