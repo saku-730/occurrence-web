@@ -153,10 +153,16 @@ impl OccurrenceRdfStore for FusekiClient {
             });
         }
 
+        let next_cursor = if has_next {
+            rows.last().map(search_next_cursor)
+        } else {
+            None
+        };
+
         Ok(SearchOccurrencesStorePage {
             rows,
             limit,
-            next_cursor: None,
+            next_cursor,
             has_next,
         })
     }
@@ -289,6 +295,15 @@ fn escape_sparql_literal(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
+    let cursor = serde_json::json!({
+        "created": row.created.as_deref().unwrap_or(""),
+        "occurrence_uri": row.occurrence_uri,
+    });
+
+    hex::encode(cursor.to_string())
 }
 
 fn binding_value(binding: &serde_json::Value, name: &str) -> Option<String> {
