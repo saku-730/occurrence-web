@@ -191,3 +191,8 @@
 
 - [x] `OccurrenceService::search_occurrences` はOccurrenceRdfStoreの検索結果を一覧レスポンスDTOへ変換する`search_occurrences_maps_store_rows_to_response_dto`
 - [x] `OccurrenceService::search_occurrences` はfiltersのpredicate/value/value_type/matchをOccurrenceRdfStoreへ渡す`search_occurrences_passes_filters_to_store`
+
+### other
+
+- [x] `FusekiClient::search_occurrences` は実Fusekiに保存されたoccurrenceをfilter付き検索で一覧取得できる（ignored）`fuseki_client_search_occurrences_returns_saved_occurrence_from_real_fuseki`
+- [ ] `FusekiClient::search_occurrences` は実Fuseki検索でデータがlimitを超えるとlimit件だけ返しnext_cursorを生成する（ignored）`fuseki_client_search_occurrences_returns_next_cursor_when_results_exceed_limit`
