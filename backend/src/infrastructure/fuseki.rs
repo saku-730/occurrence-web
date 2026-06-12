@@ -308,7 +308,7 @@ fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
     hex::encode(cursor.to_string())
 }
 
-fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {
+fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {//only created
     let Some(cursor) = cursor else {
         return Ok(String::new());
     };

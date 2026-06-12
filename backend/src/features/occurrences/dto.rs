@@ -59,6 +59,6 @@ pub struct SearchOccurrenceFilter {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchOccurrencesRequestPage {
-    pub limit: u32,
+    pub limit: Option<u32>,
     pub cursor: Option<String>,
 }

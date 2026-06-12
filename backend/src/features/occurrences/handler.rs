@@ -306,7 +306,8 @@ pub async fn search_occurrences(
 
     let input = SearchOccurrencesInput {
         filters,
-        limit: request.page.limit,
+        // limitを省略した検索リクエストではMVPの既定値として50件を取得する。
+        limit: request.page.limit.unwrap_or(50),
         cursor: request.page.cursor,
     };
 
