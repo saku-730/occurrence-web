@@ -69,6 +69,7 @@ impl OccurrenceRdfStore for FusekiClient {
         let creator_predicate = "http://purl.org/dc/terms/creator";
 
         let filter_patterns = build_search_filter_patterns(&input.filters)?;
+        let cursor_filter = build_search_cursor_filter(input.cursor.as_deref())?;
         let limit = input.limit.max(1);
         let query_limit = limit + 1;
 
@@ -80,6 +81,7 @@ impl OccurrenceRdfStore for FusekiClient {
                 ?occurrence ?p ?o .
                 FILTER(STRSTARTS(STR(?occurrence), "{occurrence_uri_base}"))
                 {filter_patterns}
+                {cursor_filter}
                 OPTIONAL {{ ?occurrence <{scientific_name_predicate}> ?scientificName . }}
                 OPTIONAL {{ ?occurrence <{basis_of_record_predicate}> ?basisOfRecord . }}
                 OPTIONAL {{ ?occurrence <{recorded_by_predicate}> ?recordedBy . }}
@@ -304,6 +306,36 @@ fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
     });
 
     hex::encode(cursor.to_string())
+}
+
+fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {
+    let Some(cursor) = cursor else {
+        return Ok(String::new());
+    };
+
+    let bytes = hex::decode(cursor).map_err(|_| OccurrenceServiceError::StoreFailed)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+    let created = value["created"]
+        .as_str()
+        .ok_or(OccurrenceServiceError::StoreFailed)?;
+    let occurrence_uri = value["occurrence_uri"]
+        .as_str()
+        .ok_or(OccurrenceServiceError::StoreFailed)?;
+
+    let created_literal = escape_sparql_literal(created);
+    let occurrence_uri = escape_sparql_literal(occurrence_uri);
+
+    Ok(format!(
+        r#"FILTER(
+                  ?created < "{created_literal}"^^<http://www.w3.org/2001/XMLSchema#dateTime>
+                  || (
+                    ?created = "{created_literal}"^^<http://www.w3.org/2001/XMLSchema#dateTime>
+                    && STR(?occurrence) < "{occurrence_uri}"
+                  )
+                )"#
+    ))
 }
 
 fn binding_value(binding: &serde_json::Value, name: &str) -> Option<String> {
@@ -636,6 +668,127 @@ mod tests {
             page.next_cursor.is_some(),
             "search should return next_cursor when results exceed limit"
         );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_search_occurrences_uses_cursor_to_return_next_page() {
+        use crate::features::occurrences::service::{
+            SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,
+        };
+
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let scientific_name = format!("Cursor target {}", Uuid::new_v4());
+
+        let newer_occurrence_id = Uuid::new_v4();
+        let newer_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            newer_occurrence_id
+        );
+        let older_occurrence_id = Uuid::new_v4();
+        let older_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            older_occurrence_id
+        );
+
+        let nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+"#,
+            newer_occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            newer_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            newer_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            newer_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+            older_occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            older_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            older_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            older_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+        );
+
+        client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("cursor test N-Quads should be saved to Fuseki");
+
+        let filter = SearchOccurrenceFilterInput {
+            predicate: scientific_name_predicate.to_string(),
+            value: scientific_name,
+            value_type: "literal".to_string(),
+            match_type: "exact".to_string(),
+        };
+
+        let first_page = client
+            .search_occurrences(SearchOccurrencesStoreInput {
+                filters: vec![filter.clone()],
+                limit: 1,
+                cursor: None,
+            })
+            .await
+            .expect("first page should be fetched from real Fuseki");
+
+        assert_eq!(first_page.rows.len(), 1);
+        assert_eq!(first_page.rows[0].occurrence_id, newer_occurrence_id);
+        assert!(first_page.has_next);
+        let cursor = first_page
+            .next_cursor
+            .expect("first page should return next_cursor");
+
+        let second_page = client
+            .search_occurrences(SearchOccurrencesStoreInput {
+                filters: vec![filter],
+                limit: 1,
+                cursor: Some(cursor),
+            })
+            .await
+            .expect("second page should be fetched from real Fuseki using cursor");
+
+        assert_eq!(second_page.rows.len(), 1);
+        assert_eq!(second_page.rows[0].occurrence_id, older_occurrence_id);
+        assert!(!second_page.has_next);
+        assert!(second_page.next_cursor.is_none());
     }
 
     #[tokio::test]
