@@ -8,7 +8,7 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use oxrdf::Term;
+use oxrdf::{NamedNode, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use uuid::Uuid;
 
@@ -45,6 +45,7 @@ pub enum OccurrenceHandlerError {
     InvalidLicense,         //licenseが仕様外
     InvalidBlankNodeSubject, //blank node subjectが仕様外
     InvalidObjectBlankNode,  //object blank nodeは拒否
+    InvalidSearchFilter,     //検索filterが仕様外
     NotFound,              //
 }
 
@@ -204,6 +205,14 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
+            OccurrenceHandlerError::InvalidSearchFilter => {
+                let body = ErrorResponse {
+                    error: "invalid_search_filter".to_string(),
+                    message: "Invalid search filter".to_string(),
+                };
+
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+            }
             OccurrenceHandlerError::NotFound => {
                 let body = ErrorResponse {
                     error: "occurrence_not_found".to_string(),
@@ -296,13 +305,33 @@ pub async fn search_occurrences(
     let filters = request
         .filters
         .into_iter()
-        .map(|filter| SearchOccurrenceFilterInput {
-            predicate: filter.predicate,
-            value: filter.value,
-            value_type: filter.value_type,
-            match_type: filter.r#match,
+        .map(|filter| {
+            // predicateはSPARQLの述語IRIとして使うため、http/httpsの絶対URIだけを受け付ける。
+            if !(filter.predicate.starts_with("http://")
+                || filter.predicate.starts_with("https://"))
+                || NamedNode::new(filter.predicate.as_str()).is_err()
+            {
+                return Err(OccurrenceHandlerError::InvalidSearchFilter);
+            }
+
+            // RDF検索では目的語をliteralまたはURIとしてだけ扱う。
+            if filter.value_type != "literal" && filter.value_type != "uri" {
+                return Err(OccurrenceHandlerError::InvalidSearchFilter);
+            }
+
+            // MVPでは完全一致検索だけを提供する。
+            if filter.r#match != "exact" {
+                return Err(OccurrenceHandlerError::InvalidSearchFilter);
+            }
+
+            Ok(SearchOccurrenceFilterInput {
+                predicate: filter.predicate,
+                value: filter.value,
+                value_type: filter.value_type,
+                match_type: filter.r#match,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let input = SearchOccurrencesInput {
         filters,

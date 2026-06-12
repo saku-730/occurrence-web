@@ -3579,6 +3579,138 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_occurrences_route_rejects_invalid_filter_value_type() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "filters":[{
+                                "predicate":"http://rs.tdwg.org/dwc/terms/scientificName",
+                                "value":"Quercus serrata",
+                                "value_type":"number",
+                                "match":"exact"
+                            }],
+                            "page":{"limit":50,"cursor":null}
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            store.requested_search_inputs().is_empty(),
+            "invalid filter value_type should be rejected before searching OccurrenceRdfStore"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_rejects_invalid_filter_match() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "filters":[{
+                                "predicate":"http://rs.tdwg.org/dwc/terms/scientificName",
+                                "value":"Quercus",
+                                "value_type":"literal",
+                                "match":"contains"
+                            }],
+                            "page":{"limit":50,"cursor":null}
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            store.requested_search_inputs().is_empty(),
+            "invalid filter match should be rejected before searching OccurrenceRdfStore"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_rejects_non_absolute_filter_predicate() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "filters":[{
+                                "predicate":"dwc:scientificName",
+                                "value":"Quercus serrata",
+                                "value_type":"literal",
+                                "match":"exact"
+                            }],
+                            "page":{"limit":50,"cursor":null}
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            store.requested_search_inputs().is_empty(),
+            "non-absolute filter predicate should be rejected before searching OccurrenceRdfStore"
+        );
+    }
+
+    #[tokio::test]
     async fn search_occurrences_route_hides_private_occurrences_from_anonymous_user() {
         let store = FakeOccurrenceRdfStore::default();
 
