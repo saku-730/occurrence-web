@@ -185,6 +185,8 @@
 - [x] `POST /occurrences/search`に空filters / limit 50 / cursor nullを送ると、OccurrenceRdfStoreの検索結果を200 OKのJSONで返す`search_occurrences_route_returns_store_results_for_empty_search`
 - [x] `POST /occurrences/search`でpage.limitを省略するとdefault limit 50で検索し、OccurrenceRdfStoreにlimit 50が渡る`search_occurrences_route_defaults_limit_to_50_when_omitted`
 - [x] `POST /occurrences/search`にscientificName filterを送ると、filterに一致するOccurrenceRdfStoreの検索結果だけを200 OKのJSONで返す`search_occurrences_route_applies_filter_to_store_results`
+- [x] `POST /occurrences/search`のliteral exact検索は大文字小文字を区別せず一致する`search_occurrences_route_matches_literal_filter_case_insensitively`
+- [x] `POST /occurrences/search`のliteral exact検索は検索値の前後空白を無視して一致する`search_occurrences_route_trims_literal_filter_value`
 - [x] `POST /occurrences/search`でfilters[].value_typeがliteralまたはuri以外なら400 Bad Requestを返し、OccurrenceRdfStoreへ検索しない`search_occurrences_route_rejects_invalid_filter_value_type`
 - [x] `POST /occurrences/search`でfilters[].matchがexact以外なら400 Bad Requestを返し、OccurrenceRdfStoreへ検索しない`search_occurrences_route_rejects_invalid_filter_match`
 - [x] `POST /occurrences/search`でfilters[].predicateが絶対URIでなければ400 Bad Requestを返し、OccurrenceRdfStoreへ検索しない`search_occurrences_route_rejects_non_absolute_filter_predicate`

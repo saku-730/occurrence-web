@@ -264,20 +264,29 @@ fn build_search_filter_patterns(
 ) -> Result<String, OccurrenceServiceError> {
     let mut patterns = Vec::new();
 
-    for filter in filters {
+    for (index, filter) in filters.iter().enumerate() {
         if filter.match_type != "exact" {
             return Err(OccurrenceServiceError::StoreFailed);
         }
 
         let predicate = escape_sparql_iri(&filter.predicate)?;
 
-        let object = match filter.value_type.as_str() {
-            "literal" => format!("\"{}\"", escape_sparql_literal(&filter.value)),
-            "uri" => format!("<{}>", escape_sparql_iri(&filter.value)?),
-            _ => return Err(OccurrenceServiceError::StoreFailed),
-        };
+        match filter.value_type.as_str() {
+            "literal" => {
+                let object_var = format!("?filterObject{}", index);
+                let value = escape_sparql_literal(&filter.value.trim().to_lowercase());
 
-        patterns.push(format!("?occurrence <{}> {} .", predicate, object));
+                patterns.push(format!(
+                    "?occurrence <{}> {} . FILTER(isLiteral({}) && LCASE(STR({})) = \"{}\")",
+                    predicate, object_var, object_var, object_var, value
+                ));
+            }
+            "uri" => {
+                let object = format!("<{}>", escape_sparql_iri(&filter.value)?);
+                patterns.push(format!("?occurrence <{}> {} .", predicate, object));
+            }
+            _ => return Err(OccurrenceServiceError::StoreFailed),
+        }
     }
 
     Ok(patterns.join("\n"))
