@@ -574,6 +574,241 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    async fn fuseki_client_search_occurrences_matches_uri_filter_object_from_real_fuseki() {
+        use crate::features::occurrences::service::{
+            SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,
+        };
+
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let public_occurrence_id = Uuid::new_v4();
+        let public_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            public_occurrence_id
+        );
+        let private_occurrence_id = Uuid::new_v4();
+        let private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            private_occurrence_id
+        );
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let private_access_rights_uri = "https://bio-database.net/terms/access-rights/private";
+        let scientific_name = format!("Uri filter target {}", Uuid::new_v4());
+
+        let nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+"#,
+            public_occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            public_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            public_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            public_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+            private_occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            private_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            private_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            private_occurrence_uri,
+            access_rights_predicate,
+            private_access_rights_uri,
+            graph_uri,
+        );
+
+        client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("URI filter test N-Quads should be saved to Fuseki");
+
+        let page = client
+            .search_occurrences(SearchOccurrencesStoreInput {
+                filters: vec![
+                    SearchOccurrenceFilterInput {
+                        predicate: scientific_name_predicate.to_string(),
+                        value: scientific_name,
+                        value_type: "literal".to_string(),
+                        match_type: "exact".to_string(),
+                    },
+                    SearchOccurrenceFilterInput {
+                        predicate: access_rights_predicate.to_string(),
+                        value: public_access_rights_uri.to_string(),
+                        value_type: "uri".to_string(),
+                        match_type: "exact".to_string(),
+                    },
+                ],
+                limit: 50,
+                cursor: None,
+            })
+            .await
+            .expect("URI filter search should fetch rows from real Fuseki");
+
+        assert_eq!(page.limit, 50);
+        assert_eq!(page.rows.len(), 1);
+        assert!(!page.has_next);
+        assert!(page.next_cursor.is_none());
+
+        let row = &page.rows[0];
+        assert_eq!(row.occurrence_id, public_occurrence_id);
+        assert_eq!(row.occurrence_uri, public_occurrence_uri);
+        assert_eq!(row.access_rights.as_deref(), Some("public"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki() {
+        use crate::features::occurrences::service::{
+            SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,
+        };
+
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let matching_occurrence_id = Uuid::new_v4();
+        let matching_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            matching_occurrence_id
+        );
+        let other_occurrence_id = Uuid::new_v4();
+        let other_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            other_occurrence_id
+        );
+
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let recorded_by_predicate = "http://rs.tdwg.org/dwc/terms/recordedBy";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let matching_recorded_by = format!("RecordedBy target {}", Uuid::new_v4());
+        let other_recorded_by = format!("RecordedBy other {}", Uuid::new_v4());
+
+        let nquads = format!(
+            r#"<{}> <{}> "Quercus serrata" <{}> .
+<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+<{}> <{}> "Quercus serrata" <{}> .
+<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+"#,
+            matching_occurrence_uri,
+            scientific_name_predicate,
+            graph_uri,
+            matching_occurrence_uri,
+            recorded_by_predicate,
+            matching_recorded_by,
+            graph_uri,
+            matching_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            matching_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            matching_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+            other_occurrence_uri,
+            scientific_name_predicate,
+            graph_uri,
+            other_occurrence_uri,
+            recorded_by_predicate,
+            other_recorded_by,
+            graph_uri,
+            other_occurrence_uri,
+            created_predicate,
+            graph_uri,
+            other_occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            other_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+        );
+
+        client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("non-scientificName filter test N-Quads should be saved to Fuseki");
+
+        let page = client
+            .search_occurrences(SearchOccurrencesStoreInput {
+                filters: vec![SearchOccurrenceFilterInput {
+                    predicate: recorded_by_predicate.to_string(),
+                    value: matching_recorded_by.clone(),
+                    value_type: "literal".to_string(),
+                    match_type: "exact".to_string(),
+                }],
+                limit: 50,
+                cursor: None,
+            })
+            .await
+            .expect("non-scientificName filter search should fetch rows from real Fuseki");
+
+        assert_eq!(page.limit, 50);
+        assert_eq!(page.rows.len(), 1);
+        assert!(!page.has_next);
+        assert!(page.next_cursor.is_none());
+
+        let row = &page.rows[0];
+        assert_eq!(row.occurrence_id, matching_occurrence_id);
+        assert_eq!(row.occurrence_uri, matching_occurrence_uri);
+        assert_eq!(row.recorded_by.as_deref(), Some(matching_recorded_by.as_str()));
+    }
+
+    #[tokio::test]
+    #[ignore]
     async fn fuseki_client_search_occurrences_returns_next_cursor_when_results_exceed_limit() {
         use crate::features::occurrences::service::{
             SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,

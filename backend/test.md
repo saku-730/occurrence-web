@@ -201,5 +201,7 @@
 ### other
 
 - [x] `FusekiClient::search_occurrences` は実Fusekiに保存されたoccurrenceをfilter付き検索で一覧取得できる（ignored）`fuseki_client_search_occurrences_returns_saved_occurrence_from_real_fuseki`
+- [x] `FusekiClient::search_occurrences` はvalue_type=uriのfilterでobject URIに一致するoccurrenceを実Fusekiから取得できる（ignored）`fuseki_client_search_occurrences_matches_uri_filter_object_from_real_fuseki`
+- [x] `FusekiClient::search_occurrences` はscientificName以外のpredicate filterでも実Fusekiから一致するoccurrenceを取得できる（ignored）`fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki`
 - [x] `FusekiClient::search_occurrences` は実Fuseki検索でデータがlimitを超えるとlimit件だけ返しnext_cursorを生成する（ignored）`fuseki_client_search_occurrences_returns_next_cursor_when_results_exceed_limit`
 - [x] `FusekiClient::search_occurrences` はcursorを渡すと実Fuseki検索の次ページを取得できる（ignored）`fuseki_client_search_occurrences_uses_cursor_to_return_next_page`
