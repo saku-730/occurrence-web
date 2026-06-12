@@ -31,6 +31,7 @@ pub struct SearchOccurrenceItem {
 
 #[derive(Debug, Serialize, PartialEq, ToSchema)]
 pub struct SearchOccurrencesPage {
+    #[schema(default = 50, example = 50)]
     pub limit: u32,
     pub next_cursor: Option<String>,
     pub has_next: bool,
@@ -59,6 +60,7 @@ pub struct SearchOccurrenceFilter {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchOccurrencesRequestPage {
+    #[schema(default = 50, example = 50)]
     pub limit: Option<u32>,
     pub cursor: Option<String>,
 }

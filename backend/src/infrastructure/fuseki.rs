@@ -1,7 +1,7 @@
 use crate::config::FusekiConfig;
 use crate::features::occurrences::service::{
     OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceFilterInput,
-    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
+    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage, SearchVisibility,
 };
 
 #[derive(Clone)]
@@ -65,10 +65,9 @@ impl OccurrenceRdfStore for FusekiClient {
         let recorded_by_predicate = "http://rs.tdwg.org/dwc/terms/recordedBy";
         let created_predicate = "http://purl.org/dc/terms/created";
         let modified_predicate = "http://purl.org/dc/terms/modified";
-        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
-        let creator_predicate = "http://purl.org/dc/terms/creator";
 
         let filter_patterns = build_search_filter_patterns(&input.filters)?;
+        let visibility_patterns = build_search_visibility_patterns(&input.visibility)?;
         let cursor_filter = build_search_cursor_filter(input.cursor.as_deref())?;
         let limit = input.limit.max(1);
         let query_limit = limit + 1;
@@ -81,14 +80,13 @@ impl OccurrenceRdfStore for FusekiClient {
                 ?occurrence ?p ?o .
                 FILTER(STRSTARTS(STR(?occurrence), "{occurrence_uri_base}"))
                 {filter_patterns}
+                {visibility_patterns}
                 {cursor_filter}
                 OPTIONAL {{ ?occurrence <{scientific_name_predicate}> ?scientificName . }}
                 OPTIONAL {{ ?occurrence <{basis_of_record_predicate}> ?basisOfRecord . }}
                 OPTIONAL {{ ?occurrence <{recorded_by_predicate}> ?recordedBy . }}
                 OPTIONAL {{ ?occurrence <{created_predicate}> ?created . }}
                 OPTIONAL {{ ?occurrence <{modified_predicate}> ?modified . }}
-                OPTIONAL {{ ?occurrence <{access_rights_predicate}> ?accessRights . }}
-                OPTIONAL {{ ?occurrence <{creator_predicate}> ?creator . }}
               }}
             }}
             ORDER BY DESC(?created) DESC(?occurrence)
@@ -257,6 +255,38 @@ impl OccurrenceRdfStore for FusekiClient {
 
         Ok(Some(nquads))
     }
+}
+
+fn build_search_visibility_patterns(
+    visibility: &SearchVisibility,
+) -> Result<String, OccurrenceServiceError> {
+    let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+    let creator_predicate = "http://purl.org/dc/terms/creator";
+    let private_access_rights_uri = "https://bio-database.net/terms/access-rights/private";
+
+    let patterns = match visibility {
+        SearchVisibility::All => format!(
+            r#"OPTIONAL {{ ?occurrence <{access_rights_predicate}> ?accessRights . }}
+                OPTIONAL {{ ?occurrence <{creator_predicate}> ?creator . }}"#
+        ),
+        SearchVisibility::PublicOnly => format!(
+            r#"OPTIONAL {{ ?occurrence <{access_rights_predicate}> ?accessRights . }}
+                OPTIONAL {{ ?occurrence <{creator_predicate}> ?creator . }}
+                FILTER(!BOUND(?accessRights) || ?accessRights != <{private_access_rights_uri}>)"#
+        ),
+        SearchVisibility::PublicOrOwnPrivate { user_id } => {
+            let user_uri = format!("https://bio-database.net/users/{}", user_id);
+            let user_uri = escape_sparql_iri(&user_uri)?;
+
+            format!(
+                r#"OPTIONAL {{ ?occurrence <{access_rights_predicate}> ?accessRights . }}
+                OPTIONAL {{ ?occurrence <{creator_predicate}> ?creator . }}
+                FILTER(!BOUND(?accessRights) || ?accessRights != <{private_access_rights_uri}> || ?creator = <{user_uri}>)"#
+            )
+        }
+    };
+
+    Ok(patterns)
 }
 
 fn build_search_filter_patterns(
@@ -551,6 +581,7 @@ mod tests {
                 }],
                 limit: 50,
                 cursor: None,
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("occurrence search should fetch rows from real Fuseki");
@@ -674,6 +705,7 @@ mod tests {
                 ],
                 limit: 50,
                 cursor: None,
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("URI filter search should fetch rows from real Fuseki");
@@ -792,6 +824,7 @@ mod tests {
                 }],
                 limit: 50,
                 cursor: None,
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("non-scientificName filter search should fetch rows from real Fuseki");
@@ -900,6 +933,7 @@ mod tests {
                 }],
                 limit: 1,
                 cursor: None,
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("occurrence search should fetch the first limited page from real Fuseki");
@@ -1009,6 +1043,7 @@ mod tests {
                 filters: vec![filter.clone()],
                 limit: 1,
                 cursor: None,
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("first page should be fetched from real Fuseki");
@@ -1025,6 +1060,7 @@ mod tests {
                 filters: vec![filter],
                 limit: 1,
                 cursor: Some(cursor),
+                visibility: SearchVisibility::All,
             })
             .await
             .expect("second page should be fetched from real Fuseki using cursor");

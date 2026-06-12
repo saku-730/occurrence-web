@@ -24,7 +24,7 @@ use super::{
     dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
     service::{
         CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
-        SearchOccurrenceFilterInput, SearchOccurrencesInput,
+        SearchOccurrenceFilterInput, SearchOccurrencesInput, SearchVisibility,
     },
 };
 
@@ -297,6 +297,39 @@ pub async fn create_occurrence(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+
+#[utoipa::path(
+    post,
+    path = "/occurrences/search",
+    request_body(
+        content = SearchOccurrencesRequest,
+        content_type = "application/json",
+        description = "Search occurrence list. Filters use absolute predicate URIs, value_type must be literal or uri, and MVP match must be exact. If page.limit is omitted, the backend uses 50."
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Occurrence search results",
+            body = SearchOccurrencesResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid search filter",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Failed to search occurrence RDF store",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "occurrences"
+)]
 pub async fn search_occurrences(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -333,37 +366,28 @@ pub async fn search_occurrences(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let visibility = match optional_session_token(&headers) {
+        None => SearchVisibility::PublicOnly,
+        Some(session_token) => match AuthService::current_user(&state.posgre, session_token).await {
+            Ok(current_user) if current_user.role == "admin" => SearchVisibility::All,
+            Ok(current_user) => SearchVisibility::PublicOrOwnPrivate {
+                user_id: current_user.user_id,
+            },
+            Err(AuthServiceError::InvalidSession) => SearchVisibility::PublicOnly,
+            Err(error) => return Err(error.into()),
+        },
+    };
+
     let input = SearchOccurrencesInput {
         filters,
         // limitを省略した検索リクエストではMVPの既定値として50件を取得する。
         limit: request.page.limit.unwrap_or(50),
         cursor: request.page.cursor,
+        visibility,
     };
 
-    let mut output =
+    let output =
         OccurrenceService::search_occurrences(input, state.occurrence_rdf_store.as_ref()).await?;
-
-    match optional_session_token(&headers) { //private確認
-        None => {
-            output.items.retain(|item| item.access_rights.as_deref() != Some("private")); //sessionなければprivate除外
-        }
-        Some(session_token) => {
-            let current_user = match AuthService::current_user(&state.posgre, session_token).await {
-                Ok(current_user) => current_user,
-                Err(AuthServiceError::InvalidSession) => {
-                    output.items.retain(|item| item.access_rights.as_deref() != Some("private"));
-                    return Ok(Json(output));
-                }
-                Err(error) => return Err(error.into()),
-            };
-
-            output.items.retain(|item| {
-                item.access_rights.as_deref() != Some("private")
-                    || current_user.role == "admin"
-                    || item.creator_user_id == Some(current_user.user_id)
-            });
-        }
-    }
 
     Ok(Json(output))
 }

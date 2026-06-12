@@ -41,6 +41,7 @@ pub struct SearchOccurrencesInput {
     pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
     pub cursor: Option<String>,
+    pub visibility: SearchVisibility,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +56,14 @@ pub struct SearchOccurrencesStoreInput {
     pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
     pub cursor: Option<String>,
+    pub visibility: SearchVisibility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchVisibility {
+    PublicOnly,
+    PublicOrOwnPrivate { user_id: Uuid },
+    All,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +192,7 @@ impl OccurrenceService {
                 filters: input.filters,
                 limit: input.limit,
                 cursor: input.cursor,
+                visibility: input.visibility,
             })
             .await?;
 
@@ -1403,6 +1413,7 @@ mod tests {
             ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
                 assert_eq!(input.limit, 50);
                 assert_eq!(input.cursor, None);
+                assert_eq!(input.visibility, SearchVisibility::All);
                 Ok(self.page.clone())
             }
         }
@@ -1435,6 +1446,7 @@ mod tests {
                 filters: Vec::new(),
                 limit: 50,
                 cursor: None,
+                visibility: SearchVisibility::All,
             },
             &store,
         )
@@ -1479,6 +1491,7 @@ mod tests {
             ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
                 assert_eq!(input.limit, 50);
                 assert_eq!(input.cursor, None);
+                assert_eq!(input.visibility, SearchVisibility::All);
                 assert_eq!(input.filters.len(), 1);
                 assert_eq!(
                     input.filters[0],
@@ -1511,6 +1524,7 @@ mod tests {
                 }],
                 limit: 50,
                 cursor: None,
+                visibility: SearchVisibility::All,
             },
             &store,
         )

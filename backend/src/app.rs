@@ -68,7 +68,7 @@ mod tests {
 
     use crate::features::occurrences::service::{
         OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceStoreRow,
-        SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
+        SearchOccurrencesStoreInput, SearchOccurrencesStorePage, SearchVisibility,
     };
     use oxrdfio::{RdfFormat, RdfParser};
     use std::collections::HashMap;
@@ -241,6 +241,7 @@ mod tests {
                 filters,
                 limit,
                 cursor,
+                visibility,
             } = input;
 
             self.requested_search_inputs
@@ -255,6 +256,20 @@ mod tests {
                 .clone()
                 .ok_or(OccurrenceServiceError::StoreFailed)?;
 
+            let row_count_before_visibility = page.rows.len();
+
+            page.rows.retain(|row| match &visibility {
+                SearchVisibility::PublicOnly => row.access_rights.as_deref() != Some("private"),
+                SearchVisibility::PublicOrOwnPrivate { user_id } => {
+                    row.access_rights.as_deref() != Some("private")
+                        || row.creator_user_id == Some(*user_id)
+                }
+                SearchVisibility::All => true,
+            });
+
+            let visibility_removed_all_rows =
+                row_count_before_visibility > 0 && page.rows.is_empty();
+
             if !filters.is_empty() {
                 page.rows.retain(|row| {
                     filters.iter().all(|filter| {
@@ -266,6 +281,9 @@ mod tests {
                             })
                     })
                 });
+            }
+
+            if visibility_removed_all_rows || !filters.is_empty() {
                 page.has_next = false;
                 page.next_cursor = None;
             }
@@ -3360,6 +3378,139 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn search_occurrences_route_returns_results_from_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration test");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let fuseki_client = FusekiClient::new(config.fuseki.clone());
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let scientific_name = format!("Real app search target {}", uuid::Uuid::new_v4());
+
+        let nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+"#,
+            occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            occurrence_uri,
+            created_predicate,
+            graph_uri,
+            occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            graph_uri,
+        );
+
+        fuseki_client
+            .save_nquads(nquads.into_bytes())
+            .await
+            .expect("test occurrence should be saved to real Fuseki");
+
+        let state = AppState::new(config, posgre, Arc::new(fuseki_client));
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{
+                            "filters":[{{
+                                "predicate":"{}",
+                                "value":"{}",
+                                "value_type":"literal",
+                                "match":"exact"
+                            }}],
+                            "page":{{"limit":50,"cursor":null}}
+                        }}"#,
+                        scientific_name_predicate, scientific_name
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/json"),
+            "search occurrence response should be JSON"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body_json["items"][0]["occurrence_id"], occurrence_id.to_string());
+        assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
+        assert_eq!(body_json["items"][0]["scientific_name"], scientific_name);
+        assert_eq!(body_json["items"][0]["created"], "2026-06-02T10:20:30Z");
+        assert_eq!(body_json["items"][0]["modified"], "2026-06-02T10:20:30Z");
+        assert_eq!(body_json["items"][0]["access_rights"], "public");
+        assert_eq!(body_json["page"]["limit"], 50);
+        assert_eq!(body_json["page"]["next_cursor"], serde_json::Value::Null);
+        assert_eq!(body_json["page"]["has_next"], false);
+    }
+
+    #[tokio::test]
     async fn search_occurrences_route_returns_store_results_for_empty_search() {
         let store = FakeOccurrenceRdfStore::default();
 
@@ -3924,6 +4075,80 @@ mod tests {
         );
         assert_eq!(body_json["items"][0]["occurrence_uri"], public_occurrence_uri);
         assert_eq!(body_json["items"][0]["access_rights"], "public");
+    }
+
+    #[tokio::test]
+    async fn search_occurrences_route_returns_empty_page_when_only_private_results_are_available_to_anonymous_user() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let first_private_occurrence_id =
+            uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let first_private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            first_private_occurrence_id
+        );
+        let second_private_occurrence_id =
+            uuid::Uuid::parse_str("770e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let second_private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            second_private_occurrence_id
+        );
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![
+                SearchOccurrenceStoreRow {
+                    occurrence_id: first_private_occurrence_id,
+                    occurrence_uri: first_private_occurrence_uri,
+                    creator_user_id: None,
+                    scientific_name: Some("Acer palmatum".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Suzuki Jiro".to_string()),
+                    created: Some("2026-06-02T10:20:31Z".to_string()),
+                    modified: Some("2026-06-02T10:20:31Z".to_string()),
+                    access_rights: Some("private".to_string()),
+                },
+                SearchOccurrenceStoreRow {
+                    occurrence_id: second_private_occurrence_id,
+                    occurrence_uri: second_private_occurrence_uri,
+                    creator_user_id: None,
+                    scientific_name: Some("Acer japonicum".to_string()),
+                    basis_of_record: Some("HumanObservation".to_string()),
+                    recorded_by: Some("Suzuki Jiro".to_string()),
+                    created: Some("2026-06-02T10:20:30Z".to_string()),
+                    modified: Some("2026-06-02T10:20:30Z".to_string()),
+                    access_rights: Some("private".to_string()),
+                },
+            ],
+            limit: 1,
+            next_cursor: Some("cursor-after-private-row".to_string()),
+            has_next: true,
+        });
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"filters":[],"page":{"limit":1,"cursor":null}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["items"].as_array().unwrap().len(), 0);
+        assert_eq!(body_json["page"]["limit"], 1);
+        assert_eq!(body_json["page"]["next_cursor"], serde_json::Value::Null);
+        assert_eq!(body_json["page"]["has_next"], false);
     }
 
     #[tokio::test]

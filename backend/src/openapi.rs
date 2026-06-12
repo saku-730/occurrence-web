@@ -5,7 +5,10 @@ use crate::features::auth::dto::{
     LoginRequest, LoginResponse, LogoutResponse, RegisterRequest, RegisterResponse,
 };
 
-use crate::features::occurrences::dto::CreateOccurrenceResponse;
+use crate::features::occurrences::dto::{
+    CreateOccurrenceResponse, SearchOccurrenceFilter, SearchOccurrenceItem, SearchOccurrencesPage,
+    SearchOccurrencesRequest, SearchOccurrencesRequestPage, SearchOccurrencesResponse,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -16,6 +19,7 @@ use crate::features::occurrences::dto::CreateOccurrenceResponse;
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
         crate::features::occurrences::handler::create_occurrence,
+        crate::features::occurrences::handler::search_occurrences,
         crate::features::occurrences::handler::get_occurrence,
     ),
     components(
@@ -30,6 +34,12 @@ use crate::features::occurrences::dto::CreateOccurrenceResponse;
             LogoutResponse, 
             CurrentUserResponse,
             CreateOccurrenceResponse,
+            SearchOccurrenceItem,
+            SearchOccurrencesPage,
+            SearchOccurrencesResponse,
+            SearchOccurrencesRequest,
+            SearchOccurrenceFilter,
+            SearchOccurrencesRequestPage,
         )
     ),
     tags(
