@@ -312,8 +312,31 @@ fn build_search_filter_patterns(
                 ));
             }
             "uri" => {
+                let object_var = format!("?filterObject{}", index);
                 let object = format!("<{}>", escape_sparql_iri(&filter.value)?);
-                patterns.push(format!("?occurrence <{}> {} .", predicate, object));
+                let taxonomy_graph_uri = "https://bio-database.net/graphs/taxonomy";
+                let subclass_of_predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+
+                // URI filterは完全一致に加えて、外部taxonomy graphのsubClassOf階層も辿る。
+                patterns.push(format!(
+                    r#"?occurrence <{}> {} .
+                    FILTER(
+                        {} = {}
+                        || EXISTS {{
+                            GRAPH <{}> {{
+                                {} <{}>+ {} .
+                            }}
+                        }}
+                    )"#,
+                    predicate,
+                    object_var,
+                    object_var,
+                    object,
+                    taxonomy_graph_uri,
+                    object_var,
+                    subclass_of_predicate,
+                    object
+                ));
             }
             _ => return Err(OccurrenceServiceError::StoreFailed),
         }
@@ -718,6 +741,135 @@ mod tests {
         let row = &page.rows[0];
         assert_eq!(row.occurrence_id, public_occurrence_id);
         assert_eq!(row.occurrence_uri, public_occurrence_uri);
+        assert_eq!(row.access_rights.as_deref(), Some("public"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_search_occurrences_matches_uri_filter_with_subclass_from_real_fuseki() {
+        use crate::features::occurrences::service::{
+            SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,
+        };
+
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+
+        let matching_occurrence_id = Uuid::new_v4();
+        let matching_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            matching_occurrence_id
+        );
+        let other_occurrence_id = Uuid::new_v4();
+        let other_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            other_occurrence_id
+        );
+
+        let occurrence_graph_uri = "https://bio-database.net/graphs/occurrences";
+        let taxonomy_graph_uri = "https://bio-database.net/graphs/taxonomy";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let subclass_of_predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let parent_taxon_uri = format!("https://bio-database.net/taxonomy/parent-{}", Uuid::new_v4());
+        let child_taxon_uri = format!("https://bio-database.net/taxonomy/child-{}", Uuid::new_v4());
+        let other_taxon_uri = format!("https://bio-database.net/taxonomy/other-{}", Uuid::new_v4());
+
+        // 外部オントロジーマスター相当の taxonomy graph を先に投入する。
+        let taxonomy_nquads = format!(
+            r#"<{}> <{}> <{}> <{}> .
+"#,
+            child_taxon_uri,
+            subclass_of_predicate,
+            parent_taxon_uri,
+            taxonomy_graph_uri,
+        );
+
+        client
+            .save_nquads(taxonomy_nquads.into_bytes())
+            .await
+            .expect("taxonomy master N-Quads should be saved to Fuseki");
+
+        let occurrence_nquads = format!(
+            r#"<{}> <{}> <{}> <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:31Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+<{}> <{}> <{}> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <{}> <{}> .
+"#,
+            matching_occurrence_uri,
+            scientific_name_predicate,
+            child_taxon_uri,
+            occurrence_graph_uri,
+            matching_occurrence_uri,
+            created_predicate,
+            occurrence_graph_uri,
+            matching_occurrence_uri,
+            modified_predicate,
+            occurrence_graph_uri,
+            matching_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            occurrence_graph_uri,
+            other_occurrence_uri,
+            scientific_name_predicate,
+            other_taxon_uri,
+            occurrence_graph_uri,
+            other_occurrence_uri,
+            created_predicate,
+            occurrence_graph_uri,
+            other_occurrence_uri,
+            modified_predicate,
+            occurrence_graph_uri,
+            other_occurrence_uri,
+            access_rights_predicate,
+            public_access_rights_uri,
+            occurrence_graph_uri,
+        );
+
+        client
+            .save_nquads(occurrence_nquads.into_bytes())
+            .await
+            .expect("occurrence N-Quads should be saved to Fuseki");
+
+        let page = client
+            .search_occurrences(SearchOccurrencesStoreInput {
+                filters: vec![SearchOccurrenceFilterInput {
+                    predicate: scientific_name_predicate.to_string(),
+                    value: parent_taxon_uri,
+                    value_type: "uri".to_string(),
+                    match_type: "exact".to_string(),
+                }],
+                limit: 50,
+                cursor: None,
+                visibility: SearchVisibility::All,
+            })
+            .await
+            .expect("URI subclass filter search should fetch rows from real Fuseki");
+
+        assert_eq!(page.limit, 50);
+        assert_eq!(page.rows.len(), 1);
+        assert!(!page.has_next);
+        assert!(page.next_cursor.is_none());
+
+        let row = &page.rows[0];
+        assert_eq!(row.occurrence_id, matching_occurrence_id);
+        assert_eq!(row.occurrence_uri, matching_occurrence_uri);
+        assert_eq!(row.scientific_name.as_deref(), Some(child_taxon_uri.as_str()));
         assert_eq!(row.access_rights.as_deref(), Some("public"));
     }
 

@@ -4152,6 +4152,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_occurrences_route_allows_editor_to_view_own_private_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-search-own-private-viewer-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-search-own-private-viewer";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let viewer_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("viewer user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            viewer_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let own_private_occurrence_id = uuid::Uuid::new_v4();
+        let own_private_occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            own_private_occurrence_id
+        );
+
+        store.set_search_page(SearchOccurrencesStorePage {
+            rows: vec![SearchOccurrenceStoreRow {
+                occurrence_id: own_private_occurrence_id,
+                occurrence_uri: own_private_occurrence_uri.clone(),
+                creator_user_id: Some(viewer_user_id),
+                scientific_name: Some("Acer palmatum".to_string()),
+                basis_of_record: Some("HumanObservation".to_string()),
+                recorded_by: Some("Suzuki Jiro".to_string()),
+                created: Some("2026-06-02T10:20:31Z".to_string()),
+                modified: Some("2026-06-02T10:20:31Z".to_string()),
+                access_rights: Some("private".to_string()),
+            }],
+            limit: 50,
+            next_cursor: None,
+            has_next: false,
+        });
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences/search")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(
+                        r#"{"filters":[],"page":{"limit":50,"cursor":null}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let items = body_json["items"].as_array().expect("items should be array");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["occurrence_id"], own_private_occurrence_id.to_string());
+        assert_eq!(items[0]["occurrence_uri"], own_private_occurrence_uri);
+        assert_eq!(items[0]["access_rights"], "private");
+    }
+
+    #[tokio::test]
     async fn search_occurrences_route_hides_other_users_private_occurrences_from_editor() {
         let store = FakeOccurrenceRdfStore::default();
 

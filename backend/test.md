@@ -192,6 +192,7 @@
 - [x] `POST /occurrences/search`でfilters[].predicateが絶対URIでなければ400 Bad Requestを返し、OccurrenceRdfStoreへ検索しない`search_occurrences_route_rejects_non_absolute_filter_predicate`
 - [x] 非ログインユーザーが`POST /occurrences/search`で一覧取得したときprivate occurrenceは表示されない`search_occurrences_route_hides_private_occurrences_from_anonymous_user`
 - [x] 非ログインユーザーの一覧取得でprivate occurrenceしか取得できない場合、itemsは空でhas_next=false/next_cursor=nullになる`search_occurrences_route_returns_empty_page_when_only_private_results_are_available_to_anonymous_user`
+- [x] ログイン済みeditorが`POST /occurrences/search`で一覧取得したとき自分のprivate occurrenceを表示できる`search_occurrences_route_allows_editor_to_view_own_private_occurrence`
 - [x] ログイン済みeditorが`POST /occurrences/search`で一覧取得したとき他人のprivate occurrenceは表示されない`search_occurrences_route_hides_other_users_private_occurrences_from_editor`
 
 ### service
@@ -203,6 +204,7 @@
 
 - [x] `FusekiClient::search_occurrences` は実Fusekiに保存されたoccurrenceをfilter付き検索で一覧取得できる（ignored）`fuseki_client_search_occurrences_returns_saved_occurrence_from_real_fuseki`
 - [x] `FusekiClient::search_occurrences` はvalue_type=uriのfilterでobject URIに一致するoccurrenceを実Fusekiから取得できる（ignored）`fuseki_client_search_occurrences_matches_uri_filter_object_from_real_fuseki`
+- [x] `FusekiClient::search_occurrences` はvalue_type=uriのfilterでrdfs:subClassOf階層を辿り、下位taxonのoccurrenceを実Fusekiから取得できる（ignored）`fuseki_client_search_occurrences_matches_uri_filter_with_subclass_from_real_fuseki`
 - [x] `FusekiClient::search_occurrences` はscientificName以外のpredicate filterでも実Fusekiから一致するoccurrenceを取得できる（ignored）`fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki`
 - [x] `FusekiClient::search_occurrences` は実Fuseki検索でデータがlimitを超えるとlimit件だけ返しnext_cursorを生成する（ignored）`fuseki_client_search_occurrences_returns_next_cursor_when_results_exceed_limit`
 - [x] `FusekiClient::search_occurrences` はcursorを渡すと実Fuseki検索の次ページを取得できる（ignored）`fuseki_client_search_occurrences_uses_cursor_to_return_next_page`
