@@ -9,7 +9,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     features::{
         auth::handler::{complete_registration, login, logout, me, pre_register},
-        occurrences::handler::{create_occurrence, get_occurrence, search_occurrences},
+        occurrences::handler::{create_occurrence, get_occurrence, search_occurrences, update_occurrence},
     },
     openapi::ApiDoc,
     state::AppState,
@@ -29,7 +29,7 @@ pub fn build_app(state: AppState) -> Router {
         //occurrence
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
-        .route("/occurrences/{occurrence_id}", get(get_occurrence))
+        .route("/occurrences/{occurrence_id}", get(get_occurrence).put(update_occurrence))
         .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }

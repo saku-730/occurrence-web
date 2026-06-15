@@ -475,6 +475,14 @@ pub async fn get_occurrence(
         .into_response())
 }
 
+pub async fn update_occurrence(
+    State(_state): State<AppState>,
+    Path(_occurrence_id): Path<Uuid>,
+    _body: Bytes,
+) -> Result<Response, OccurrenceHandlerError> {
+    Err(OccurrenceHandlerError::NotImplemented)
+}
+
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";
 const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";

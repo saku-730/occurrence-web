@@ -148,6 +148,12 @@
 - [x] フロントからobject blank nodeが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_object_blank_node`
 - [x] フロントからvalidなaccessRights public/privateが送られていたらbuild後も保持される`build_occurrence_nquads_keeps_valid_access_rights_values`
 
+## occurrence data update
+
+### service
+
+- [x] `OccurrenceService::update_occurrence` は既存creator/createdを維持し、modifiedを更新して、同じoccurrence URIで置換保存する`update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri`
+
 ### repository
 
 ### other

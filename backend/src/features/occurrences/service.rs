@@ -37,6 +37,17 @@ pub struct GetOccurrenceOutput {
     pub nquads: Vec<u8>,
 }
 
+pub struct UpdateOccurrenceInput {
+    pub occurrence_id: Uuid,
+    pub rdf_body: Vec<u8>,
+}
+
+pub struct UpdateOccurrenceOutput {
+    pub occurrence_id: Uuid,
+    pub occurrence_uri: String,
+    pub nquads: Vec<u8>,
+}
+
 pub struct SearchOccurrencesInput {
     pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
@@ -96,6 +107,14 @@ pub trait OccurrenceRdfStore: Send + Sync {
         &self,
         occurrence_uri: &str,
     ) -> Result<Option<Vec<u8>>, OccurrenceServiceError>;
+
+    async fn replace_occurrence_nquads(
+        &self,
+        _occurrence_uri: &str,
+        _nquads: Vec<u8>,
+    ) -> Result<(), OccurrenceServiceError> {
+        Err(OccurrenceServiceError::NotImplemented)
+    }
 
     async fn search_occurrences(
         &self,
@@ -178,6 +197,37 @@ impl OccurrenceService {
         let nquads = store.get_occurrence_nquads(&occurrence_uri).await?;
 
         Ok(nquads.map(|nquads| GetOccurrenceOutput { nquads }))
+    }
+
+    pub async fn update_occurrence<S>(
+        input: UpdateOccurrenceInput,
+        store: &S,
+    ) -> Result<UpdateOccurrenceOutput, OccurrenceServiceError>
+    where
+        S: OccurrenceRdfStore + ?Sized,
+    {
+        let occurrence_uri = build_occurrence_uri(input.occurrence_id);
+
+        let existing_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await?
+            .ok_or(OccurrenceServiceError::StoreFailed)?;
+
+        let nquads = build_updated_occurrence_nquads(
+            &input.rdf_body,
+            &existing_nquads,
+            &occurrence_uri,
+        )?;
+
+        store
+            .replace_occurrence_nquads(&occurrence_uri, nquads.clone())
+            .await?;
+
+        Ok(UpdateOccurrenceOutput {
+            occurrence_id: input.occurrence_id,
+            occurrence_uri,
+            nquads,
+        })
     }
 
     pub async fn search_occurrences<S>(
@@ -490,6 +540,86 @@ fn build_occurrence_nquads(
     add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)?;
 
     serialize_quads_as_nquads(&quads)
+}
+
+fn build_updated_occurrence_nquads(
+    frontend_nquads: &[u8],
+    existing_nquads: &[u8],
+    occurrence_uri: &str,
+) -> Result<Vec<u8>, OccurrenceServiceError> {
+    let existing_quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(existing_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    let preserved_creator = required_backend_managed_object(&existing_quads, CREATOR_PREDICATE_URI)?;
+    let preserved_created = required_backend_managed_object(&existing_quads, CREATED_PREDICATE_URI)?;
+
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(frontend_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    ensure_rdf_contains_at_least_one_quad(&quads)?;
+    ensure_only_occurrence_graph(&quads)?;
+    ensure_single_blank_node_subject(&quads)?;
+    ensure_no_object_blank_node(&quads)?;
+    ensure_no_backend_managed_predicates(&quads)?;
+    ensure_access_rights_is_resource(&quads)?;
+    ensure_license_is_creative_commons_resource(&quads)?;
+
+    let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)?;
+
+    add_backend_managed_object_quad(
+        &mut quads,
+        occurrence_uri,
+        CREATOR_PREDICATE_URI,
+        preserved_creator,
+    )?;
+    add_backend_managed_object_quad(
+        &mut quads,
+        occurrence_uri,
+        CREATED_PREDICATE_URI,
+        preserved_created,
+    )?;
+    add_modified_quad(&mut quads, occurrence_uri, Utc::now())?;
+    add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)?;
+
+    serialize_quads_as_nquads(&quads)
+}
+
+fn required_backend_managed_object(
+    quads: &[Quad],
+    predicate_uri: &str,
+) -> Result<Term, OccurrenceServiceError> {
+    quads
+        .iter()
+        .find(|quad| quad.predicate.as_str() == predicate_uri)
+        .map(|quad| quad.object.clone())
+        .ok_or(OccurrenceServiceError::StoreFailed)
+}
+
+fn add_backend_managed_object_quad(
+    quads: &mut Vec<Quad>,
+    occurrence_uri: &str,
+    predicate_uri: &str,
+    object: Term,
+) -> Result<(), OccurrenceServiceError> {
+    let occurrence_subject =
+        NamedNode::new(occurrence_uri).map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
+    let predicate =
+        NamedNode::new(predicate_uri).map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+    let occurrence_graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidGraphUri)?;
+
+    quads.push(Quad::new(
+        occurrence_subject,
+        predicate,
+        object,
+        GraphName::NamedNode(occurrence_graph),
+    ));
+
+    Ok(())
 }
 
 fn build_occurrence_nquads_with_generated_id(
@@ -1386,6 +1516,131 @@ mod tests {
             matches!(result, Err(OccurrenceServiceError::StoreFailed)),
             "store failure should be propagated from get_occurrence"
         );
+    }
+
+    #[tokio::test]
+    async fn update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri() {
+        use oxrdf::Term;
+        use oxrdfio::{RdfFormat, RdfParser};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct FakeOccurrenceRdfStore {
+            existing_nquads: Vec<u8>,
+            replaced: Arc<Mutex<Option<(String, Vec<u8>)>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(Some(self.existing_nquads.clone()))
+            }
+
+            async fn replace_occurrence_nquads(
+                &self,
+                occurrence_uri: &str,
+                nquads: Vec<u8>,
+            ) -> Result<(), OccurrenceServiceError> {
+                *self.replaced.lock().expect("mutex should not be poisoned") =
+                    Some((occurrence_uri.to_string(), nquads));
+
+                Ok(())
+            }
+        }
+
+        let occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let creator_user_id =
+            uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let creator_uri = format!("https://bio-database.net/users/{}", creator_user_id);
+        let old_created = "2026-06-02T10:20:30Z";
+        let old_modified = "2026-06-02T10:20:30Z";
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Old name" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/created> "{}"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/modified> "{}"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            creator_uri,
+            occurrence_uri,
+            old_created,
+            occurrence_uri,
+            old_modified,
+            occurrence_uri,
+        )
+        .into_bytes();
+
+        let frontend_nquads = br#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated name" <https://bio-database.net/graphs/occurrences> .
+_:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#
+        .to_vec();
+
+        let replaced = Arc::new(Mutex::new(None));
+        let store = FakeOccurrenceRdfStore {
+            existing_nquads,
+            replaced: replaced.clone(),
+        };
+
+        let output = OccurrenceService::update_occurrence(
+            UpdateOccurrenceInput {
+                occurrence_id,
+                rdf_body: frontend_nquads,
+            },
+            &store,
+        )
+        .await
+        .expect("update occurrence should succeed");
+
+        assert_eq!(output.occurrence_id, occurrence_id);
+        assert_eq!(output.occurrence_uri, occurrence_uri);
+
+        let (replaced_occurrence_uri, replaced_nquads) = replaced
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone()
+            .expect("updated N-Quads should be passed to store replacement");
+
+        assert_eq!(replaced_occurrence_uri, occurrence_uri);
+        assert_eq!(output.nquads, replaced_nquads);
+
+        let quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&replaced_nquads)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("updated N-Quads should parse");
+
+        assert!(quads.iter().all(|quad| quad.subject.to_string() == format!("<{}>", occurrence_uri)));
+        assert!(quads.iter().any(|quad| {
+            quad.predicate.as_str() == "http://rs.tdwg.org/dwc/terms/scientificName"
+                && matches!(&quad.object, Term::Literal(literal) if literal.value() == "Updated name")
+        }));
+        assert!(quads.iter().any(|quad| {
+            quad.predicate.as_str() == CREATOR_PREDICATE_URI
+                && matches!(&quad.object, Term::NamedNode(node) if node.as_str() == creator_uri)
+        }));
+        assert!(quads.iter().any(|quad| {
+            quad.predicate.as_str() == CREATED_PREDICATE_URI
+                && matches!(&quad.object, Term::Literal(literal) if literal.value() == old_created)
+        }));
+        assert!(quads.iter().any(|quad| {
+            quad.predicate.as_str() == MODIFIED_PREDICATE_URI
+                && matches!(&quad.object, Term::Literal(literal) if literal.value() != old_modified)
+        }));
+        assert!(quads.iter().any(|quad| {
+            quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI
+                && matches!(&quad.object, Term::NamedNode(node) if node.as_str() == PUBLIC_ACCESS_RIGHTS_URI)
+        }));
     }
 
     #[tokio::test]
