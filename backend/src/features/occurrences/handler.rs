@@ -24,7 +24,7 @@ use super::{
     dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
     service::{
         CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
-        SearchOccurrenceFilterInput, SearchOccurrencesInput, SearchVisibility,
+        SearchOccurrenceFilterInput, SearchOccurrencesInput, SearchVisibility, UpdateOccurrenceInput,
     },
 };
 
@@ -476,11 +476,50 @@ pub async fn get_occurrence(
 }
 
 pub async fn update_occurrence(
-    State(_state): State<AppState>,
-    Path(_occurrence_id): Path<Uuid>,
-    _body: Bytes,
-) -> Result<Response, OccurrenceHandlerError> {
-    Err(OccurrenceHandlerError::NotImplemented)
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(occurrence_id): Path<Uuid>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<CreateOccurrenceResponse>), OccurrenceHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+
+    ensure_supported_rdf_content_type(&headers)?;
+    ensure_non_empty_body(&body)?;
+
+    let existing = OccurrenceService::get_occurrence(
+        GetOccurrenceInput { occurrence_id },
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
+
+    let Some(existing) = existing else {
+        return Err(OccurrenceHandlerError::NotFound);
+    };
+
+    let Some(creator_user_id) = nquads_creator_user_id(&existing.nquads)? else {
+        return Err(OccurrenceHandlerError::NotFound);
+    };
+
+    if current_user.role != "admin" && current_user.user_id != creator_user_id {
+        return Err(OccurrenceHandlerError::NotFound);
+    }
+
+    let output = OccurrenceService::update_occurrence(
+        UpdateOccurrenceInput {
+            occurrence_id,
+            rdf_body: body.to_vec(),
+        },
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
+
+    let response = CreateOccurrenceResponse {
+        occurrence_id: output.occurrence_id.to_string(),
+        occurrence_uri: output.occurrence_uri,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
 }
 
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";

@@ -233,6 +233,19 @@ mod tests {
                 .cloned())
         }
 
+        async fn replace_occurrence_nquads(
+            &self,
+            occurrence_uri: &str,
+            nquads: Vec<u8>,
+        ) -> Result<(), OccurrenceServiceError> {
+            self.occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .insert(occurrence_uri.to_string(), nquads);
+
+            Ok(())
+        }
+
         async fn search_occurrences(
             &self,
             input: SearchOccurrencesStoreInput,
@@ -2829,6 +2842,240 @@ mod tests {
             ask_body["boolean"], true,
             "POST /occurrences should save occurrence data and creator to real Fuseki"
         );
+    }
+
+    #[tokio::test]
+    async fn update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-update-other-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-update-other-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let updater_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("updater user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            updater_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let owner_user_id = uuid::Uuid::new_v4();
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Original name" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/created> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/modified> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            owner_user_id,
+            occurrence_uri,
+            occurrence_uri,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+
+        let frontend_nquads = br#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated by other user" <https://bio-database.net/graphs/occurrences> .
+"#;
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let stored_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return occurrence")
+            .expect("occurrence should still exist");
+
+        assert_eq!(
+            stored_nquads,
+            existing_nquads.as_bytes(),
+            "other user's update attempt should not replace occurrence RDF"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_occurrence_route_with_valid_session_updates_existing_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!("occurrence-update-user-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "occurrence-update-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let created = "2026-06-02T10:20:30Z";
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Old name" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/created> "{}"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/modified> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            user_id,
+            occurrence_uri,
+            created,
+            occurrence_uri,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.into_bytes());
+
+        let frontend_nquads = br#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated name" <https://bio-database.net/graphs/occurrences> .
+_:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#;
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("response should have Content-Type")
+            .to_str()
+            .expect("Content-Type should be valid string");
+
+        assert!(
+            content_type.starts_with("application/json"),
+            "PUT /occurrences/{{occurrence_id}} should return JSON"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["occurrence_id"], occurrence_id.to_string());
+        assert_eq!(body_json["occurrence_uri"], occurrence_uri);
+
+        let updated_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return updated occurrence")
+            .expect("updated occurrence should exist");
+
+        let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&updated_nquads)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("updated N-Quads should parse");
+
+        assert!(parsed_quads.iter().all(|quad| {
+            quad.subject.to_string() == format!("<{}>", occurrence_uri)
+        }));
+        assert!(parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://rs.tdwg.org/dwc/terms/scientificName>"
+                && quad.object.to_string() == "\"Updated name\""
+        }));
+        assert!(parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
+                && quad.object.to_string() == format!("<https://bio-database.net/users/{}>", user_id)
+        }));
+        assert!(parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/created>"
+                && quad.object.to_string()
+                    == format!(
+                        "\"{}\"^^<http://www.w3.org/2001/XMLSchema#dateTime>",
+                        created
+                    )
+        }));
+        assert!(parsed_quads.iter().any(|quad| {
+            quad.predicate.to_string() == "<http://purl.org/dc/terms/accessRights>"
+                && quad.object.to_string()
+                    == "<https://bio-database.net/terms/access-rights/public>"
+        }));
     }
 
     #[tokio::test]

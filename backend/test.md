@@ -148,18 +148,24 @@
 - [x] フロントからobject blank nodeが送られていたらデータ登録を拒否`build_occurrence_nquads_rejects_object_blank_node`
 - [x] フロントからvalidなaccessRights public/privateが送られていたらbuild後も保持される`build_occurrence_nquads_keeps_valid_access_rights_values`
 
-## occurrence data update
-
-### service
-
-- [x] `OccurrenceService::update_occurrence` は既存creator/createdを維持し、modifiedを更新して、同じoccurrence URIで置換保存する`update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri`
-
 ### repository
 
 ### other
 
 - [x] fuseki.rsがfusekiにrdfを保存できる`fuseki_client_save_nquads_inserts_data_into_fuseki`
 - [x] fuseki.rsがfusekiに保存したrdfをoccurrence_idで呼び出しできる`fuseki_client_get_occurrence_nquads_returns_only_requested_occurrence`
+
+## Occurrence data update
+
+### app
+
+- [x] `PUT /occurrences/{occurrence_id}`に有効 session と正しい N-Quads を送ると、既存creator/createdを維持して同じoccurrence URIのRDFを更新できる`update_occurrence_route_with_valid_session_updates_existing_occurrence`
+- [x] ログイン済みeditorが他人のoccurrenceを`PUT /occurrences/{occurrence_id}`で更新しようとすると404になり、RDFは置換されない`update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update`
+
+### service
+
+- [x] `OccurrenceService::update_occurrence` は既存creator/createdを維持し、modifiedを更新して、同じoccurrence URIで置換保存する`update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri`
+
 
 ## Occurrence data detail
 
