@@ -2845,6 +2845,185 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn update_occurrence_route_replaces_existing_occurrence_in_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration test");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let fuseki_client = FusekiClient::new(config.fuseki.clone());
+        let state = AppState::new(config, posgre, Arc::new(fuseki_client.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-real-fuseki-update-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-real-fuseki-update-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let creator_predicate = "http://purl.org/dc/terms/creator";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let old_scientific_name = format!("Old update target {}", uuid::Uuid::new_v4());
+        let new_scientific_name = format!("New update target {}", uuid::Uuid::new_v4());
+
+        let existing_nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+<{}> <{}> <https://bio-database.net/users/{}> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <https://bio-database.net/terms/access-rights/private> <{}> .
+"#,
+            occurrence_uri,
+            scientific_name_predicate,
+            old_scientific_name,
+            graph_uri,
+            occurrence_uri,
+            creator_predicate,
+            user_id,
+            graph_uri,
+            occurrence_uri,
+            created_predicate,
+            graph_uri,
+            occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            occurrence_uri,
+            access_rights_predicate,
+            graph_uri,
+        );
+
+        fuseki_client
+            .save_nquads(existing_nquads.into_bytes())
+            .await
+            .expect("existing occurrence should be saved to real Fuseki");
+
+        let app = build_app(state);
+        let frontend_nquads = format!(
+            r#"_:updated <{}> "{}" <{}> .
+_:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
+"#,
+            scientific_name_predicate,
+            new_scientific_name,
+            graph_uri,
+            access_rights_predicate,
+            graph_uri,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(frontend_nquads.into_bytes()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let updated_nquads = fuseki_client
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("updated occurrence should be fetched from real Fuseki")
+            .expect("updated occurrence should exist in real Fuseki");
+
+        let updated_text = String::from_utf8(updated_nquads)
+            .expect("updated N-Quads should be valid UTF-8 for assertions");
+
+        assert!(
+            updated_text.contains(&new_scientific_name),
+            "updated occurrence should contain new scientificName"
+        );
+        assert!(
+            !updated_text.contains(&old_scientific_name),
+            "updated occurrence should not contain old scientificName"
+        );
+        assert!(
+            updated_text.contains(&format!("<https://bio-database.net/users/{}>", user_id)),
+            "updated occurrence should preserve creator"
+        );
+        assert!(
+            updated_text.contains("\"2026-06-02T10:20:30Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+            "updated occurrence should preserve created"
+        );
+        assert!(
+            updated_text.contains("<https://bio-database.net/terms/access-rights/public>"),
+            "updated occurrence should use frontend accessRights"
+        );
+    }
+
+    #[tokio::test]
     async fn update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update() {
         let store = FakeOccurrenceRdfStore::default();
 

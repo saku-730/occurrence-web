@@ -225,4 +225,5 @@
 
 - [x] app経由で`POST /occurrences`に有効sessionと正しいN-Quadsを送ると、実Fusekiに保存されSPARQL ASKで確認できる（ignored）`create_occurrence_route_saves_data_to_real_fuseki`
 - [x] appの`build_app`に実Fuseki storeを入れると、`POST /occurrences/search`で実Fusekiのoccurrenceを検索できる（ignored）`search_occurrences_route_returns_results_from_real_fuseki`
+- [x] appの`build_app`に実Fuseki storeを入れると、`PUT /occurrences/{occurrence_id}`で実Fusekiの既存occurrenceを置換更新できる（ignored）`update_occurrence_route_replaces_existing_occurrence_in_real_fuseki`
 
