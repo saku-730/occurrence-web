@@ -21,6 +21,7 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::create_occurrence,
         crate::features::occurrences::handler::search_occurrences,
         crate::features::occurrences::handler::get_occurrence,
+        crate::features::occurrences::handler::update_occurrence,
     ),
     components(
         schemas(

@@ -475,6 +475,60 @@ pub async fn get_occurrence(
         .into_response())
 }
 
+#[utoipa::path(
+    put,
+    path = "/occurrences/{occurrence_id}",
+    params(
+        (
+            "occurrence_id" = Uuid,
+            Path,
+            description = "Occurrence UUID"
+        )
+    ),
+    request_body(
+        content = String,
+        content_type = "application/n-quads",
+        description = "Replacement occurrence RDF in N-Quads format. Backend preserves dcterms:creator and dcterms:created, updates dcterms:modified, and replaces all quads for the occurrence URI."
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Occurrence updated",
+            body = CreateOccurrenceResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid occurrence RDF body",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Authentication required",
+            body = ErrorResponse
+        ),
+        (
+            status = 404,
+            description = "Occurrence not found or update is not allowed",
+            body = ErrorResponse
+        ),
+        (
+            status = 415,
+            description = "Content-Type must be application/n-quads",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Failed to replace occurrence RDF in RDF store",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "occurrences"
+)]
 pub async fn update_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
