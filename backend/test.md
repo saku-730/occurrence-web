@@ -160,12 +160,19 @@
 ### app
 
 - [x] `PUT /occurrences/{occurrence_id}`に有効 session と正しい N-Quads を送ると、既存creator/createdを維持して同じoccurrence URIのRDFを更新できる`update_occurrence_route_with_valid_session_updates_existing_occurrence`
+- [x] 非ログインユーザーが`PUT /occurrences/{occurrence_id}`で更新しようとすると401になり、RDFは置換されない`update_occurrence_route_requires_login_and_does_not_update`
 - [x] ログイン済みeditorが他人のoccurrenceを`PUT /occurrences/{occurrence_id}`で更新しようとすると404になり、RDFは置換されない`update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update`
 
 ### service
 
 - [x] `OccurrenceService::update_occurrence` は既存creator/createdを維持し、modifiedを更新して、同じoccurrence URIで置換保存する`update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri`
 
+
+## Occurrence data delete
+
+### service
+
+- [x] `OccurrenceService::delete_occurrence` はoccurrence_idからoccurrence URIを組み立て、そのURIのRDFを削除する`delete_occurrence_deletes_existing_occurrence_nquads_by_occurrence_uri`
 
 ## Occurrence data detail
 

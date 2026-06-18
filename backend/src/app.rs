@@ -3024,6 +3024,69 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
     }
 
     #[tokio::test]
+    async fn update_occurrence_route_requires_login_and_does_not_update() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let creator_user_id = uuid::Uuid::new_v4();
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Original name" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/created> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/modified> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            creator_user_id,
+            occurrence_uri,
+            occurrence_uri,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let app = build_app(state);
+
+        let frontend_nquads = br#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated without login" <https://bio-database.net/graphs/occurrences> .
+"#;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .body(Body::from(frontend_nquads.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["error"], "invalid_session");
+        assert_eq!(body_json["message"], "Invalid session");
+
+        let stored_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return occurrence")
+            .expect("occurrence should still exist");
+
+        assert_eq!(
+            stored_nquads,
+            existing_nquads.as_bytes(),
+            "unauthenticated update attempt should not replace occurrence RDF"
+        );
+    }
+
+    #[tokio::test]
     async fn update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update() {
         let store = FakeOccurrenceRdfStore::default();
 

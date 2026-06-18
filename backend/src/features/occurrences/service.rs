@@ -48,6 +48,14 @@ pub struct UpdateOccurrenceOutput {
     pub nquads: Vec<u8>,
 }
 
+pub struct DeleteOccurrenceInput {
+    pub occurrence_id: Uuid,
+}
+
+pub struct DeleteOccurrenceOutput {
+    pub deleted: bool,
+}
+
 pub struct SearchOccurrencesInput {
     pub filters: Vec<SearchOccurrenceFilterInput>,
     pub limit: u32,
@@ -112,6 +120,13 @@ pub trait OccurrenceRdfStore: Send + Sync {
         &self,
         _occurrence_uri: &str,
         _nquads: Vec<u8>,
+    ) -> Result<(), OccurrenceServiceError> {
+        Err(OccurrenceServiceError::NotImplemented)
+    }
+
+    async fn delete_occurrence_nquads(
+        &self,
+        _occurrence_uri: &str,
     ) -> Result<(), OccurrenceServiceError> {
         Err(OccurrenceServiceError::NotImplemented)
     }
@@ -228,6 +243,25 @@ impl OccurrenceService {
             occurrence_uri,
             nquads,
         })
+    }
+
+    pub async fn delete_occurrence<S>(
+        input: DeleteOccurrenceInput,
+        store: &S,
+    ) -> Result<DeleteOccurrenceOutput, OccurrenceServiceError>
+    where
+        S: OccurrenceRdfStore + ?Sized,
+    {
+        let occurrence_uri = build_occurrence_uri(input.occurrence_id);
+
+        store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await?
+            .ok_or(OccurrenceServiceError::StoreFailed)?;
+
+        store.delete_occurrence_nquads(&occurrence_uri).await?;
+
+        Ok(DeleteOccurrenceOutput { deleted: true })
     }
 
     pub async fn search_occurrences<S>(
@@ -1516,6 +1550,64 @@ mod tests {
             matches!(result, Err(OccurrenceServiceError::StoreFailed)),
             "store failure should be propagated from get_occurrence"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_deletes_existing_occurrence_nquads_by_occurrence_uri() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct FakeOccurrenceRdfStore {
+            deleted_occurrence_uris: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for FakeOccurrenceRdfStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(Some(Vec::new()))
+            }
+
+            async fn delete_occurrence_nquads(
+                &self,
+                occurrence_uri: &str,
+            ) -> Result<(), OccurrenceServiceError> {
+                self.deleted_occurrence_uris
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .push(occurrence_uri.to_string());
+
+                Ok(())
+            }
+        }
+
+        let occurrence_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
+        let expected_occurrence_uri =
+            format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let store = FakeOccurrenceRdfStore::default();
+
+        let output = OccurrenceService::delete_occurrence(
+            DeleteOccurrenceInput { occurrence_id },
+            &store,
+        )
+        .await
+        .expect("delete occurrence should succeed");
+
+        assert!(output.deleted);
+
+        let deleted_occurrence_uris = store
+            .deleted_occurrence_uris
+            .lock()
+            .expect("mutex should not be poisoned");
+
+        assert_eq!(deleted_occurrence_uris.as_slice(), &[expected_occurrence_uri]);
     }
 
     #[tokio::test]
