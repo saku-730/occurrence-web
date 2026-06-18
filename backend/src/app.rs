@@ -3036,6 +3036,160 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn delete_occurrence_route_deletes_existing_occurrence_from_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration test");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let fuseki_client = FusekiClient::new(config.fuseki.clone());
+        let state = AppState::new(config, posgre, Arc::new(fuseki_client.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-real-fuseki-delete-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-real-fuseki-delete-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let creator_predicate = "http://purl.org/dc/terms/creator";
+        let created_predicate = "http://purl.org/dc/terms/created";
+        let modified_predicate = "http://purl.org/dc/terms/modified";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let scientific_name = format!("Delete real Fuseki target {}", uuid::Uuid::new_v4());
+
+        let existing_nquads = format!(
+            r#"<{}> <{}> "{}" <{}> .
+<{}> <{}> <https://bio-database.net/users/{}> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{}> .
+<{}> <{}> <https://bio-database.net/terms/access-rights/private> <{}> .
+"#,
+            occurrence_uri,
+            scientific_name_predicate,
+            scientific_name,
+            graph_uri,
+            occurrence_uri,
+            creator_predicate,
+            user_id,
+            graph_uri,
+            occurrence_uri,
+            created_predicate,
+            graph_uri,
+            occurrence_uri,
+            modified_predicate,
+            graph_uri,
+            occurrence_uri,
+            access_rights_predicate,
+            graph_uri,
+        );
+
+        fuseki_client
+            .save_nquads(existing_nquads.into_bytes())
+            .await
+            .expect("existing occurrence should be saved to real Fuseki");
+
+        let saved = fuseki_client
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("saved occurrence should be fetched from real Fuseki");
+        assert!(saved.is_some(), "test precondition: occurrence should exist before DELETE");
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["deleted"], true);
+
+        let deleted = fuseki_client
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("deleted occurrence lookup should be handled by real Fuseki");
+
+        assert!(deleted.is_none(), "deleted occurrence should not remain in real Fuseki");
+    }
+
+    #[tokio::test]
     async fn delete_occurrence_route_with_valid_session_deletes_existing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 
@@ -3116,6 +3270,150 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             .expect("fake store should handle lookup after delete");
 
         assert!(deleted.is_none(), "deleted occurrence RDF should be removed from store");
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_route_requires_login_and_does_not_delete() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let creator_user_id = uuid::Uuid::new_v4();
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Delete protected target" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            creator_user_id,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["error"], "invalid_session");
+        assert_eq!(body_json["message"], "Invalid session");
+
+        let stored_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return occurrence")
+            .expect("occurrence should still exist");
+
+        assert_eq!(
+            stored_nquads,
+            existing_nquads.as_bytes(),
+            "unauthenticated delete attempt should not remove occurrence RDF"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_delete() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-delete-other-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-delete-other-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let deleter_user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            deleter_user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let creator_user_id = uuid::Uuid::new_v4();
+
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Other user's delete target" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            creator_user_id,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let stored_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return occurrence")
+            .expect("occurrence should still exist");
+
+        assert_eq!(
+            stored_nquads,
+            existing_nquads.as_bytes(),
+            "other user's delete attempt should not remove occurrence RDF"
+        );
     }
 
     #[tokio::test]

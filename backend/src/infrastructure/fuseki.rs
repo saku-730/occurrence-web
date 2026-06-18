@@ -204,6 +204,40 @@ impl OccurrenceRdfStore for FusekiClient {
             .map_err(|_| OccurrenceServiceError::StoreFailed)
     }
 
+    async fn delete_occurrence_nquads(
+        &self,
+        occurrence_uri: &str,
+    ) -> Result<(), OccurrenceServiceError> {
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
+
+        let update = format!(
+            r#"
+            DELETE WHERE {{
+              GRAPH <{graph_uri}> {{
+                <{occurrence_uri}> ?p ?o .
+              }}
+            }}
+            "#
+        );
+
+        let response = self
+            .http
+            .post(self.config.update_url())
+            .basic_auth(&self.config.user, Some(&self.config.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-update")
+            .body(update)
+            .send()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        if !response.status().is_success() {
+            return Err(OccurrenceServiceError::StoreFailed);
+        }
+
+        Ok(())
+    }
+
     async fn get_occurrence_nquads(
         &self,
         occurrence_uri: &str,
