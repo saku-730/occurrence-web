@@ -23,7 +23,7 @@ use crate::{
 use super::{
     dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
     service::{
-        CreateOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
+        CreateOccurrenceInput, DeleteOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
         SearchOccurrenceFilterInput, SearchOccurrencesInput, SearchVisibility, UpdateOccurrenceInput,
     },
 };
@@ -473,6 +473,41 @@ pub async fn get_occurrence(
         output.nquads,
     )
         .into_response())
+}
+
+pub async fn delete_occurrence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(occurrence_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<serde_json::Value>), OccurrenceHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+
+    let existing = OccurrenceService::get_occurrence(
+        GetOccurrenceInput { occurrence_id },
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
+
+    let Some(existing) = existing else {
+        return Err(OccurrenceHandlerError::NotFound);
+    };
+
+    let Some(creator_user_id) = nquads_creator_user_id(&existing.nquads)? else {
+        return Err(OccurrenceHandlerError::NotFound);
+    };
+
+    if current_user.role != "admin" && current_user.user_id != creator_user_id {
+        return Err(OccurrenceHandlerError::NotFound);
+    }
+
+    let output = OccurrenceService::delete_occurrence(
+        DeleteOccurrenceInput { occurrence_id },
+        state.occurrence_rdf_store.as_ref(),
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "deleted": output.deleted }))))
 }
 
 #[utoipa::path(

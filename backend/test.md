@@ -170,6 +170,10 @@
 
 ## Occurrence data delete
 
+### app
+
+- [x] `DELETE /occurrences/{occurrence_id}`に有効 session を送ると、OccurrenceService経由で既存occurrence RDFを削除し`{"deleted":true}`を返す`delete_occurrence_route_with_valid_session_deletes_existing_occurrence`
+
 ### service
 
 - [x] `OccurrenceService::delete_occurrence` はoccurrence_idからoccurrence URIを組み立て、そのURIのRDFを削除する`delete_occurrence_deletes_existing_occurrence_nquads_by_occurrence_uri`

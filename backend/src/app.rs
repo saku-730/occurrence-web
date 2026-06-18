@@ -9,7 +9,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     features::{
         auth::handler::{complete_registration, login, logout, me, pre_register},
-        occurrences::handler::{create_occurrence, get_occurrence, search_occurrences, update_occurrence},
+        occurrences::handler::{create_occurrence, delete_occurrence, get_occurrence, search_occurrences, update_occurrence},
     },
     openapi::ApiDoc,
     state::AppState,
@@ -29,7 +29,7 @@ pub fn build_app(state: AppState) -> Router {
         //occurrence
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
-        .route("/occurrences/{occurrence_id}", get(get_occurrence).put(update_occurrence))
+        .route("/occurrences/{occurrence_id}", get(get_occurrence).put(update_occurrence).delete(delete_occurrence))
         .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }
@@ -242,6 +242,18 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .insert(occurrence_uri.to_string(), nquads);
+
+            Ok(())
+        }
+
+        async fn delete_occurrence_nquads(
+            &self,
+            occurrence_uri: &str,
+        ) -> Result<(), OccurrenceServiceError> {
+            self.occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .remove(occurrence_uri);
 
             Ok(())
         }
@@ -3021,6 +3033,89 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             updated_text.contains("<https://bio-database.net/terms/access-rights/public>"),
             "updated occurrence should use frontend accessRights"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_route_with_valid_session_deletes_existing_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!("occurrence-delete-user-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "occurrence-delete-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Delete target" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            user_id,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["deleted"], true);
+
+        let deleted = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should handle lookup after delete");
+
+        assert!(deleted.is_none(), "deleted occurrence RDF should be removed from store");
     }
 
     #[tokio::test]
