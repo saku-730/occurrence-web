@@ -81,6 +81,12 @@
 - [x] `config.rs` の `Config::from_env` が、`APP_HOST`、`APP_PORT`、`APP_BASE_URL`、`DATABASE_URL` を正しく読むことを確認する
 - [x] Config::from_env が SMTP_HOST、SMTP_PORT、SMTP_USERNAME、SMTP_PASSWORD、SMTP_TLS、MAIL_FROM を正しく読むことを確認する `from_env_reads_app_host_port_base_url_and_database_url`
 
+## Password reset
+
+### service
+
+- [x] 登録済みユーザーの正しい email を `AuthService::request_password_reset` に渡すと、パスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットURLを含む `MailMessage` が作成される。`request_password_reset_creates_reset_email_for_registered_email`
+
 ## Session, Login/Logout
 
 ### app

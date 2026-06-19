@@ -1,6 +1,8 @@
 use super::dto::RegisterResponse;
 use super::repository::AuthRepository;
-use crate::features::auth::mail::{MailMessage, build_registration_completion_email};
+use crate::features::auth::mail::{
+    MailMessage, build_password_reset_email, build_registration_completion_email,
+};
 
 use argon2::{
     Argon2,
@@ -27,6 +29,12 @@ pub enum AuthServiceError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreRegisterOutput {
     pub response: RegisterResponse,
+    pub mail: MailMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordResetOutput {
+    pub email: String,
     pub mail: MailMessage,
 }
 
@@ -89,6 +97,33 @@ impl AuthService {
         let mail = build_registration_completion_email(&email, app_base_url, &token);
 
         Ok(PreRegisterOutput { response, mail })
+    }
+
+    pub async fn request_password_reset(
+        db: &PgPool,
+        app_base_url: &str,
+        email: String,
+    ) -> Result<PasswordResetOutput, AuthServiceError> {
+        // login/pre_registerと同じ正規化を行い、同じメールアドレスを大文字小文字で別扱いしない。
+        let email = email.trim().to_lowercase();
+
+        if !EmailAddress::is_valid(&email) {
+            return Err(AuthServiceError::InvalidEmail);
+        }
+
+        let user = AuthRepository::find_user_by_email(db, &email).await?;
+        let user = user.ok_or(AuthServiceError::InvalidCredentials)?;
+
+        // リセットURLには生tokenを入れるが、DBにはhashだけ保存する。
+        // これによりDBだけ漏洩しても、有効なリセットURLを復元できない。
+        let token = Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        AuthRepository::upsert_password_reset_token(db, user.id, &token_hash).await?;
+
+        let mail = build_password_reset_email(&email, app_base_url, &token);
+
+        Ok(PasswordResetOutput { email, mail })
     }
 
     pub async fn complete_registration(
@@ -534,6 +569,59 @@ mod tests {
         assert!(output.mail.body.contains("token="));
 
         delete_pending_registration_by_email(&db, &email).await;
+    }
+
+    #[tokio::test]
+    async fn request_password_reset_creates_reset_email_for_registered_email() {
+        let db = test_db_pool().await;
+        let email = format!("password-reset-{}@example.com", uuid::Uuid::new_v4());
+        let app_base_url = "http://127.0.0.1:3000";
+        let password_hash = hash_password("password123").expect("password hash should be created");
+
+        // パスワードリセットは登録済みユーザーだけを対象にする。
+        // ここでは送信そのものではなく、DBにtoken hashを保存してMailMessageを組み立てるservice責務を確認する。
+        AuthRepository::create_user(&db, &email, "reset-user", &password_hash)
+            .await
+            .expect("user should be created");
+
+        let result = AuthService::request_password_reset(&db, app_base_url, email.clone()).await;
+
+        assert!(
+            result.is_ok(),
+            "request_password_reset should prepare reset mail for registered email: {:?}",
+            result
+        );
+
+        let output = result.unwrap();
+
+        assert_eq!(output.email, email);
+        assert_eq!(output.mail.to, email);
+        assert!(output.mail.subject.contains("password"));
+        assert!(
+            output
+                .mail
+                .body
+                .contains("http://127.0.0.1:3000/auth/reset_password")
+        );
+        assert!(output.mail.body.contains("token="));
+
+        let token_hash_count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM password_reset_tokens
+            WHERE user_id = (
+                SELECT id
+                FROM users
+                WHERE email = $1
+            )
+            "#,
+        )
+        .bind(&email)
+        .fetch_one(&db)
+        .await
+        .expect("password reset token should be queryable");
+
+        assert_eq!(token_hash_count.0, 1);
     }
 
     #[tokio::test]

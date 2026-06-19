@@ -112,6 +112,25 @@ pub fn build_registration_completion_email(
     }
 }
 
+// パスワードリセットURLも登録メールと同じくbackend base URLから作る。
+// 生tokenはメール本文だけに含め、DBにはhashだけ保存することでDB漏洩時の再利用を防ぐ。
+pub fn build_password_reset_email(to: &str, app_base_url: &str, token: &str) -> MailMessage {
+    let reset_url = format!(
+        "{}/auth/reset_password?token={}",
+        app_base_url.trim_end_matches('/'),
+        token
+    );
+
+    MailMessage {
+        to: to.to_string(),
+        subject: "Reset your password".to_string(),
+        body: format!(
+            "Please reset your password by opening the following URL:\n\n{}",
+            reset_url
+        ),
+    }
+}
+
 #[cfg(test)]
 
 mod tests {

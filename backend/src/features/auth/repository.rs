@@ -271,6 +271,41 @@ impl AuthRepository {
         Ok(())
     }
 
+    pub async fn upsert_password_reset_token(
+        db: &PgPool,
+        user_id: Uuid,
+        token_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        // password_reset_tokensはuser_idを主キーにして、ユーザーごとに最新tokenだけを保持する。
+        // 再発行時に古いtoken_hashを上書きすることで、古いリセットURLを即時に無効化する。
+        sqlx::query!(
+            r#"
+            INSERT INTO password_reset_tokens (
+                user_id,
+                token_hash,
+                expires_at
+            )
+            VALUES (
+                $1,
+                $2,
+                now() + interval '1 hour'
+            )
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+                token_hash = EXCLUDED.token_hash,
+                expires_at = EXCLUDED.expires_at,
+                used_at = NULL,
+                created_at = now()
+            "#,
+            user_id,
+            token_hash
+        )
+        .execute(db)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn revoke_session_by_token_hash(
         //ログアウト時にセッションを無効化
         db: &PgPool,
