@@ -24,6 +24,11 @@ pub struct UserForSession {
     pub user_id: Uuid,
 }
 
+#[derive(Debug)]
+pub struct PasswordResetTokenForUpdate {
+    pub user_id: Uuid,
+}
+
 impl AuthRepository {
     pub async fn create_pending_registration(
         db: &PgPool,
@@ -301,6 +306,70 @@ impl AuthRepository {
             token_hash
         )
         .execute(db)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn find_password_reset_token_by_token_hash_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        token_hash: &str,
+    ) -> Result<Option<PasswordResetTokenForUpdate>, sqlx::Error> {
+        // reset tokenは一度使ったら再利用できない。期限とused_atをSQL側で同時に見る。
+        let row = sqlx::query_as!(
+            PasswordResetTokenForUpdate,
+            r#"
+            SELECT user_id
+            FROM password_reset_tokens
+            WHERE token_hash = $1
+                AND used_at IS NULL
+                AND expires_at > now()
+            "#,
+            token_hash
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        Ok(row)
+    }
+
+    pub async fn update_user_password_hash_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        password_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        // password更新時はupdated_atも更新する。認証情報変更の時刻をusers側に残すため。
+        sqlx::query!(
+            r#"
+            UPDATE users
+            SET password_hash = $2,
+                updated_at = now()
+            WHERE id = $1
+            "#,
+            user_id,
+            password_hash
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_password_reset_token_used_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        token_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        // パスワード更新が成功したtokenは使用済みにする。再送信やリプレイを防ぐため。
+        sqlx::query!(
+            r#"
+            UPDATE password_reset_tokens
+            SET used_at = now()
+            WHERE token_hash = $1
+                AND used_at IS NULL
+            "#,
+            token_hash
+        )
+        .execute(&mut **tx)
         .await?;
 
         Ok(())

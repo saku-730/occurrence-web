@@ -126,6 +126,56 @@ impl AuthService {
         Ok(PasswordResetOutput { email, mail })
     }
 
+    pub async fn reset_password(
+        db: &PgPool,
+        token: String,
+        password: String,
+    ) -> Result<(), AuthServiceError> {
+        let token = token.trim();
+
+        if token.is_empty() {
+            return Err(AuthServiceError::InvalidToken);
+        }
+
+        let password = password.trim();
+
+        if password.is_empty() {
+            return Err(AuthServiceError::InvalidPassword);
+        }
+
+        // 本登録と同じpassword policyを使う。リセット経由だけ弱いpasswordを許さないため。
+        let password_len = password.chars().count();
+        if !(8..=128).contains(&password_len) {
+            return Err(AuthServiceError::InvalidPassword);
+        }
+
+        let token_hash = hash_token(token);
+        let password_hash = hash_password(password)?;
+
+        // token検証、password更新、token使用済み化は一体の操作として扱う。
+        // 途中で失敗した場合に「passwordだけ更新」「tokenだけ使用済み」を避けるためtransactionにする。
+        let mut tx = db.begin().await?;
+
+        let reset_token =
+            AuthRepository::find_password_reset_token_by_token_hash_in_tx(&mut tx, &token_hash)
+                .await?;
+
+        let reset_token = reset_token.ok_or(AuthServiceError::InvalidToken)?;
+
+        AuthRepository::update_user_password_hash_in_tx(
+            &mut tx,
+            reset_token.user_id,
+            &password_hash,
+        )
+        .await?;
+
+        AuthRepository::mark_password_reset_token_used_in_tx(&mut tx, &token_hash).await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     pub async fn complete_registration(
         //登録を完了するための関数
         db: &PgPool,
@@ -628,6 +678,52 @@ mod tests {
         .expect("password reset token should be queryable");
 
         assert_eq!(token_hash_count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn reset_password_updates_password_for_valid_token() {
+        let db = test_db_pool().await;
+        let email = format!("reset-complete-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        // 正常系では、メールで受け取った生tokenをhash化してDB上のreset tokenを探す。
+        // DBにはhashしか保存しないので、漏洩時にもメール本文のtokenを復元できない。
+        AuthRepository::upsert_password_reset_token(&db, user.id, &token_hash)
+            .await
+            .expect("password reset token should be stored");
+
+        let result = AuthService::reset_password(&db, token, "new-password-123".to_string()).await;
+
+        assert!(
+            result.is_ok(),
+            "reset_password should succeed for a valid token: {:?}",
+            result
+        );
+
+        let updated_user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("updated user query should succeed")
+            .expect("updated user should exist");
+
+        assert_ne!(updated_user.password_hash, old_password_hash);
+        assert_ne!(updated_user.password_hash, "new-password-123");
+        assert!(
+            super::verify_password("new-password-123", &updated_user.password_hash).is_ok(),
+            "updated password hash should verify the new password"
+        );
     }
 
     #[tokio::test]

@@ -92,6 +92,7 @@
 ### service
 
 - [x] 登録済みユーザーの正しい email を `AuthService::request_password_reset` に渡すと、パスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットリンクを含む `MailMessage` が作成される。`request_password_reset_creates_reset_email_for_registered_email`
+- [x] 正常なパスワードリセット token と新しいpasswordを `AuthService::reset_password` に渡すと、tokenから対象ユーザーを特定して `users.password_hash` が更新される。`reset_password_updates_password_for_valid_token`
 
 ## Session, Login/Logout
 
