@@ -174,6 +174,8 @@
 
 - [x] `DELETE /occurrences/{occurrence_id}`に有効 session を送ると、OccurrenceService経由で既存occurrence RDFを削除し`{"deleted":true}`を返す`delete_occurrence_route_with_valid_session_deletes_existing_occurrence`
 - [x] 非ログインユーザーが`DELETE /occurrences/{occurrence_id}`で削除しようとすると401になり、RDFは削除されない`delete_occurrence_route_requires_login_and_does_not_delete`
+- [x] ログイン済みユーザーが存在しないoccurrence_idを`DELETE /occurrences/{occurrence_id}`で削除しようとすると404になる`delete_occurrence_route_returns_not_found_for_missing_occurrence`
+- [x] `DELETE /occurrences/{occurrence_id}`でOccurrenceRdfStoreの削除処理が失敗したら502 Bad Gatewayを返す`delete_occurrence_route_when_rdf_store_delete_fails_returns_bad_gateway`
 - [x] ログイン済みeditorが他人のoccurrenceを`DELETE /occurrences/{occurrence_id}`で削除しようとすると404になり、RDFは削除されない`delete_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_delete`
 - [x] `DELETE /occurrences/{occurrence_id}`に有効 session を送ると、実 Fuseki に保存済みの occurrence RDF が削除される（ignored）`delete_occurrence_route_deletes_existing_occurrence_from_real_fuseki`
 

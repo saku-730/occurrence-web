@@ -399,6 +399,52 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct DeleteFailingOccurrenceRdfStore {
+        occurrence_nquads_by_uri: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        attempted_delete_uris: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl DeleteFailingOccurrenceRdfStore {
+        fn insert_occurrence_nquads(&self, occurrence_uri: String, nquads: Vec<u8>) {
+            self.occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .insert(occurrence_uri, nquads);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl OccurrenceRdfStore for DeleteFailingOccurrenceRdfStore {
+        async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+            Ok(())
+        }
+
+        async fn get_occurrence_nquads(
+            &self,
+            occurrence_uri: &str,
+        ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+            Ok(self
+                .occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .get(occurrence_uri)
+                .cloned())
+        }
+
+        async fn delete_occurrence_nquads(
+            &self,
+            occurrence_uri: &str,
+        ) -> Result<(), OccurrenceServiceError> {
+            self.attempted_delete_uris
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(occurrence_uri.to_string());
+
+            Err(OccurrenceServiceError::StoreFailed)
+        }
+    }
+
+    #[derive(Clone, Default)]
     struct FailingOccurrenceRdfStore {
         attempted_nquads: Arc<Mutex<Vec<Vec<u8>>>>,
     }
@@ -3325,6 +3371,158 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             existing_nquads.as_bytes(),
             "unauthenticated delete attempt should not remove occurrence RDF"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_route_returns_not_found_for_missing_occurrence() {
+        let store = FakeOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-delete-missing-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-delete-missing-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let missing_occurrence_id = uuid::Uuid::new_v4();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", missing_occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["error"], "occurrence_not_found");
+        assert_eq!(body_json["message"], "Occurrence not found");
+    }
+
+    #[tokio::test]
+    async fn delete_occurrence_route_when_rdf_store_delete_fails_returns_bad_gateway() {
+        let store = DeleteFailingOccurrenceRdfStore::default();
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "occurrence-delete-store-failure-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let user_name = "occurrence-delete-store-failure-user";
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            user_name,
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let existing_nquads = format!(
+            r#"<{}> <http://rs.tdwg.org/dwc/terms/scientificName> "Delete store failure target" <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
+<{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
+"#,
+            occurrence_uri,
+            occurrence_uri,
+            user_id,
+            occurrence_uri,
+        );
+
+        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.into_bytes());
+
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{}", occurrence_id))
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["error"], "rdf_store_error");
+        assert_eq!(body_json["message"], "Failed to save occurrence RDF");
+
+        let attempted_delete_uris = store
+            .attempted_delete_uris
+            .lock()
+            .expect("mutex should not be poisoned");
+        assert_eq!(attempted_delete_uris.as_slice(), &[occurrence_uri]);
     }
 
     #[tokio::test]
