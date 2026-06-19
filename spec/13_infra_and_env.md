@@ -56,13 +56,15 @@ SMTP_PASSWORD=...
 MAIL_FROM=...
 ```
 
-### Cookie
+### 実行環境 / Cookie
 
 ```env
+APP_ENV=development
 COOKIE_SECURE=false
 ```
 
-本番環境では `COOKIE_SECURE=true` 必須。
+`APP_ENV=production` の場合は `COOKIE_SECURE=true` 必須。
+この組み合わせを満たさない場合、バックエンドは起動時設定読み込みに失敗する。
 
 ---
 

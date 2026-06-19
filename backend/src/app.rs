@@ -96,6 +96,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -159,6 +160,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -1172,6 +1174,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: true,
             },
             posgre: PosgreConfig {
@@ -2858,6 +2861,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -3027,6 +3031,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -3208,6 +3213,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -4478,6 +4484,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
@@ -4598,6 +4605,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
                 cookie_secure: false,
             },
             posgre: PosgreConfig {
