@@ -579,6 +579,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_registration_rejects_password_shorter_than_8_characters() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "saku".to_string(),
+            "1234567".to_string(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidPassword)));
+    }
+
+    #[tokio::test]
+    async fn complete_registration_rejects_password_longer_than_128_characters() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::complete_registration(
+            &db,
+            "test-token".to_string(),
+            "saku".to_string(),
+            "a".repeat(129),
+        )
+        .await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidPassword)));
+    }
+
+    #[tokio::test]
     async fn complete_registration_rejects_empty_user_name() {
         let db = test_db_pool().await;
 

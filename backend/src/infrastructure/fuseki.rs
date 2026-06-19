@@ -1,7 +1,8 @@
 use crate::config::FusekiConfig;
 use crate::features::occurrences::service::{
     OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceFilterInput,
-    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage, SearchVisibility,
+    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
+    SearchVisibility,
 };
 
 #[derive(Clone)]
@@ -124,8 +125,8 @@ impl OccurrenceRdfStore for FusekiClient {
         let mut rows = Vec::new(); //検索結果入れる
 
         for binding in bindings.iter().take(limit as usize) {
-            let occurrence_uri = binding_value(binding, "occurrence")
-                .ok_or(OccurrenceServiceError::StoreFailed)?;
+            let occurrence_uri =
+                binding_value(binding, "occurrence").ok_or(OccurrenceServiceError::StoreFailed)?;
             let occurrence_id = occurrence_uri
                 .strip_prefix(occurrence_uri_base)
                 .and_then(|id| uuid::Uuid::parse_str(id).ok())
@@ -441,7 +442,8 @@ fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
     hex::encode(cursor.to_string())
 }
 
-fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {//only created
+fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {
+    //only created
     let Some(cursor) = cursor else {
         return Ok(String::new());
     };
@@ -472,7 +474,11 @@ fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, Occurrence
 }
 
 fn binding_value(binding: &serde_json::Value, name: &str) -> Option<String> {
-    binding.get(name)?.get("value")?.as_str().map(str::to_string)
+    binding
+        .get(name)?
+        .get("value")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn access_rights_label(value: &str) -> String {
@@ -689,7 +695,10 @@ mod tests {
         assert_eq!(row.occurrence_id, occurrence_id);
         assert_eq!(row.occurrence_uri, occurrence_uri);
         assert_eq!(row.creator_user_id, Some(creator_user_id));
-        assert_eq!(row.scientific_name.as_deref(), Some(scientific_name.as_str()));
+        assert_eq!(
+            row.scientific_name.as_deref(),
+            Some(scientific_name.as_str())
+        );
         assert_eq!(row.basis_of_record.as_deref(), Some("PreservedSpecimen"));
         assert_eq!(row.recorded_by.as_deref(), Some("Yamada Taro"));
         assert_eq!(row.created.as_deref(), Some("2026-06-02T10:20:30Z"));
@@ -853,7 +862,10 @@ mod tests {
         let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
         let subclass_of_predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
         let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
-        let parent_taxon_uri = format!("https://bio-database.net/taxonomy/parent-{}", Uuid::new_v4());
+        let parent_taxon_uri = format!(
+            "https://bio-database.net/taxonomy/parent-{}",
+            Uuid::new_v4()
+        );
         let child_taxon_uri = format!("https://bio-database.net/taxonomy/child-{}", Uuid::new_v4());
         let other_taxon_uri = format!("https://bio-database.net/taxonomy/other-{}", Uuid::new_v4());
 
@@ -861,10 +873,7 @@ mod tests {
         let taxonomy_nquads = format!(
             r#"<{}> <{}> <{}> <{}> .
 "#,
-            child_taxon_uri,
-            subclass_of_predicate,
-            parent_taxon_uri,
-            taxonomy_graph_uri,
+            child_taxon_uri, subclass_of_predicate, parent_taxon_uri, taxonomy_graph_uri,
         );
 
         client
@@ -940,13 +949,17 @@ mod tests {
         let row = &page.rows[0];
         assert_eq!(row.occurrence_id, matching_occurrence_id);
         assert_eq!(row.occurrence_uri, matching_occurrence_uri);
-        assert_eq!(row.scientific_name.as_deref(), Some(child_taxon_uri.as_str()));
+        assert_eq!(
+            row.scientific_name.as_deref(),
+            Some(child_taxon_uri.as_str())
+        );
         assert_eq!(row.access_rights.as_deref(), Some("public"));
     }
 
     #[tokio::test]
     #[ignore]
-    async fn fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki() {
+    async fn fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki()
+    {
         use crate::features::occurrences::service::{
             SearchOccurrenceFilterInput, SearchOccurrencesStoreInput,
         };
@@ -1060,7 +1073,10 @@ mod tests {
         let row = &page.rows[0];
         assert_eq!(row.occurrence_id, matching_occurrence_id);
         assert_eq!(row.occurrence_uri, matching_occurrence_uri);
-        assert_eq!(row.recorded_by.as_deref(), Some(matching_recorded_by.as_str()));
+        assert_eq!(
+            row.recorded_by.as_deref(),
+            Some(matching_recorded_by.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1164,7 +1180,10 @@ mod tests {
         assert_eq!(page.limit, 1);
         assert_eq!(page.rows.len(), 1, "search should return only limit rows");
         assert_eq!(page.rows[0].occurrence_id, newer_occurrence_id);
-        assert!(page.has_next, "search should detect another page when results exceed limit");
+        assert!(
+            page.has_next,
+            "search should detect another page when results exceed limit"
+        );
         assert!(
             page.next_cursor.is_some(),
             "search should return next_cursor when results exceed limit"

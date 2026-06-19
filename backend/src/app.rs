@@ -9,7 +9,10 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     features::{
         auth::handler::{complete_registration, login, logout, me, pre_register},
-        occurrences::handler::{create_occurrence, delete_occurrence, get_occurrence, search_occurrences, update_occurrence},
+        occurrences::handler::{
+            create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
+            update_occurrence,
+        },
     },
     openapi::ApiDoc,
     state::AppState,
@@ -29,7 +32,12 @@ pub fn build_app(state: AppState) -> Router {
         //occurrence
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
-        .route("/occurrences/{occurrence_id}", get(get_occurrence).put(update_occurrence).delete(delete_occurrence))
+        .route(
+            "/occurrences/{occurrence_id}",
+            get(get_occurrence)
+                .put(update_occurrence)
+                .delete(delete_occurrence),
+        )
         .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }
@@ -301,9 +309,13 @@ mod tests {
                         filter.predicate == "http://rs.tdwg.org/dwc/terms/scientificName"
                             && filter.value_type == "literal"
                             && filter.match_type == "exact"
-                            && row.scientific_name.as_deref().is_some_and(|scientific_name| {
-                                scientific_name.to_lowercase() == filter.value.trim().to_lowercase()
-                            })
+                            && row
+                                .scientific_name
+                                .as_deref()
+                                .is_some_and(|scientific_name| {
+                                    scientific_name.to_lowercase()
+                                        == filter.value.trim().to_lowercase()
+                                })
                     })
                 });
             }
@@ -1135,6 +1147,11 @@ mod tests {
             set_cookie.contains("Path=/"),
             "session cookie should be available for the whole app"
         );
+
+        assert!(
+            set_cookie.contains("Max-Age=604800"),
+            "session cookie should live for 7 days"
+        );
     }
 
     #[tokio::test]
@@ -1774,7 +1791,10 @@ mod tests {
 
         let has_created_quad = parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://purl.org/dc/terms/created>"
-                && quad.object.to_string().contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
+                && quad
+                    .object
+                    .to_string()
+                    .contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
                 && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
         });
 
@@ -1785,7 +1805,10 @@ mod tests {
 
         let has_modified_quad = parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://purl.org/dc/terms/modified>"
-                && quad.object.to_string().contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
+                && quad
+                    .object
+                    .to_string()
+                    .contains("^^<http://www.w3.org/2001/XMLSchema#dateTime>")
                 && quad.graph_name.to_string() == "<https://bio-database.net/graphs/occurrences>"
         });
 
@@ -2453,11 +2476,7 @@ mod tests {
             .lock()
             .expect("mutex should not be poisoned");
 
-        assert_eq!(
-            saved.len(),
-            0,
-            "RDF without graph name should not be saved"
-        );
+        assert_eq!(saved.len(), 0, "RDF without graph name should not be saved");
     }
 
     #[tokio::test]
@@ -3072,7 +3091,8 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             "updated occurrence should preserve creator"
         );
         assert!(
-            updated_text.contains("\"2026-06-02T10:20:30Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+            updated_text
+                .contains("\"2026-06-02T10:20:30Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
             "updated occurrence should preserve created"
         );
         assert!(
@@ -3205,7 +3225,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             .get_occurrence_nquads(&occurrence_uri)
             .await
             .expect("saved occurrence should be fetched from real Fuseki");
-        assert!(saved.is_some(), "test precondition: occurrence should exist before DELETE");
+        assert!(
+            saved.is_some(),
+            "test precondition: occurrence should exist before DELETE"
+        );
 
         let app = build_app(state);
 
@@ -3232,7 +3255,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             .await
             .expect("deleted occurrence lookup should be handled by real Fuseki");
 
-        assert!(deleted.is_none(), "deleted occurrence should not remain in real Fuseki");
+        assert!(
+            deleted.is_none(),
+            "deleted occurrence should not remain in real Fuseki"
+        );
     }
 
     #[tokio::test]
@@ -3242,7 +3268,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
         let db = state.posgre.clone();
 
-        let email = format!("occurrence-delete-user-{}@example.com", uuid::Uuid::new_v4());
+        let email = format!(
+            "occurrence-delete-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
         let user_name = "occurrence-delete-user";
         let password_hash = hash_password("password123").expect("password should be hashed");
 
@@ -3282,10 +3311,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
 <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
 <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
 "#,
-            occurrence_uri,
-            occurrence_uri,
-            user_id,
-            occurrence_uri,
+            occurrence_uri, occurrence_uri, user_id, occurrence_uri,
         );
 
         store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.into_bytes());
@@ -3315,7 +3341,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             .await
             .expect("fake store should handle lookup after delete");
 
-        assert!(deleted.is_none(), "deleted occurrence RDF should be removed from store");
+        assert!(
+            deleted.is_none(),
+            "deleted occurrence RDF should be removed from store"
+        );
     }
 
     #[tokio::test]
@@ -3331,13 +3360,11 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
 <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
 <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
 "#,
-            occurrence_uri,
-            occurrence_uri,
-            creator_user_id,
-            occurrence_uri,
+            occurrence_uri, occurrence_uri, creator_user_id, occurrence_uri,
         );
 
-        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
 
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
         let app = build_app(state);
@@ -3489,10 +3516,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
 <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
 <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
 "#,
-            occurrence_uri,
-            occurrence_uri,
-            user_id,
-            occurrence_uri,
+            occurrence_uri, occurrence_uri, user_id, occurrence_uri,
         );
 
         store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.into_bytes());
@@ -3526,7 +3550,8 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
     }
 
     #[tokio::test]
-    async fn delete_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_delete() {
+    async fn delete_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_delete()
+    {
         let store = FakeOccurrenceRdfStore::default();
 
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
@@ -3577,13 +3602,11 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
 <{}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{}> <https://bio-database.net/graphs/occurrences> .
 <{}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <https://bio-database.net/graphs/occurrences> .
 "#,
-            occurrence_uri,
-            occurrence_uri,
-            creator_user_id,
-            occurrence_uri,
+            occurrence_uri, occurrence_uri, creator_user_id, occurrence_uri,
         );
 
-        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
 
         let app = build_app(state);
 
@@ -3637,7 +3660,8 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             occurrence_uri,
         );
 
-        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
 
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
         let app = build_app(state);
@@ -3678,7 +3702,8 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
     }
 
     #[tokio::test]
-    async fn update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update() {
+    async fn update_occurrence_route_hides_other_users_occurrence_from_editor_and_does_not_update()
+    {
         let store = FakeOccurrenceRdfStore::default();
 
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
@@ -3739,7 +3764,8 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             occurrence_uri,
         );
 
-        store.insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
 
         let frontend_nquads = br#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated by other user" <https://bio-database.net/graphs/occurrences> .
 "#;
@@ -3781,7 +3807,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
         let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
         let db = state.posgre.clone();
 
-        let email = format!("occurrence-update-user-{}@example.com", uuid::Uuid::new_v4());
+        let email = format!(
+            "occurrence-update-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
         let user_name = "occurrence-update-user";
         let password_hash = hash_password("password123").expect("password should be hashed");
 
@@ -3885,16 +3914,19 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             .collect::<Result<Vec<_>, _>>()
             .expect("updated N-Quads should parse");
 
-        assert!(parsed_quads.iter().all(|quad| {
-            quad.subject.to_string() == format!("<{}>", occurrence_uri)
-        }));
+        assert!(
+            parsed_quads
+                .iter()
+                .all(|quad| { quad.subject.to_string() == format!("<{}>", occurrence_uri) })
+        );
         assert!(parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://rs.tdwg.org/dwc/terms/scientificName>"
                 && quad.object.to_string() == "\"Updated name\""
         }));
         assert!(parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://purl.org/dc/terms/creator>"
-                && quad.object.to_string() == format!("<https://bio-database.net/users/{}>", user_id)
+                && quad.object.to_string()
+                    == format!("<https://bio-database.net/users/{}>", user_id)
         }));
         assert!(parsed_quads.iter().any(|quad| {
             quad.predicate.to_string() == "<http://purl.org/dc/terms/created>"
@@ -4579,7 +4611,10 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
-        assert_eq!(body_json["items"][0]["occurrence_id"], occurrence_id.to_string());
+        assert_eq!(
+            body_json["items"][0]["occurrence_id"],
+            occurrence_id.to_string()
+        );
         assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
         assert_eq!(body_json["items"][0]["scientific_name"], scientific_name);
         assert_eq!(body_json["items"][0]["created"], "2026-06-02T10:20:30Z");
@@ -4651,10 +4686,16 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(body_json["items"].as_array().unwrap().len(), 1);
-        assert_eq!(body_json["items"][0]["occurrence_id"], occurrence_id.to_string());
+        assert_eq!(
+            body_json["items"][0]["occurrence_id"],
+            occurrence_id.to_string()
+        );
         assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
         assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
-        assert_eq!(body_json["items"][0]["basis_of_record"], "PreservedSpecimen");
+        assert_eq!(
+            body_json["items"][0]["basis_of_record"],
+            "PreservedSpecimen"
+        );
         assert_eq!(body_json["items"][0]["recorded_by"], "Yamada Taro");
         assert_eq!(body_json["items"][0]["created"], "2026-06-02T10:20:30Z");
         assert_eq!(body_json["items"][0]["modified"], "2026-06-02T10:20:30Z");
@@ -4804,7 +4845,10 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             body_json["items"][0]["occurrence_id"],
             matching_occurrence_id.to_string()
         );
-        assert_eq!(body_json["items"][0]["occurrence_uri"], matching_occurrence_uri);
+        assert_eq!(
+            body_json["items"][0]["occurrence_uri"],
+            matching_occurrence_uri
+        );
         assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
         assert_eq!(body_json["page"]["limit"], 50);
         assert_eq!(body_json["page"]["next_cursor"], serde_json::Value::Null);
@@ -5153,12 +5197,16 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             body_json["items"][0]["occurrence_id"],
             public_occurrence_id.to_string()
         );
-        assert_eq!(body_json["items"][0]["occurrence_uri"], public_occurrence_uri);
+        assert_eq!(
+            body_json["items"][0]["occurrence_uri"],
+            public_occurrence_uri
+        );
         assert_eq!(body_json["items"][0]["access_rights"], "public");
     }
 
     #[tokio::test]
-    async fn search_occurrences_route_returns_empty_page_when_only_private_results_are_available_to_anonymous_user() {
+    async fn search_occurrences_route_returns_empty_page_when_only_private_results_are_available_to_anonymous_user()
+     {
         let store = FakeOccurrenceRdfStore::default();
 
         let first_private_occurrence_id =
@@ -5214,7 +5262,9 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                     .method(Method::POST)
                     .uri("/occurrences/search")
                     .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"filters":[],"page":{"limit":1,"cursor":null}}"#))
+                    .body(Body::from(
+                        r#"{"filters":[],"page":{"limit":1,"cursor":null}}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -5318,10 +5368,15 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let items = body_json["items"].as_array().expect("items should be array");
+        let items = body_json["items"]
+            .as_array()
+            .expect("items should be array");
 
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["occurrence_id"], own_private_occurrence_id.to_string());
+        assert_eq!(
+            items[0]["occurrence_id"],
+            own_private_occurrence_id.to_string()
+        );
         assert_eq!(items[0]["occurrence_uri"], own_private_occurrence_uri);
         assert_eq!(items[0]["access_rights"], "private");
     }
@@ -5448,12 +5503,26 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let items = body_json["items"].as_array().expect("items should be array");
+        let items = body_json["items"]
+            .as_array()
+            .expect("items should be array");
 
         assert_eq!(items.len(), 2);
-        assert!(items.iter().any(|item| item["occurrence_id"] == public_occurrence_id.to_string()));
-        assert!(items.iter().any(|item| item["occurrence_id"] == own_private_occurrence_id.to_string()));
-        assert!(!items.iter().any(|item| item["occurrence_id"] == other_private_occurrence_id.to_string()));
+        assert!(
+            items
+                .iter()
+                .any(|item| item["occurrence_id"] == public_occurrence_id.to_string())
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item["occurrence_id"] == own_private_occurrence_id.to_string())
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|item| item["occurrence_id"] == other_private_occurrence_id.to_string())
+        );
     }
 
     #[tokio::test]

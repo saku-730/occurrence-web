@@ -21,32 +21,36 @@ use crate::{
 };
 
 use super::{
-    dto::{CreateOccurrenceResponse, SearchOccurrencesRequest, SearchOccurrencesResponse},
+    dto::{
+        CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrencesRequest,
+        SearchOccurrencesResponse,
+    },
     service::{
-        CreateOccurrenceInput, DeleteOccurrenceInput, GetOccurrenceInput, OccurrenceService, OccurrenceServiceError,
-        SearchOccurrenceFilterInput, SearchOccurrencesInput, SearchVisibility, UpdateOccurrenceInput,
+        CreateOccurrenceInput, DeleteOccurrenceInput, GetOccurrenceInput, OccurrenceService,
+        OccurrenceServiceError, SearchOccurrenceFilterInput, SearchOccurrencesInput,
+        SearchVisibility, UpdateOccurrenceInput,
     },
 };
 
 #[derive(Debug)]
 pub enum OccurrenceHandlerError {
-    InvalidSession,        //セッションを持っていないなど
-    Database(sqlx::Error), //posgre側のエラー トークン認証など
-    NotImplemented,        //
-    UnsupportedMediaType,  //httpリクエストのbodyがtext/turtle以外など
-    EmptyBody,             //httpリクエストのbodyが空
-    InternalServerError,   //サーバー側の処理エラーなど
-    InvalidRdf,            //フロントから送信されたN-Quadsが壊れている
-    RdfStoreError,         //
-    ForbiddenRdfPredicate, //禁止されている述語を含むRDFを拒否
-    ForbiddenRdfGraph,     //グラフ名が間違っている場合拒否
-    EmptyRdf,              //空のデータを拒否
-    InvalidAccessRights,    //accessRightsが仕様外
-    InvalidLicense,         //licenseが仕様外
+    InvalidSession,          //セッションを持っていないなど
+    Database(sqlx::Error),   //posgre側のエラー トークン認証など
+    NotImplemented,          //
+    UnsupportedMediaType,    //httpリクエストのbodyがtext/turtle以外など
+    EmptyBody,               //httpリクエストのbodyが空
+    InternalServerError,     //サーバー側の処理エラーなど
+    InvalidRdf,              //フロントから送信されたN-Quadsが壊れている
+    RdfStoreError,           //
+    ForbiddenRdfPredicate,   //禁止されている述語を含むRDFを拒否
+    ForbiddenRdfGraph,       //グラフ名が間違っている場合拒否
+    EmptyRdf,                //空のデータを拒否
+    InvalidAccessRights,     //accessRightsが仕様外
+    InvalidLicense,          //licenseが仕様外
     InvalidBlankNodeSubject, //blank node subjectが仕様外
     InvalidObjectBlankNode,  //object blank nodeは拒否
     InvalidSearchFilter,     //検索filterが仕様外
-    NotFound,              //
+    NotFound,                //
 }
 
 impl From<AuthServiceError> for OccurrenceHandlerError {
@@ -297,7 +301,6 @@ pub async fn create_occurrence(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-
 #[utoipa::path(
     post,
     path = "/occurrences/search",
@@ -368,14 +371,16 @@ pub async fn search_occurrences(
 
     let visibility = match optional_session_token(&headers) {
         None => SearchVisibility::PublicOnly,
-        Some(session_token) => match AuthService::current_user(&state.posgre, session_token).await {
-            Ok(current_user) if current_user.role == "admin" => SearchVisibility::All,
-            Ok(current_user) => SearchVisibility::PublicOrOwnPrivate {
-                user_id: current_user.user_id,
-            },
-            Err(AuthServiceError::InvalidSession) => SearchVisibility::PublicOnly,
-            Err(error) => return Err(error.into()),
-        },
+        Some(session_token) => {
+            match AuthService::current_user(&state.posgre, session_token).await {
+                Ok(current_user) if current_user.role == "admin" => SearchVisibility::All,
+                Ok(current_user) => SearchVisibility::PublicOrOwnPrivate {
+                    user_id: current_user.user_id,
+                },
+                Err(AuthServiceError::InvalidSession) => SearchVisibility::PublicOnly,
+                Err(error) => return Err(error.into()),
+            }
+        }
     };
 
     let input = SearchOccurrencesInput {
@@ -475,11 +480,55 @@ pub async fn get_occurrence(
         .into_response())
 }
 
+#[utoipa::path(
+    delete,
+    path = "/occurrences/{occurrence_id}",
+    params(
+        (
+            "occurrence_id" = Uuid,
+            Path,
+            description = "Occurrence UUID"
+        )
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Occurrence deleted",
+            body = DeleteOccurrenceResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid occurrence UUID",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Login required",
+            body = ErrorResponse
+        ),
+        (
+            status = 404,
+            description = "Occurrence not found or delete is not allowed",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Failed to delete occurrence RDF from RDF store",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "occurrences"
+)]
 pub async fn delete_occurrence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(occurrence_id): Path<Uuid>,
-) -> Result<(StatusCode, Json<serde_json::Value>), OccurrenceHandlerError> {
+) -> Result<(StatusCode, Json<DeleteOccurrenceResponse>), OccurrenceHandlerError> {
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
@@ -507,7 +556,12 @@ pub async fn delete_occurrence(
     )
     .await?;
 
-    Ok((StatusCode::OK, Json(serde_json::json!({ "deleted": output.deleted }))))
+    Ok((
+        StatusCode::OK,
+        Json(DeleteOccurrenceResponse {
+            deleted: output.deleted,
+        }),
+    ))
 }
 
 #[utoipa::path(
@@ -632,7 +686,8 @@ fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, Occurren
     }))
 }
 
-fn nquads_creator_user_id(nquads: &[u8]) -> Result<Option<Uuid>, OccurrenceHandlerError> { //nquadsからuseridだけ取り出し
+fn nquads_creator_user_id(nquads: &[u8]) -> Result<Option<Uuid>, OccurrenceHandlerError> {
+    //nquadsからuseridだけ取り出し
     let quads = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nquads)
         .collect::<Result<Vec<_>, _>>()

@@ -15,6 +15,11 @@ pub struct CreateOccurrenceResponse {
     pub occurrence_uri: String,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeleteOccurrenceResponse {
+    pub deleted: bool,
+}
+
 #[derive(Debug, Serialize, PartialEq, ToSchema)]
 pub struct SearchOccurrenceItem {
     pub occurrence_id: String,
@@ -42,7 +47,6 @@ pub struct SearchOccurrencesResponse {
     pub items: Vec<SearchOccurrenceItem>,
     pub page: SearchOccurrencesPage,
 }
-
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchOccurrencesRequest {

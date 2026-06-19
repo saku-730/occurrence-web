@@ -53,6 +53,8 @@
 - [x] complete_registration は空 token を拒否する`complete_registration_rejects_empty_token`
 - [x] 空パスワードを拒否`complete_registration_rejects_empty_password`
 - [x] パスワードが空白だけを拒否`complete_registration_rejects_blank_password`
+- [ ] パスワードが8文字未満なら拒否する`complete_registration_rejects_password_shorter_than_8_characters`
+- [ ] パスワードが128文字を超えるなら拒否する`complete_registration_rejects_password_longer_than_128_characters`
 - [x] ユーザー名が空だと拒否`complete_registration_rejects_empty_user_name`
 - [x] ユーザー名が空白だと拒否`complete_registration_rejects_blank_user_name`
 - [x] complete_registration は存在しない token を拒否する`complete_registration_rejects_unknown_token`

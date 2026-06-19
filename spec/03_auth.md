@@ -23,7 +23,7 @@
 ## セッション要件
 
 - セッションIDは Cookie に保存する
-- Cookie名は `occurrence_session`
+- Cookie名は `session`
 - セッション有効期限は 7日
 - rolling session とする
 - アクセスごとに有効期限を延長する

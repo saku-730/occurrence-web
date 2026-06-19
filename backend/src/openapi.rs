@@ -6,8 +6,9 @@ use crate::features::auth::dto::{
 };
 
 use crate::features::occurrences::dto::{
-    CreateOccurrenceResponse, SearchOccurrenceFilter, SearchOccurrenceItem, SearchOccurrencesPage,
-    SearchOccurrencesRequest, SearchOccurrencesRequestPage, SearchOccurrencesResponse,
+    CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrenceFilter,
+    SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesRequest,
+    SearchOccurrencesRequestPage, SearchOccurrencesResponse,
 };
 
 #[derive(OpenApi)]
@@ -21,20 +22,22 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::create_occurrence,
         crate::features::occurrences::handler::search_occurrences,
         crate::features::occurrences::handler::get_occurrence,
+        crate::features::occurrences::handler::delete_occurrence,
         crate::features::occurrences::handler::update_occurrence,
     ),
     components(
         schemas(
-            RegisterRequest, 
-            RegisterResponse, 
+            RegisterRequest,
+            RegisterResponse,
             ErrorResponse,
             CompleteRegistrationRequest,
             CompleteRegistrationResponse,
             LoginRequest,
             LoginResponse,
-            LogoutResponse, 
+            LogoutResponse,
             CurrentUserResponse,
             CreateOccurrenceResponse,
+            DeleteOccurrenceResponse,
             SearchOccurrenceItem,
             SearchOccurrencesPage,
             SearchOccurrencesResponse,

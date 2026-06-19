@@ -152,10 +152,10 @@ pub enum OccurrenceServiceError {
     FrontendManagedPredicateProvided, //フロントから誤ってユーザー情報が送られた場合。ユーザー偽装
     ForbiddenRdfGraph,                //グラフの名前がoccurrence空間以外
     EmptyRdf,                         //空のデータ送信
-    InvalidAccessRights,               //accessRightsの値が仕様外
-    InvalidLicense,                    //licenseの値が仕様外
-    InvalidBlankNodeSubject,            //blank node subjectが仕様外
-    InvalidObjectBlankNode,              //object blank nodeは拒否
+    InvalidAccessRights,              //accessRightsの値が仕様外
+    InvalidLicense,                   //licenseの値が仕様外
+    InvalidBlankNodeSubject,          //blank node subjectが仕様外
+    InvalidObjectBlankNode,           //object blank nodeは拒否
 }
 
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -228,11 +228,8 @@ impl OccurrenceService {
             .await?
             .ok_or(OccurrenceServiceError::StoreFailed)?;
 
-        let nquads = build_updated_occurrence_nquads(
-            &input.rdf_body,
-            &existing_nquads,
-            &occurrence_uri,
-        )?;
+        let nquads =
+            build_updated_occurrence_nquads(&input.rdf_body, &existing_nquads, &occurrence_uri)?;
 
         store
             .replace_occurrence_nquads(&occurrence_uri, nquads.clone())
@@ -433,7 +430,8 @@ fn add_default_access_rights_quad_if_missing(
         .iter()
         .any(|quad| quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI);
 
-    if already_has_access_rights {//フロントからアクセス権限情報が送られていればなにもしない。
+    if already_has_access_rights {
+        //フロントからアクセス権限情報が送られていればなにもしない。
         return Ok(());
     }
 
@@ -462,9 +460,7 @@ fn add_default_access_rights_quad_if_missing(
     Ok(())
 }
 
-fn ensure_access_rights_is_resource(
-    quads: &[Quad],
-) -> Result<(), OccurrenceServiceError> {
+fn ensure_access_rights_is_resource(quads: &[Quad]) -> Result<(), OccurrenceServiceError> {
     let access_rights_quads = quads
         .iter()
         .filter(|quad| quad.predicate.as_str() == ACCESS_RIGHTS_PREDICATE_URI)
@@ -586,8 +582,10 @@ fn build_updated_occurrence_nquads(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
 
-    let preserved_creator = required_backend_managed_object(&existing_quads, CREATOR_PREDICATE_URI)?;
-    let preserved_created = required_backend_managed_object(&existing_quads, CREATED_PREDICATE_URI)?;
+    let preserved_creator =
+        required_backend_managed_object(&existing_quads, CREATOR_PREDICATE_URI)?;
+    let preserved_created =
+        required_backend_managed_object(&existing_quads, CREATED_PREDICATE_URI)?;
 
     let quads = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(frontend_nquads)
@@ -672,9 +670,7 @@ fn build_occurrence_nquads_with_generated_id(
     })
 }
 
-fn ensure_single_blank_node_subject(
-    quads: &[Quad],
-) -> Result<(), OccurrenceServiceError> {
+fn ensure_single_blank_node_subject(quads: &[Quad]) -> Result<(), OccurrenceServiceError> {
     let mut blank_node_subjects = Vec::new();
 
     for quad in quads {
@@ -698,9 +694,7 @@ fn ensure_single_blank_node_subject(
     Ok(())
 }
 
-fn ensure_no_object_blank_node(
-    quads: &[Quad],
-) -> Result<(), OccurrenceServiceError> {
+fn ensure_no_object_blank_node(quads: &[Quad]) -> Result<(), OccurrenceServiceError> {
     let has_object_blank_node = quads
         .iter()
         .any(|quad| matches!(quad.object, Term::BlankNode(_)));
@@ -1236,12 +1230,9 @@ mod tests {
                 access_rights_uri
             );
 
-            let built = build_occurrence_nquads(
-                frontend_nquads.as_bytes(),
-                occurrence_uri,
-                create_user_id,
-            )
-            .expect("valid accessRights should be accepted");
+            let built =
+                build_occurrence_nquads(frontend_nquads.as_bytes(), occurrence_uri, create_user_id)
+                    .expect("valid accessRights should be accepted");
 
             let parsed_quads = RdfParser::from_format(RdfFormat::NQuads)
                 .for_slice(&built)
@@ -1480,10 +1471,11 @@ mod tests {
             requested_occurrence_uris: requested_occurrence_uris.clone(),
         };
 
-        let output = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
-            .await
-            .expect("get occurrence should succeed")
-            .expect("requested occurrence should exist");
+        let output =
+            OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
+                .await
+                .expect("get occurrence should succeed")
+                .expect("requested occurrence should exist");
 
         assert_eq!(output.nquads, expected_nquads);
 
@@ -1515,9 +1507,10 @@ mod tests {
         let occurrence_id = uuid::Uuid::new_v4();
         let store = EmptyOccurrenceRdfStore;
 
-        let output = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
-            .await
-            .expect("get occurrence should succeed even when occurrence is missing");
+        let output =
+            OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
+                .await
+                .expect("get occurrence should succeed even when occurrence is missing");
 
         assert!(output.is_none());
     }
@@ -1543,8 +1536,8 @@ mod tests {
         let occurrence_id = uuid::Uuid::new_v4();
         let store = FailingOccurrenceRdfStore;
 
-        let result = OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store)
-            .await;
+        let result =
+            OccurrenceService::get_occurrence(GetOccurrenceInput { occurrence_id }, &store).await;
 
         assert!(
             matches!(result, Err(OccurrenceServiceError::StoreFailed)),
@@ -1593,12 +1586,10 @@ mod tests {
             format!("https://bio-database.net/occurrences/{}", occurrence_id);
         let store = FakeOccurrenceRdfStore::default();
 
-        let output = OccurrenceService::delete_occurrence(
-            DeleteOccurrenceInput { occurrence_id },
-            &store,
-        )
-        .await
-        .expect("delete occurrence should succeed");
+        let output =
+            OccurrenceService::delete_occurrence(DeleteOccurrenceInput { occurrence_id }, &store)
+                .await
+                .expect("delete occurrence should succeed");
 
         assert!(output.deleted);
 
@@ -1607,11 +1598,15 @@ mod tests {
             .lock()
             .expect("mutex should not be poisoned");
 
-        assert_eq!(deleted_occurrence_uris.as_slice(), &[expected_occurrence_uri]);
+        assert_eq!(
+            deleted_occurrence_uris.as_slice(),
+            &[expected_occurrence_uri]
+        );
     }
 
     #[tokio::test]
-    async fn update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri() {
+    async fn update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri()
+     {
         use oxrdf::Term;
         use oxrdfio::{RdfFormat, RdfParser};
         use std::sync::{Arc, Mutex};
@@ -1712,7 +1707,11 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             .collect::<Result<Vec<_>, _>>()
             .expect("updated N-Quads should parse");
 
-        assert!(quads.iter().all(|quad| quad.subject.to_string() == format!("<{}>", occurrence_uri)));
+        assert!(
+            quads
+                .iter()
+                .all(|quad| quad.subject.to_string() == format!("<{}>", occurrence_uri))
+        );
         assert!(quads.iter().any(|quad| {
             quad.predicate.as_str() == "http://rs.tdwg.org/dwc/terms/scientificName"
                 && matches!(&quad.object, Term::Literal(literal) if literal.value() == "Updated name")
@@ -1803,15 +1802,30 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
         assert_eq!(output.items.len(), 1);
         assert_eq!(output.items[0].occurrence_id, occurrence_id.to_string());
         assert_eq!(output.items[0].occurrence_uri, occurrence_uri);
-        assert_eq!(output.items[0].scientific_name.as_deref(), Some("Quercus serrata"));
-        assert_eq!(output.items[0].basis_of_record.as_deref(), Some("PreservedSpecimen"));
+        assert_eq!(
+            output.items[0].scientific_name.as_deref(),
+            Some("Quercus serrata")
+        );
+        assert_eq!(
+            output.items[0].basis_of_record.as_deref(),
+            Some("PreservedSpecimen")
+        );
         assert_eq!(output.items[0].recorded_by.as_deref(), Some("Yamada Taro"));
-        assert_eq!(output.items[0].created.as_deref(), Some("2026-06-02T10:20:30Z"));
-        assert_eq!(output.items[0].modified.as_deref(), Some("2026-06-02T10:20:30Z"));
+        assert_eq!(
+            output.items[0].created.as_deref(),
+            Some("2026-06-02T10:20:30Z")
+        );
+        assert_eq!(
+            output.items[0].modified.as_deref(),
+            Some("2026-06-02T10:20:30Z")
+        );
         assert_eq!(output.items[0].access_rights.as_deref(), Some("public"));
 
         assert_eq!(output.page.limit, 50);
-        assert_eq!(output.page.next_cursor.as_deref(), Some("opaque-cursor-string"));
+        assert_eq!(
+            output.page.next_cursor.as_deref(),
+            Some("opaque-cursor-string")
+        );
         assert!(output.page.has_next);
     }
 

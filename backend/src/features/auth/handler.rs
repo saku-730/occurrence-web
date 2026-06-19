@@ -278,7 +278,7 @@ pub async fn login(
     let output = AuthService::login(&state.posgre, payload.email, payload.password).await?;
 
     let session_cookie = format!(
-        "session={}; HttpOnly; SameSite=Lax; Path=/; Max_Age=604800", //Max_Ageは秒数 7日
+        "session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800", //Max-Ageは秒数 7日
         output.session_token
     );
 
