@@ -18,18 +18,19 @@ use crate::{
     state::AppState,
 };
 
+// route定義はここに集約する。OpenAPIとhandler追加漏れを見つけやすくするため。
 pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
         .route("/info", get(info))
-        //auth
+        // auth: ユーザー登録、ログイン、セッション確認を扱う。
         .route("/auth/pre_register", post(pre_register))
         .route("/auth/complete_registration", post(complete_registration))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
-        //occurrence
+        // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
         .route(
@@ -52,6 +53,7 @@ async fn health() -> &'static str {
 
 use axum::extract::State;
 
+// 動作中のbase URLを確認する軽量endpoint。設定の読み込み確認にも使う。
 async fn info(State(state): State<AppState>) -> String {
     state.config.app.app_base_url.clone()
 }
@@ -82,6 +84,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
+    // appテストはrouterを直接叩くため、実HTTP serverを立てずにAppStateだけ構築する。
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
 
@@ -142,6 +145,7 @@ mod tests {
         }
     }
 
+    // occurrence系appテストではRDF storeを差し替え、handlerからserviceまでの接続を検証する。
     fn test_state_with_occurrence_rdf_store(
         occurrence_rdf_store: Arc<dyn OccurrenceRdfStore>,
     ) -> AppState {

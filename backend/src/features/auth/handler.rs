@@ -59,6 +59,7 @@ impl From<MailError> for AuthHandlerError {
     }
 }
 
+// service/repositoryの失敗をHTTP APIのエラー形式に変換する境界。
 impl IntoResponse for AuthHandlerError {
     //エラーをhttpレスポンスに変換 axumのやつ
     fn into_response(self) -> Response {
@@ -194,6 +195,7 @@ pub async fn pre_register(
         AuthService::pre_register(&state.posgre, &state.config.app.app_base_url, payload.email)
             .await?;
 
+    // 仮登録はメール送信まで成功して初めて完了扱いにする。送信失敗時はHTTPエラーにする。
     send_mail(&output.mail, &state.config.smtp).await?; //メール送信
 
     Ok((StatusCode::CREATED, Json(output.response)))
@@ -277,6 +279,7 @@ pub async fn login(
 ) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AuthHandlerError> {
     let output = AuthService::login(&state.posgre, payload.email, payload.password).await?;
 
+    // Secure属性は本番HTTPSでのみcookieを送るための設定。開発HTTPではconfigで無効にできる。
     let secure_attribute = if state.config.app.cookie_secure {
         "; Secure"
     } else {
@@ -338,6 +341,7 @@ pub async fn logout(
 
     let mut response_headers = HeaderMap::new();
 
+    // logout時もlogin時と同じ属性でcookieを消す。属性がずれるとブラウザに残る可能性がある。
     let secure_attribute = if state.config.app.cookie_secure {
         "; Secure"
     } else {
@@ -405,6 +409,7 @@ pub async fn me(
     Ok((StatusCode::OK, Json(response)))
 }
 
+// Cookieヘッダーは複数cookieを1行で送るため、session=だけを安全に取り出す。
 fn extract_session_token(headers: &HeaderMap) -> Result<String, AuthHandlerError> {
     //セッションcookieを取り出す。
     let cookie_header = headers

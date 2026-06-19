@@ -7,6 +7,7 @@ use super::dto::{SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesR
 
 #[derive(Debug)]
 pub struct CreateOccurrenceInput {
+    // occurrence作成時の入力。creatorはフロントから受けず、session由来のuser_idだけを使う。
     //occurrenceデータ作成時の構造体
     //create_user_id:作成者 フロントエンドからとってもいいと思ったが、偽装しやすくなるので。
     //RDF的には、トリプルの中にユーザーidを入れたいと考えるとフロントエンドで組み立てたい。微妙。
@@ -107,6 +108,7 @@ pub struct SearchOccurrencesStorePage {
 }
 
 #[async_trait::async_trait]
+// serviceはFusekiに直接依存しない。Fake storeでTDDし、本番だけFusekiClientを差し込むための境界。
 pub trait OccurrenceRdfStore: Send + Sync {
     //rdfストアの粗結合実装。fakeでもfusekiでもどっちでも対応できるようにtrait
     async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError>;
@@ -180,6 +182,7 @@ impl OccurrenceService {
     where
         S: OccurrenceRdfStore + ?Sized,
     {
+        // 保存前にbackend管理メタデータを付与し、保存してよい最終N-Quadsへ変換する。
         let output = Self::prepare_occurrence_for_storage(input)?;
 
         store.save_nquads(output.nquads.clone()).await?;
@@ -223,6 +226,7 @@ impl OccurrenceService {
     {
         let occurrence_uri = build_occurrence_uri(input.occurrence_id);
 
+        // 更新は差分patchではなく丸ごと置換。creator/createdは既存RDFから復元して改ざんを防ぐ。
         let existing_nquads = store
             .get_occurrence_nquads(&occurrence_uri)
             .await?
@@ -251,6 +255,7 @@ impl OccurrenceService {
     {
         let occurrence_uri = build_occurrence_uri(input.occurrence_id);
 
+        // 削除前に存在確認する。存在しないIDを成功扱いにするとUI/APIの状態が曖昧になるため。
         store
             .get_occurrence_nquads(&occurrence_uri)
             .await?
@@ -268,6 +273,7 @@ impl OccurrenceService {
     where
         S: OccurrenceRdfStore + ?Sized,
     {
+        // visibility filterはstore段階で適用する。取得後に弾くとlimit/cursorが閲覧可能件数とずれるため。
         let store_page = store
             .search_occurrences(SearchOccurrencesStoreInput {
                 filters: input.filters,
@@ -305,6 +311,7 @@ impl OccurrenceService {
 }
 
 fn replace_all_subjects_with_occurrence_uri(
+    // フロントは一時的なblank nodeで送る。永続URIはbackendだけが発行し、なりすましURIを防ぐ。
     //主語にoccurrence uuidを追加
     quads: Vec<Quad>,
     occurrence_uri: &str,
@@ -328,6 +335,7 @@ fn replace_all_subjects_with_occurrence_uri(
 }
 
 fn add_create_user_id_quad(
+    // creatorはsession由来のuser_idから作る。フロント入力にすると作成者偽装が可能になる。
     //作成者情報を追加
     quads: &mut Vec<Quad>,
     occurrence_uri: &str,
@@ -359,6 +367,7 @@ fn add_create_user_id_quad(
     Ok(())
 }
 
+// createdはbackend管理値。作成時刻をRDFにも残し、検索・監査的な並び替えに使う。
 fn add_created_quad(
     quads: &mut Vec<Quad>,
     occurrence_uri: &str,
@@ -390,6 +399,7 @@ fn add_created_quad(
     Ok(())
 }
 
+// modifiedはbackend管理値。作成時はcreatedと同じ、更新時は現在時刻に置き換える。
 fn add_modified_quad(
     quads: &mut Vec<Quad>,
     occurrence_uri: &str,
@@ -422,6 +432,7 @@ fn add_modified_quad(
     Ok(())
 }
 
+// accessRights未指定を許す代わりに、保存後の公開範囲が必ず判定できるようdefault publicを付ける。
 fn add_default_access_rights_quad_if_missing(
     quads: &mut Vec<Quad>,
     occurrence_uri: &str,
@@ -518,6 +529,7 @@ fn ensure_license_is_creative_commons_resource(
 }
 
 fn serialize_quads_as_nquads(
+    // oxrdfでparseしたQuadを再シリアライズし、backendが検証・補完したRDFだけを保存する。
     //再度シリアライズ
     quads: &[Quad],
 ) -> Result<Vec<u8>, OccurrenceServiceError> {
@@ -545,6 +557,7 @@ fn build_occurrence_nquads(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
 
+    // 以降のvalidationは、主語置換前のフロント入力が仕様の範囲内かを確認する。
     ensure_rdf_contains_at_least_one_quad(&quads)?;
 
     ensure_only_occurrence_graph(&quads)?;
@@ -582,6 +595,7 @@ fn build_updated_occurrence_nquads(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
 
+    // creator/createdはbackend管理値なので、更新リクエストからではなく既存RDFから引き継ぐ。
     let preserved_creator =
         required_backend_managed_object(&existing_quads, CREATOR_PREDICATE_URI)?;
     let preserved_created =
@@ -620,6 +634,7 @@ fn build_updated_occurrence_nquads(
     serialize_quads_as_nquads(&quads)
 }
 
+// 既存RDFにbackend管理メタデータが欠けている場合、整合性が壊れているので更新を止める。
 fn required_backend_managed_object(
     quads: &[Quad],
     predicate_uri: &str,
@@ -727,6 +742,7 @@ fn ensure_no_backend_managed_predicates(
 }
 
 fn ensure_only_occurrence_graph(
+    // occurrence以外のgraphを受けると、フロントが任意graphへ書き込めてしまうため拒否する。
     //グラフ名が間違っていれば拒否
     quads: &[Quad],
 ) -> Result<(), OccurrenceServiceError> {

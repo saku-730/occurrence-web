@@ -53,6 +53,7 @@ pub enum OccurrenceHandlerError {
     NotFound,                //
 }
 
+// 認証エラーはoccurrence APIのHTTPエラーへここで変換する。
 impl From<AuthServiceError> for OccurrenceHandlerError {
     fn from(error: AuthServiceError) -> Self {
         match error {
@@ -63,6 +64,7 @@ impl From<AuthServiceError> for OccurrenceHandlerError {
     }
 }
 
+// service層の仕様エラーをHTTP statusへ変換する境界。RDF validationは現状400で返す。
 impl From<OccurrenceServiceError> for OccurrenceHandlerError {
     fn from(error: OccurrenceServiceError) -> Self {
         match error {
@@ -277,6 +279,7 @@ pub async fn create_occurrence(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<CreateOccurrenceResponse>), OccurrenceHandlerError> {
+    // 作成はログイン必須。creatorはこのsessionから決めるため、Cookie確認を最初に行う。
     let session_token = extract_session_token(&headers)?;
 
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
@@ -369,6 +372,7 @@ pub async fn search_occurrences(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    // 一覧は非ログインでも使えるため、sessionが無い/無効ならpublicだけに落とす。
     let visibility = match optional_session_token(&headers) {
         None => SearchVisibility::PublicOnly,
         Some(session_token) => {
@@ -451,6 +455,7 @@ pub async fn get_occurrence(
         return Err(OccurrenceHandlerError::NotFound);
     };
 
+    // privateの場合だけ認可判定する。public occurrenceは非ログイン閲覧を許可する仕様。
     if nquads_contains_private_access_rights(&output.nquads)? {
         let Some(session_token) = optional_session_token(&headers) else {
             // private occurrenceは存在自体を隠す仕様なので、非ログインには404を返す。
@@ -467,6 +472,7 @@ pub async fn get_occurrence(
             return Err(OccurrenceHandlerError::NotFound);
         };
 
+        // 権限がない場合も404にする。private occurrenceの存在有無を外部に漏らさないため。
         if current_user.role != "admin" && current_user.user_id != creator_user_id {
             return Err(OccurrenceHandlerError::NotFound);
         }
@@ -532,6 +538,7 @@ pub async fn delete_occurrence(
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
+    // 削除前に既存RDFを読み、creatorを確認する。RDF自体が権限判定の根拠になるため。
     let existing = OccurrenceService::get_occurrence(
         GetOccurrenceInput { occurrence_id },
         state.occurrence_rdf_store.as_ref(),
@@ -627,6 +634,7 @@ pub async fn update_occurrence(
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
+    // 更新も作成と同じくN-Quadsのみ許可する。Turtle等はgraph name保証が弱くなるため受けない。
     ensure_supported_rdf_content_type(&headers)?;
     ensure_non_empty_body(&body)?;
 
@@ -670,6 +678,7 @@ const CREATOR_PREDICATE_URI: &str = "http://purl.org/dc/terms/creator";
 const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 
+// handler側の閲覧可否判定に必要な公開範囲だけをRDFから読む。
 fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, OccurrenceHandlerError> {
     let quads = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nquads)
@@ -686,6 +695,7 @@ fn nquads_contains_private_access_rights(nquads: &[u8]) -> Result<bool, Occurren
     }))
 }
 
+// 更新・削除の所有者判定は、保存済みRDFのcreatorを信頼する。
 fn nquads_creator_user_id(nquads: &[u8]) -> Result<Option<Uuid>, OccurrenceHandlerError> {
     //nquadsからuseridだけ取り出し
     let quads = RdfParser::from_format(RdfFormat::NQuads)
@@ -740,6 +750,7 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, OccurrenceHandle
 }
 
 fn ensure_supported_rdf_content_type(
+    // N-Quadsだけを受ける。named graphを必須にし、保存先graphを明示させるため。
     //content-typeを確認 text/turtle以外はエラー
     headers: &HeaderMap,
 ) -> Result<String, OccurrenceHandlerError> {

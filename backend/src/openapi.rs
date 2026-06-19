@@ -11,6 +11,7 @@ use crate::features::occurrences::dto::{
     SearchOccurrencesRequestPage, SearchOccurrencesResponse,
 };
 
+// API追加時はhandlerだけでなくこのOpenAPI定義にも登録する。フロントとの契約をここで固定する。
 #[derive(OpenApi)]
 #[openapi(
     paths(

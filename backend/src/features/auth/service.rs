@@ -58,6 +58,7 @@ impl From<argon2::password_hash::Error> for AuthServiceError {
     }
 }
 
+// 認証の業務ルールを集約する。handlerはHTTP変換、repositoryはSQLに寄せるためここで判断する。
 pub struct AuthService; //とりあえずメソッド用に作っておく。
 
 impl AuthService {
@@ -66,6 +67,7 @@ impl AuthService {
         app_base_url: &str,
         email: String,
     ) -> Result<PreRegisterOutput, AuthServiceError> {
+        // emailは同一性判定に使うため、登録前に必ず正規化する。
         let email = email.trim().to_lowercase(); //前後空白を削除&小文字化
 
         if !EmailAddress::is_valid(&email) {
@@ -73,6 +75,7 @@ impl AuthService {
             return Err(AuthServiceError::InvalidEmail);
         }
 
+        // メール本文には生tokenを入れるが、DBにはhashだけ保存する。DB漏洩時に登録URLを再利用されないため。
         let token = Uuid::new_v4().to_string();
         let token_hash = hash_token(&token);
 
@@ -107,6 +110,7 @@ impl AuthService {
             return Err(AuthServiceError::InvalidPassword);
         }
 
+        // 仕様上の8-128文字制限は、空白trim後の実際に保存するpasswordに対して判定する。
         let password_len = password.chars().count();
         if !(8..=128).contains(&password_len) {
             return Err(AuthServiceError::InvalidPassword);
@@ -118,6 +122,7 @@ impl AuthService {
 
         let token_hash = hash_token(token);
 
+        // ユーザー作成とpending完了は一体の操作なので、片方だけ成功しないようtransactionでまとめる。
         let mut tx = db.begin().await?;
 
         let pending_registration =
@@ -165,6 +170,7 @@ impl AuthService {
         email: String,
         password: String,
     ) -> Result<LoginOutput, AuthServiceError> {
+        // login時も登録時と同じ正規化を行い、大文字小文字や前後空白で別ユーザー扱いにならないようにする。
         let email = email.trim().to_lowercase(); //メール整形
 
         if email.is_empty() {
@@ -175,12 +181,14 @@ impl AuthService {
             return Err(AuthServiceError::InvalidCredentials);
         }
 
+        // 存在しないemailとpassword不一致は同じエラーにする。ユーザー列挙を避けるため。
         let user = AuthRepository::find_user_by_email(db, &email).await?;
 
         let user = user.ok_or(AuthServiceError::InvalidCredentials)?; //ユーザーが見つからなかったらエラー
 
         verify_password(&password, &user.password_hash)?;
 
+        // Cookieには生tokenを返し、DBにはhashだけ保存する。session漏洩時の被害面をDB側で広げないため。
         let session_token = Uuid::new_v4().to_string(); //トークン作成
         let session_token_hash = hash_token(&session_token); //トークン　ハッシュ化
 
@@ -245,15 +253,18 @@ impl AuthService {
             user_id: user.user_id,
             email: user.email,
             user_name: user.user_name,
+            // MVPではrole永続化を後回しにしているためeditor固定。admin対応時はDBのroleを返す。
             role: "editor".to_string(), //とりあえず、編集者権限だけ用意しているので、これで
         })
     }
 }
 
+// tokenは照合時に再計算できればよいので、可逆暗号ではなくSHA-256 hashで保存する。
 pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes())) //ハッシュ化, encodeはバイナリそのままを16進数に変換している。
 }
 
+// passwordはArgon2idでsalt付きhash化する。平文保存は禁止。
 pub fn hash_password(password: &str) -> Result<String, AuthServiceError> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();

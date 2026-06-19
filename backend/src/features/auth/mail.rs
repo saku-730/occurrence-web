@@ -6,6 +6,7 @@ use lettre::{
 
 use crate::config::SmtpConfig;
 
+// SMTP送信の詳細をhandlerから分離する。テストではMailpit、本番では外部SMTPを同じ経路で扱う。
 pub async fn send_mail(message: &MailMessage, smtp: &SmtpConfig) -> Result<(), MailError> {
     let from: Mailbox = smtp //送信元メールアドレス設定
         .from
@@ -28,18 +29,21 @@ pub async fn send_mail(message: &MailMessage, smtp: &SmtpConfig) -> Result<(), M
 
     let mut builder = match tls_mode.as_str() {
         //tlsの値によって分岐
+        // MailpitなどのローカルSMTPではTLSなしを許可する。
         "none" => {
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host) //開発 Mailpit
                 .port(smtp.port)
                 .tls(Tls::None)
         }
 
+        // 外部SMTPで平文接続からTLSへ昇格する方式。
         "starttls" => {
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp.host) //本番Resend用
                 .map_err(|_| MailError::BuildTransport)?
                 .port(smtp.port)
         }
 
+        // 最初からTLSで接続するSMTP用。
         "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp.host) //
             .map_err(|_| MailError::BuildTransport)?
             .port(smtp.port),
@@ -84,6 +88,7 @@ pub enum MailError {
     SendFailed,
 }
 
+// 登録完了URLはbackendのbase URLから作る。フロント/環境差分をConfigに閉じ込めるため。
 pub fn build_registration_completion_email(
     //メールの宛先・件名・本文を作成
     to: &str,           //宛先

@@ -1,6 +1,7 @@
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+// SQLをこの層に閉じ込め、serviceは認証ルールに集中させる。
 pub struct AuthRepository;
 
 #[derive(Debug)]
@@ -29,6 +30,7 @@ impl AuthRepository {
         email: &str,
         token_hash: &str,
     ) -> Result<(), sqlx::Error> {
+        // 仮登録tokenは短命にする。期限切れ後は同じURLから本登録できない。
         //有効期限は30分
         sqlx::query(
             r#"
@@ -135,6 +137,7 @@ impl AuthRepository {
         Ok(row.exists)
     }
 
+    // 本登録ではユーザー作成とpending完了を同じtransactionにするため、tx版を使う。
     pub async fn find_pending_registration_by_token_hash_in_tx(
         tx: &mut Transaction<'_, Postgres>,
         token_hash: &str,
@@ -294,6 +297,7 @@ impl AuthRepository {
         db: &PgPool,
         session_token_hash: &str,
     ) -> Result<Option<UserForSession>, sqlx::Error> {
+        // revoked_atとexpires_atを同時に見ることで、ログアウト済み・期限切れsessionを弾く。
         let row = sqlx::query_as!(
             UserForSession,
             r#"

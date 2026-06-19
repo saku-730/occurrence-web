@@ -1,6 +1,7 @@
 use std::env;
 use std::fmt;
 
+// アプリ起動時に環境変数を集約する設定。handlerやserviceが直接envを読まないようにする。
 #[derive(Debug, Clone)]
 pub struct Config {
     pub app: AppConfig,
@@ -14,6 +15,7 @@ pub struct AppConfig {
     pub host: String,
     pub port: u16,
     pub app_base_url: String,
+    // 本番ではsession cookieをHTTPSに限定するためtrueにする。開発ではHTTPで動かすためfalseを許可する。
     pub cookie_secure: bool,
 }
 
@@ -46,6 +48,7 @@ pub struct FusekiConfig {
 }
 
 impl FusekiConfig {
+    // Fusekiは用途ごとにendpointが分かれるため、URL組み立てをここに閉じ込める。
     pub fn data_url(&self) -> String {
         format!("{}/data", self.base_url.trim_end_matches('/'))
     }
@@ -85,10 +88,11 @@ impl Config {
         let _ = dotenvy::dotenv(); //.envから環境変数へ
 
         let app = AppConfig {
-            //アプリの基本情報
+            // アプリ基本設定は開発環境で起動しやすいようにdefaultを持つ。
             host: get_env_or("APP_HOST", "127.0.0.1"),
             port: parse_u16_env_or("APP_PORT", 3000)?,
             app_base_url: get_env_or("APP_BASE_URL", "http://127.0.0.1:3000"),
+            // COOKIE_SECUREは本番でtrueにする。未指定時falseなのはローカルHTTP開発を妨げないため。
             cookie_secure: parse_bool_env_or("COOKIE_SECURE", false)?,
         };
 
@@ -127,6 +131,7 @@ fn get_env_or(key: &'static str, default: &str) -> String {
     }
 }
 
+// 外部サービス接続に必須な値は、空文字defaultで起動して失敗するより起動時に明示的に落とす。
 fn get_required_env(key: &'static str) -> Result<String, ConfigError> {
     match env::var(key) {
         Ok(value) if !value.trim().is_empty() => Ok(value),
@@ -143,6 +148,7 @@ fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError>
     }
 }
 
+// DockerやPaaSの環境変数表現に合わせて、true/falseだけでなく1/0なども受け付ける。
 fn parse_bool_env_or(key: &'static str, default: bool) -> Result<bool, ConfigError> {
     match env::var(key) {
         Ok(value) if !value.trim().is_empty() => {

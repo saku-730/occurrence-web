@@ -5,6 +5,7 @@ use crate::features::occurrences::service::{
     SearchVisibility,
 };
 
+// Apache Jena Fusekiとの通信を担当する。service層からSPARQL/HTTP詳細を隠す。
 #[derive(Clone)]
 pub struct FusekiClient {
     http: reqwest::Client,
@@ -25,6 +26,7 @@ impl FusekiClient {
         }
     }
 
+    // Fusekiの/data endpointへN-Quadsを追加保存する。作成時はbackendで完成済みのRDFだけを送る。
     pub async fn post_nquads(&self, nquads: Vec<u8>) -> Result<(), FusekiClientError> {
         let response = self
             .http
@@ -67,10 +69,12 @@ impl OccurrenceRdfStore for FusekiClient {
         let created_predicate = "http://purl.org/dc/terms/created";
         let modified_predicate = "http://purl.org/dc/terms/modified";
 
+        // 検索条件・閲覧権限・cursorをSPARQL文字列に分解してから組み立てる。
         let filter_patterns = build_search_filter_patterns(&input.filters)?;
         let visibility_patterns = build_search_visibility_patterns(&input.visibility)?;
         let cursor_filter = build_search_cursor_filter(input.cursor.as_deref())?;
         let limit = input.limit.max(1);
+        // limit+1件取得し、余分な1件の有無でhas_nextを判定する。
         let query_limit = limit + 1;
 
         let query = format!(
@@ -154,6 +158,7 @@ impl OccurrenceRdfStore for FusekiClient {
             });
         }
 
+        // 次ページは最後に返した行を基準にする。offsetより追加/削除に強いcursor方式。
         let next_cursor = if has_next {
             rows.last().map(search_next_cursor)
         } else {
@@ -176,6 +181,7 @@ impl OccurrenceRdfStore for FusekiClient {
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
 
+        // Fusekiには主語単位の置換APIがないため、先に対象subjectのquadだけを消してから再insertする。
         let update = format!(
             r#"
             DELETE WHERE {{
@@ -212,6 +218,7 @@ impl OccurrenceRdfStore for FusekiClient {
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
 
+        // MVPの削除仕様は、対象occurrence URIをsubjectに持つquadだけを物理削除する。
         let update = format!(
             r#"
             DELETE WHERE {{
@@ -248,6 +255,7 @@ impl OccurrenceRdfStore for FusekiClient {
 
         let graph_uri = "https://bio-database.net/graphs/occurrences";
 
+        // 詳細取得では一覧用DTOではなくRDF全文を返すため、CONSTRUCTで対象subjectのtriplesを取る。
         let query = format!(
             r#"
             CONSTRUCT {{
@@ -299,6 +307,7 @@ impl OccurrenceRdfStore for FusekiClient {
         let graph_name =
             NamedNode::new(graph_uri).map_err(|_| OccurrenceServiceError::StoreFailed)?;
 
+        // FusekiからはN-Triplesで受けるため、API仕様のN-Quadsへoccurrence graphを付け直す。
         let quads = triples
             .into_iter()
             .map(|triple| {
@@ -329,6 +338,7 @@ impl OccurrenceRdfStore for FusekiClient {
     }
 }
 
+// 公開範囲の制御はSPARQL段階で行う。後段filterだとlimit/cursorが閲覧可能件数とずれるため。
 fn build_search_visibility_patterns(
     visibility: &SearchVisibility,
 ) -> Result<String, OccurrenceServiceError> {
@@ -361,6 +371,7 @@ fn build_search_visibility_patterns(
     Ok(patterns)
 }
 
+// filterは任意predicate検索を支えるため、predicateごとにSPARQL patternとして追加する。
 fn build_search_filter_patterns(
     filters: &[SearchOccurrenceFilterInput],
 ) -> Result<String, OccurrenceServiceError> {
@@ -417,6 +428,7 @@ fn build_search_filter_patterns(
     Ok(patterns.join("\n"))
 }
 
+// SPARQL文字列へ埋め込むIRIは、構文を壊す文字を拒否して簡易的な注入対策にする。
 fn escape_sparql_iri(value: &str) -> Result<String, OccurrenceServiceError> {
     if value.contains(['<', '>', '"', '{', '}', '|', '^', '`', '\\']) {
         return Err(OccurrenceServiceError::StoreFailed);
@@ -433,6 +445,7 @@ fn escape_sparql_literal(value: &str) -> String {
         .replace('\r', "\\r")
 }
 
+// cursorの実体は最後に返したcreatedとURI。hex化してクライアントにはopaque文字列として扱わせる。
 fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
     let cursor = serde_json::json!({
         "created": row.created.as_deref().unwrap_or(""),
@@ -443,6 +456,7 @@ fn search_next_cursor(row: &SearchOccurrenceStoreRow) -> String {
 }
 
 fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, OccurrenceServiceError> {
+    // ORDER BY DESC(?created) DESC(?occurrence) と同じ順序で、次ページの開始位置を絞り込む。
     //only created
     let Some(cursor) = cursor else {
         return Ok(String::new());
