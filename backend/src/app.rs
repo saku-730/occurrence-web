@@ -8,7 +8,9 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
     features::{
-        auth::handler::{complete_registration, login, logout, me, pre_register},
+        auth::handler::{
+            complete_registration, login, logout, me, pre_register, request_password_reset,
+        },
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
             update_occurrence,
@@ -27,6 +29,7 @@ pub fn build_app(state: AppState) -> Router {
         // auth: ユーザー登録、ログイン、セッション確認を扱う。
         .route("/auth/pre_register", post(pre_register))
         .route("/auth/complete_registration", post(complete_registration))
+        .route("/auth/request_password_reset", post(request_password_reset))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
@@ -861,6 +864,265 @@ mod tests {
 
         delete_pending_registration_by_email(&db, &email).await;
         delete_mailpit_messages().await;
+    }
+
+    #[tokio::test]
+    async fn request_password_reset_route_sends_reset_mail_for_registered_email() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-password-reset-{}@example.com", uuid::Uuid::new_v4());
+        let password_hash = hash_password("password123").expect("password hash should be created");
+
+        // app経由テストではHTTP handlerからservice/repository/mailまで接続されることを確認する。
+        // 登録済みユーザーだけがリセット対象なので、先にusersへ対象ユーザーを作成する。
+        AuthRepository::create_user(&db, &email, "reset-user", &password_hash)
+            .await
+            .expect("user should be created");
+
+        delete_mailpit_messages().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/request_password_reset")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let token_hash_count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM password_reset_tokens
+            WHERE user_id = (
+                SELECT id
+                FROM users
+                WHERE email = $1
+            )
+            "#,
+        )
+        .bind(&email)
+        .fetch_one(&db)
+        .await
+        .expect("password reset token should be queryable");
+
+        assert_eq!(token_hash_count.0, 1);
+
+        let mailpit_messages = fetch_mailpit_messages().await;
+
+        let message = mailpit_messages
+            .iter()
+            .find(|message| {
+                message["To"].as_array().is_some_and(|to| {
+                    to.iter().any(|recipient| {
+                        recipient["Address"]
+                            .as_str()
+                            .is_some_and(|address| address == email)
+                    })
+                })
+            })
+            .expect("password reset email was not sent");
+
+        let subject = message["Subject"].as_str().unwrap_or("");
+        assert!(subject.contains("パスワードリセット"));
+
+        let message_id = message["ID"]
+            .as_str()
+            .expect("mailpit message ID is missing");
+
+        let message_detail = fetch_mailpit_message(message_id).await;
+        let body = message_detail["Text"].as_str().unwrap_or("");
+
+        assert!(body.contains("/auth/reset_password"));
+        assert!(body.contains("token="));
+
+        delete_mailpit_messages().await;
+    }
+
+    #[tokio::test]
+    async fn request_password_reset_route_rejects_unregistered_email() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!(
+            "missing-password-reset-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+
+        delete_mailpit_messages().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/request_password_reset")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body_json["error"], "invalid_credentials");
+        assert_eq!(body_json["message"], "Invalid credential");
+
+        let token_hash_count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM password_reset_tokens
+            WHERE user_id = (
+                SELECT id
+                FROM users
+                WHERE email = $1
+            )
+            "#,
+        )
+        .bind(&email)
+        .fetch_one(&db)
+        .await
+        .expect("password reset tokens should be queryable");
+
+        assert_eq!(token_hash_count.0, 0);
+
+        let mailpit_messages = fetch_mailpit_messages().await;
+        assert!(
+            mailpit_messages.is_empty(),
+            "password reset email should not be sent for unregistered email"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "sends a real password reset email through the configured production SMTP server"]
+    async fn request_password_reset_route_sends_real_email_to_gmail_for_temporary_user() {
+        dotenvy::dotenv().ok();
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for real password reset mail test");
+        let smtp_host = std::env::var("SMTP_HOST")
+            .expect("SMTP_HOST must be set to a real SMTP server for this ignored test");
+
+        // このテストは実メール送信確認用なので、Mailpit/localhost設定では成功扱いにしない。
+        // Mailpit経路は通常appテストで確認済み。本テストはResend等の本番SMTP疎通だけを見る。
+        assert!(
+            smtp_host != "127.0.0.1" && smtp_host != "localhost",
+            "real email test requires a non-local SMTP_HOST"
+        );
+
+        let smtp_port = std::env::var("SMTP_PORT")
+            .expect("SMTP_PORT must be set for real password reset mail test")
+            .parse::<u16>()
+            .expect("SMTP_PORT must be a valid u16");
+        let smtp_username = std::env::var("SMTP_USERNAME")
+            .expect("SMTP_USERNAME must be set for real password reset mail test");
+        let smtp_password = std::env::var("SMTP_PASSWORD")
+            .expect("SMTP_PASSWORD must be set for real password reset mail test");
+        let smtp_tls = std::env::var("SMTP_TLS").unwrap_or_else(|_| "starttls".to_string());
+        let mail_from = std::env::var("MAIL_FROM")
+            .expect("MAIL_FROM must be set for real password reset mail test");
+        // 到達率確認のため、このignoredテストでは一時的に独自ドメインのURLを本文に入れる。
+        let app_base_url = "https://bio-database.net".to_string();
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url,
+                environment: "test".to_string(),
+                cookie_secure: false,
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: smtp_host,
+                port: smtp_port,
+                username: smtp_username,
+                password: smtp_password,
+                tls: smtp_tls,
+                from: mail_from,
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let state = AppState::new(config, posgre, Arc::new(NoopOccurrenceRdfStore));
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = "test@gmail.com";
+        let password_hash = hash_password("temporary-password-123")
+            .expect("temporary password hash should be created");
+
+        // 実メール送信用に対象emailのユーザーがなければ仮作成する。
+        // 既に同じemailのユーザーがいる場合は上書きせず、そのユーザーに対するreset mailだけ送る。
+        sqlx::query(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (email) DO NOTHING
+            "#,
+        )
+        .bind(email)
+        .bind("real-mail-reset-test")
+        .bind(&password_hash)
+        .execute(&db)
+        .await
+        .expect("temporary user should be present for real password reset mail test");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/request_password_reset")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{}"}}"#, email)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let token_hash_count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM password_reset_tokens
+            WHERE user_id = (
+                SELECT id
+                FROM users
+                WHERE email = $1
+            )
+            "#,
+        )
+        .bind(email)
+        .fetch_one(&db)
+        .await
+        .expect("password reset token should be queryable");
+
+        assert_eq!(token_hash_count.0, 1);
     }
 
     #[tokio::test]

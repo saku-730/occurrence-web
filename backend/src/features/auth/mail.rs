@@ -112,8 +112,8 @@ pub fn build_registration_completion_email(
     }
 }
 
-// パスワードリセットURLも登録メールと同じくbackend base URLから作る。
-// 生tokenはメール本文だけに含め、DBにはhashだけ保存することでDB漏洩時の再利用を防ぐ。
+// パスワードリセットメールには、生tokenを含むリセットリンクを入れる。
+// DBにはhashだけ保存し、メールを受け取った本人だけが生tokenを使えるようにする。
 pub fn build_password_reset_email(to: &str, app_base_url: &str, token: &str) -> MailMessage {
     let reset_url = format!(
         "{}/auth/reset_password?token={}",
@@ -123,9 +123,18 @@ pub fn build_password_reset_email(to: &str, app_base_url: &str, token: &str) -> 
 
     MailMessage {
         to: to.to_string(),
-        subject: "Reset your password".to_string(),
+        subject: "Occurrence Web パスワードリセットのご案内".to_string(),
         body: format!(
-            "Please reset your password by opening the following URL:\n\n{}",
+            "Occurrence Web のパスワードリセットを受け付けました。
+
+以下のURLから1時間以内に新しいパスワードを設定してください。
+
+{}
+
+このメールに心当たりがない場合は、何も操作する必要はありません。
+このURLは第三者に共有しないでください。
+
+Occurrence Web",
             reset_url
         ),
     }

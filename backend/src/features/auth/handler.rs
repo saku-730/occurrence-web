@@ -11,8 +11,8 @@ use axum::{
 use super::{
     dto::{
         CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
-        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, RegisterRequest,
-        RegisterResponse,
+        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetRequest,
+        PasswordResetResponse, RegisterRequest, RegisterResponse,
     },
     mail::{MailError, send_mail},
     service::{AuthService, AuthServiceError},
@@ -199,6 +199,57 @@ pub async fn pre_register(
     send_mail(&output.mail, &state.config.smtp).await?; //メール送信
 
     Ok((StatusCode::CREATED, Json(output.response)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/request_password_reset",
+    request_body = PasswordResetRequest,
+    responses(
+        (
+            status = 200,
+            description = "Password reset mail accepted",
+            body = PasswordResetResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid email",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Unknown email",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+pub async fn request_password_reset(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetRequest>,
+) -> Result<(StatusCode, Json<PasswordResetResponse>), AuthHandlerError> {
+    let output = AuthService::request_password_reset(
+        &state.posgre,
+        &state.config.app.app_base_url,
+        payload.email,
+    )
+    .await?;
+
+    // リセットtokenのDB保存だけで成功扱いにするとユーザーはメールを受け取れない。
+    // pre_registerと同様、メール送信まで完了してからHTTP 200を返す。
+    send_mail(&output.mail, &state.config.smtp).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PasswordResetResponse {
+            message: "password reset mail sent".to_string(),
+        }),
+    ))
 }
 
 #[utoipa::path(

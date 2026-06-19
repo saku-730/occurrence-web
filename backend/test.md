@@ -83,9 +83,15 @@
 
 ## Password reset
 
+### app
+
+- [x] `POST /auth/request_password_reset` に登録済みユーザーの正しい email を送ると、AuthService経由でパスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットリンクを含む案内メールが送信され、`200 OK` が返る。`request_password_reset_route_sends_reset_mail_for_registered_email`
+- [x] `POST /auth/request_password_reset` に未登録 email を送るとエラーになり、パスワードリセット用 token hash は作成されず、メールも送信されない。`request_password_reset_route_rejects_unregistered_email`
+- [x] `POST /auth/request_password_reset` を本番SMTP設定でapp経由実行し、仮ユーザー `test@gmail.com` 宛に`https://bio-database.net` のリセットリンクを含むパスワードリセット案内メールを実送信できる（ignored）。`request_password_reset_route_sends_real_email_to_gmail_for_temporary_user`
+
 ### service
 
-- [x] 登録済みユーザーの正しい email を `AuthService::request_password_reset` に渡すと、パスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットURLを含む `MailMessage` が作成される。`request_password_reset_creates_reset_email_for_registered_email`
+- [x] 登録済みユーザーの正しい email を `AuthService::request_password_reset` に渡すと、パスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットリンクを含む `MailMessage` が作成される。`request_password_reset_creates_reset_email_for_registered_email`
 
 ## Session, Login/Logout
 

@@ -34,6 +34,17 @@ pub struct CompleteRegistrationResponse {
     pub message: String,
 }
 
+// パスワードリセット申請はemailだけを受け取る。実際のtokenはメールでのみ通知する。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PasswordResetRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PasswordResetResponse {
+    pub message: String,
+}
+
 // session cookie発行のためのログイン入力。emailはservice側で正規化する。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {

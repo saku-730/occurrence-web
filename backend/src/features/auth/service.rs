@@ -596,7 +596,13 @@ mod tests {
 
         assert_eq!(output.email, email);
         assert_eq!(output.mail.to, email);
-        assert!(output.mail.subject.contains("password"));
+        assert!(output.mail.subject.contains("パスワードリセット"));
+        assert!(
+            output
+                .mail
+                .body
+                .contains("Occurrence Web のパスワードリセットを受け付けました。")
+        );
         assert!(
             output
                 .mail
