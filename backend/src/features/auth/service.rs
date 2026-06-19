@@ -101,7 +101,14 @@ impl AuthService {
             return Err(AuthServiceError::InvalidToken); //トークンが空はエラー
         }
 
-        if password.trim().is_empty() {
+        let password = password.trim();
+
+        if password.is_empty() {
+            return Err(AuthServiceError::InvalidPassword);
+        }
+
+        let password_len = password.chars().count();
+        if !(8..=128).contains(&password_len) {
             return Err(AuthServiceError::InvalidPassword);
         }
 
@@ -130,7 +137,7 @@ impl AuthService {
         }
 
         let user_name = user_name.trim();
-        let password_hash = hash_password(password.trim())?;
+        let password_hash = hash_password(password)?;
 
         AuthRepository::create_user_in_tx(
             //ユーザー本作成処理
