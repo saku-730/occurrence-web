@@ -93,6 +93,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -154,6 +155,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -1151,6 +1153,92 @@ mod tests {
         assert!(
             set_cookie.contains("Max-Age=604800"),
             "session cookie should live for 7 days"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_route_sets_secure_session_cookie_when_cookie_secure_enabled() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for app tests");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: true,
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        let state = AppState::new(config, posgre, Arc::new(NoopOccurrenceRdfStore));
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!(
+            "route-login-secure-cookie-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let password = "password123";
+        let password_hash = hash_password(password).expect("password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "saku", &password_hash)
+            .await
+            .expect("user should be created");
+
+        let body = serde_json::json!({
+            "email": email,
+            "password": password
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("login response should include Set-Cookie header")
+            .to_str()
+            .expect("Set-Cookie header should be valid string");
+
+        assert!(
+            set_cookie.contains("Secure"),
+            "session cookie should be Secure when cookie_secure is enabled"
         );
     }
 
@@ -2766,6 +2854,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -2934,6 +3023,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -3114,6 +3204,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -4383,6 +4474,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -4502,6 +4594,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 host: "127.0.0.1".to_string(),
                 port: 3000,
                 app_base_url: "http://127.0.0.1:3000".to_string(),
+                cookie_secure: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),

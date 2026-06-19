@@ -277,9 +277,14 @@ pub async fn login(
 ) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AuthHandlerError> {
     let output = AuthService::login(&state.posgre, payload.email, payload.password).await?;
 
+    let secure_attribute = if state.config.app.cookie_secure {
+        "; Secure"
+    } else {
+        ""
+    };
     let session_cookie = format!(
-        "session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800", //Max-Ageは秒数 7日
-        output.session_token
+        "session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800{}", //Max-Ageは秒数 7日
+        output.session_token, secure_attribute
     );
 
     let mut headers = HeaderMap::new();
@@ -333,10 +338,20 @@ pub async fn logout(
 
     let mut response_headers = HeaderMap::new();
 
+    let secure_attribute = if state.config.app.cookie_secure {
+        "; Secure"
+    } else {
+        ""
+    };
+    let clear_session_cookie = format!(
+        "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}",
+        secure_attribute
+    );
+
     response_headers.insert(
         //http レスポンスヘッダー作成
         SET_COOKIE,
-        HeaderValue::from_str("session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+        HeaderValue::from_str(&clear_session_cookie)
             .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
     );
 

@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub host: String,
     pub port: u16,
     pub app_base_url: String,
+    pub cookie_secure: bool,
 }
 
 impl AppConfig {
@@ -88,6 +89,7 @@ impl Config {
             host: get_env_or("APP_HOST", "127.0.0.1"),
             port: parse_u16_env_or("APP_PORT", 3000)?,
             app_base_url: get_env_or("APP_BASE_URL", "http://127.0.0.1:3000"),
+            cookie_secure: parse_bool_env_or("COOKIE_SECURE", false)?,
         };
 
         let posgre = PosgreConfig {
@@ -137,6 +139,20 @@ fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError>
         Ok(value) if !value.trim().is_empty() => value
             .parse::<u16>()
             .map_err(|_| ConfigError::InvalidVar { key, value }),
+        _ => Ok(default),
+    }
+}
+
+fn parse_bool_env_or(key: &'static str, default: bool) -> Result<bool, ConfigError> {
+    match env::var(key) {
+        Ok(value) if !value.trim().is_empty() => {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "true" | "1" | "yes" | "on" => Ok(true),
+                "false" | "0" | "no" | "off" => Ok(false),
+                _ => Err(ConfigError::InvalidVar { key, value }),
+            }
+        }
         _ => Ok(default),
     }
 }

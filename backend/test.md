@@ -90,6 +90,7 @@
 - [x] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
 - [x] 間違った、パスワードで`POST /auth/login` しても401
 - [x] `POST /auth/login` に正常リクエストでCookiセッション発行される。`login_route_sets_session_cookie_for_registered_user`
+- [x] `COOKIE_SECURE=true` のとき `POST /auth/login` の session cookie に `Secure` が付く`login_route_sets_secure_session_cookie_when_cookie_secure_enabled`
 - [x] `POST /auth/logout`に正常リクエストでログアウト`logout_route_revokes_session_and_clears_cookie`
 - [x] `POST /auth/logout`にsession cookie なしで送ると401`logout_route_returns_unauthorized_without_session_cookie`
 - [x] `GET /auth/me`に正常 session cookieでユーザー情報取得``
