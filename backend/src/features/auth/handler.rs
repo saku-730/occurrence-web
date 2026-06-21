@@ -11,8 +11,9 @@ use axum::{
 use super::{
     dto::{
         CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
-        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetRequest,
-        PasswordResetResponse, RegisterRequest, RegisterResponse,
+        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
+        PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse,
+        RegisterRequest, RegisterResponse,
     },
     mail::{MailError, send_mail},
     service::{AuthService, AuthServiceError},
@@ -248,6 +249,45 @@ pub async fn request_password_reset(
         StatusCode::OK,
         Json(PasswordResetResponse {
             message: "password reset mail sent".to_string(),
+        }),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/reset_password",
+    request_body = PasswordResetCompleteRequest,
+    responses(
+        (
+            status = 200,
+            description = "Password reset completed",
+            body = PasswordResetCompleteResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid token or password",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+pub async fn reset_password(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetCompleteRequest>,
+) -> Result<(StatusCode, Json<PasswordResetCompleteResponse>), AuthHandlerError> {
+    // handlerではHTTP JSONをservice入力へ渡すだけにする。
+    // token検証、password policy、DB更新の一貫性はAuthService::reset_passwordへ集約する。
+    AuthService::reset_password(&state.posgre, payload.token, payload.password).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PasswordResetCompleteResponse {
+            message: "password reset completed".to_string(),
         }),
     ))
 }

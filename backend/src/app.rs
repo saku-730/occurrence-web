@@ -10,6 +10,7 @@ use crate::{
     features::{
         auth::handler::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
+            reset_password,
         },
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
@@ -30,6 +31,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/pre_register", post(pre_register))
         .route("/auth/complete_registration", post(complete_registration))
         .route("/auth/request_password_reset", post(request_password_reset))
+        .route("/auth/reset_password", post(reset_password))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
@@ -944,6 +946,76 @@ mod tests {
         assert!(body.contains("token="));
 
         delete_mailpit_messages().await;
+    }
+
+    #[tokio::test]
+    async fn reset_password_route_updates_password_for_valid_token() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-reset-complete-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        // app経由テストでは、HTTP handlerからAuthService::reset_passwordへつながり、
+        // token hash照合で対象ユーザーのpassword hashが更新されることを確認する。
+        AuthRepository::upsert_password_reset_token(&db, user.id, &token_hash)
+            .await
+            .expect("password reset token should be stored");
+
+        let body = serde_json::json!({
+            "token": token,
+            "password": "new-password-123"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/reset_password")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let updated_user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("updated user query should succeed")
+            .expect("updated user should exist");
+
+        assert_ne!(updated_user.password_hash, old_password_hash);
+        assert_ne!(updated_user.password_hash, "new-password-123");
+
+        let used_at: (Option<chrono::DateTime<chrono::Utc>>,) = sqlx::query_as(
+            r#"
+            SELECT used_at
+            FROM password_reset_tokens
+            WHERE token_hash = $1
+            "#,
+        )
+        .bind(&token_hash)
+        .fetch_one(&db)
+        .await
+        .expect("password reset token should still exist");
+
+        assert!(used_at.0.is_some(), "reset token should be marked used");
     }
 
     #[tokio::test]

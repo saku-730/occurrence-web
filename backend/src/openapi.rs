@@ -2,8 +2,9 @@ use utoipa::OpenApi;
 
 use crate::features::auth::dto::{
     CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse, ErrorResponse,
-    LoginRequest, LoginResponse, LogoutResponse, PasswordResetRequest, PasswordResetResponse,
-    RegisterRequest, RegisterResponse,
+    LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
+    PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse, RegisterRequest,
+    RegisterResponse,
 };
 
 use crate::features::occurrences::dto::{
@@ -19,6 +20,7 @@ use crate::features::occurrences::dto::{
         crate::features::auth::handler::pre_register,
         crate::features::auth::handler::complete_registration,
         crate::features::auth::handler::request_password_reset,
+        crate::features::auth::handler::reset_password,
         crate::features::auth::handler::login,
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
@@ -37,6 +39,8 @@ use crate::features::occurrences::dto::{
             CompleteRegistrationResponse,
             PasswordResetRequest,
             PasswordResetResponse,
+            PasswordResetCompleteRequest,
+            PasswordResetCompleteResponse,
             LoginRequest,
             LoginResponse,
             LogoutResponse,

@@ -45,6 +45,18 @@ pub struct PasswordResetResponse {
     pub message: String,
 }
 
+// パスワードリセット完了は、メールで受け取ったtokenと新しいpasswordを受け取る。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PasswordResetCompleteRequest {
+    pub token: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PasswordResetCompleteResponse {
+    pub message: String,
+}
+
 // session cookie発行のためのログイン入力。emailはservice側で正規化する。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
