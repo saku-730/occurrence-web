@@ -727,6 +727,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reset_password_rejects_password_outside_8_to_128_characters() {
+        let db = test_db_pool().await;
+        let email = format!("reset-password-policy-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let short_token = uuid::Uuid::new_v4().to_string();
+        let short_token_hash = hash_token(&short_token);
+        AuthRepository::upsert_password_reset_token(&db, user.id, &short_token_hash)
+            .await
+            .expect("short password reset token should be stored");
+
+        let short_result =
+            AuthService::reset_password(&db, short_token, "1234567".to_string()).await;
+
+        assert!(
+            matches!(short_result, Err(AuthServiceError::InvalidPassword)),
+            "reset_password should reject passwords shorter than 8 characters: {:?}",
+            short_result
+        );
+
+        let long_token = uuid::Uuid::new_v4().to_string();
+        let long_token_hash = hash_token(&long_token);
+        AuthRepository::upsert_password_reset_token(&db, user.id, &long_token_hash)
+            .await
+            .expect("long password reset token should be stored");
+
+        let long_result = AuthService::reset_password(&db, long_token, "a".repeat(129)).await;
+
+        assert!(
+            matches!(long_result, Err(AuthServiceError::InvalidPassword)),
+            "reset_password should reject passwords longer than 128 characters: {:?}",
+            long_result
+        );
+
+        let unchanged_user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("unchanged user query should succeed")
+            .expect("unchanged user should exist");
+
+        assert_eq!(unchanged_user.password_hash, old_password_hash);
+    }
+
+    #[tokio::test]
+    async fn reset_password_rejects_invalid_token_and_does_not_update_password() {
+        let db = test_db_pool().await;
+        let email = format!("reset-invalid-token-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let result = AuthService::reset_password(
+            &db,
+            "unknown-reset-token".to_string(),
+            "new-password-123".to_string(),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AuthServiceError::InvalidToken)),
+            "reset_password should reject a token that does not exist in password_reset_tokens: {:?}",
+            result
+        );
+
+        let unchanged_user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("unchanged user query should succeed")
+            .expect("unchanged user should exist");
+
+        assert_eq!(unchanged_user.password_hash, old_password_hash);
+    }
+
+    #[tokio::test]
     async fn complete_registration_rejects_empty_token() {
         let db = test_db_pool().await;
 

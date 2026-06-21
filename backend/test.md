@@ -94,6 +94,9 @@
 
 - [x] 登録済みユーザーの正しい email を `AuthService::request_password_reset` に渡すと、パスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットリンクを含む `MailMessage` が作成される。`request_password_reset_creates_reset_email_for_registered_email`
 - [x] 正常なパスワードリセット token と新しいpasswordを `AuthService::reset_password` に渡すと、tokenから対象ユーザーを特定して `users.password_hash` が更新される。`reset_password_updates_password_for_valid_token`
+- [x] `AuthService::reset_password` に8文字未満または128文字超のpasswordを渡すと、`AuthServiceError::InvalidPassword` で拒否される。`reset_password_rejects_password_outside_8_to_128_characters`
+- [x] `AuthService::reset_password` に正常ではない token を渡すと、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_invalid_token_and_does_not_update_password`
+- [ ] `AuthService::reset_password` で使用済み token を再利用しようとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は再更新されない。`reset_password_rejects_used_token_and_does_not_update_password_again`
 
 ## Session, Login/Logout
 
