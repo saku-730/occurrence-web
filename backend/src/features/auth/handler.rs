@@ -218,11 +218,6 @@ pub async fn pre_register(
             body = ErrorResponse
         ),
         (
-            status = 401,
-            description = "Unknown email",
-            body = ErrorResponse
-        ),
-        (
             status = 500,
             description = "Internal server error",
             body = ErrorResponse
@@ -239,11 +234,20 @@ pub async fn request_password_reset(
         &state.config.app.app_base_url,
         payload.email,
     )
-    .await?;
+    .await;
 
-    // リセットtokenのDB保存だけで成功扱いにするとユーザーはメールを受け取れない。
-    // pre_registerと同様、メール送信まで完了してからHTTP 200を返す。
-    send_mail(&output.mail, &state.config.smtp).await?;
+    match output {
+        Ok(output) => {
+            // リセットtokenのDB保存だけで成功扱いにするとユーザーはメールを受け取れない。
+            // pre_registerと同様、メール送信まで完了してからHTTP 200を返す。
+            send_mail(&output.mail, &state.config.smtp).await?;
+        }
+        Err(AuthServiceError::InvalidCredentials) => {
+            // パスワードリセット要求では、未登録emailも登録済みemailと同じ成功風レスポンスにする。
+            // 401/404を返すとメールアドレスの登録有無を外部から推測できるため、token作成もメール送信もせずに200だけ返す。
+        }
+        Err(error) => return Err(error.into()),
+    }
 
     Ok((
         StatusCode::OK,

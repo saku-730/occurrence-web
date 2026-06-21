@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_password_reset_route_rejects_unregistered_email() {
+    async fn request_password_reset_route_returns_success_like_response_for_unregistered_email() {
         let state = test_state();
         let db = state.posgre.clone();
         let app = build_app(state);
@@ -1043,13 +1043,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        // 未登録emailでも登録済みemailと同じ成功風レスポンスにする。
+        // ここで401/404を返すと、攻撃者がメールアドレスの登録有無を推測できる。
+        assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(body_json["error"], "invalid_credentials");
-        assert_eq!(body_json["message"], "Invalid credential");
+        assert_eq!(body_json["message"], "password reset mail sent");
 
         let token_hash_count: (i64,) = sqlx::query_as(
             r#"

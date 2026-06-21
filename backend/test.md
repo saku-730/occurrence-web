@@ -86,7 +86,7 @@
 ### app
 
 - [x] `POST /auth/request_password_reset` に登録済みユーザーの正しい email を送ると、AuthService経由でパスワードリセット用 token hash が `password_reset_tokens` に保存され、リセットリンクを含む案内メールが送信され、`200 OK` が返る。`request_password_reset_route_sends_reset_mail_for_registered_email`
-- [x] `POST /auth/request_password_reset` に未登録 email を送るとエラーになり、パスワードリセット用 token hash は作成されず、メールも送信されない。`request_password_reset_route_rejects_unregistered_email`
+- [x] `POST /auth/request_password_reset` に未登録 email を送っても、登録有無を推測されないように `200 OK` の成功風レスポンスを返し、パスワードリセット用 token hash は作成されず、メールも送信されない。`request_password_reset_route_returns_success_like_response_for_unregistered_email`
 - [x] `POST /auth/request_password_reset` を本番SMTP設定でapp経由実行し、仮ユーザー `test@gmail.com` 宛に`https://bio-database.net` のリセットリンクを含むパスワードリセット案内メールを実送信できる（ignored）。`request_password_reset_route_sends_real_email_to_gmail_for_temporary_user`
 - [x] `POST /auth/reset_password` に正常な token と新しいpasswordを送ると、app経由で対象ユーザーの `users.password_hash` が更新される。`reset_password_route_updates_password_for_valid_token`
 
@@ -96,7 +96,8 @@
 - [x] 正常なパスワードリセット token と新しいpasswordを `AuthService::reset_password` に渡すと、tokenから対象ユーザーを特定して `users.password_hash` が更新される。`reset_password_updates_password_for_valid_token`
 - [x] `AuthService::reset_password` に8文字未満または128文字超のpasswordを渡すと、`AuthServiceError::InvalidPassword` で拒否される。`reset_password_rejects_password_outside_8_to_128_characters`
 - [x] `AuthService::reset_password` に正常ではない token を渡すと、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_invalid_token_and_does_not_update_password`
-- [ ] `AuthService::reset_password` で使用済み token を再利用しようとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は再更新されない。`reset_password_rejects_used_token_and_does_not_update_password_again`
+- [x] `AuthService::reset_password` で使用済み token を再利用しようとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は再更新されない。`reset_password_rejects_used_token_and_does_not_update_password_again`
+- [x] `AuthService::reset_password` で期限切れ token を使おうとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_expired_token_and_does_not_update_password`
 
 ## Session, Login/Logout
 

@@ -812,6 +812,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reset_password_rejects_used_token_and_does_not_update_password_again() {
+        let db = test_db_pool().await;
+        let email = format!("reset-used-token-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        AuthRepository::upsert_password_reset_token(&db, user.id, &token_hash)
+            .await
+            .expect("password reset token should be stored");
+
+        AuthService::reset_password(&db, token.clone(), "first-password-123".to_string())
+            .await
+            .expect("first reset_password should succeed");
+
+        let after_first_reset = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user after first reset query should succeed")
+            .expect("user after first reset should exist");
+
+        let second_result =
+            AuthService::reset_password(&db, token, "second-password-123".to_string()).await;
+
+        assert!(
+            matches!(second_result, Err(AuthServiceError::InvalidToken)),
+            "reset_password should reject already used token: {:?}",
+            second_result
+        );
+
+        let after_second_reset_attempt = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user after second reset query should succeed")
+            .expect("user after second reset should exist");
+
+        assert_eq!(
+            after_second_reset_attempt.password_hash, after_first_reset.password_hash,
+            "used token must not update password again"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_password_rejects_expired_token_and_does_not_update_password() {
+        let db = test_db_pool().await;
+        let email = format!("reset-expired-token-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        AuthRepository::upsert_password_reset_token(&db, user.id, &token_hash)
+            .await
+            .expect("password reset token should be stored");
+
+        // 期限切れtokenはSQLの expires_at > now() 条件で弾く。
+        // service側で時刻比較を再実装せず、DBの現在時刻に寄せることで判定を一箇所に保つ。
+        sqlx::query(
+            r#"
+            UPDATE password_reset_tokens
+            SET expires_at = now() - interval '1 minute'
+            WHERE token_hash = $1
+            "#,
+        )
+        .bind(&token_hash)
+        .execute(&db)
+        .await
+        .expect("password reset token should be expired");
+
+        let result = AuthService::reset_password(&db, token, "new-password-123".to_string()).await;
+
+        assert!(
+            matches!(result, Err(AuthServiceError::InvalidToken)),
+            "reset_password should reject expired token: {:?}",
+            result
+        );
+
+        let unchanged_user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("unchanged user query should succeed")
+            .expect("unchanged user should exist");
+
+        assert_eq!(unchanged_user.password_hash, old_password_hash);
+    }
+
+    #[tokio::test]
     async fn complete_registration_rejects_empty_token() {
         let db = test_db_pool().await;
 
