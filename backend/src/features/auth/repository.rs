@@ -375,6 +375,28 @@ impl AuthRepository {
         Ok(())
     }
 
+    pub async fn revoke_active_sessions_by_user_id_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        // パスワードリセット後は、漏洩済み・第三者利用中の可能性がある既存sessionを全て無効化する。
+        // reset_password全体のtransaction内で実行し、password更新だけ成功してsessionが残る状態を避ける。
+        sqlx::query!(
+            r#"
+            UPDATE sessions
+            SET revoked_at = now()
+            WHERE user_id = $1
+                AND revoked_at IS NULL
+                AND expires_at > now()
+            "#,
+            user_id
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn revoke_session_by_token_hash(
         //ログアウト時にセッションを無効化
         db: &PgPool,

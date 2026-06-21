@@ -98,6 +98,7 @@
 - [x] `AuthService::reset_password` に正常ではない token を渡すと、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_invalid_token_and_does_not_update_password`
 - [x] `AuthService::reset_password` で使用済み token を再利用しようとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は再更新されない。`reset_password_rejects_used_token_and_does_not_update_password_again`
 - [x] `AuthService::reset_password` で期限切れ token を使おうとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_expired_token_and_does_not_update_password`
+- [x] `AuthService::reset_password` が正常完了したら、対象ユーザーの既存セッションが無効化される。`reset_password_revokes_existing_sessions_for_user`
 
 ## Session, Login/Logout
 

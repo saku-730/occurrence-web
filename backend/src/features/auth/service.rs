@@ -169,6 +169,11 @@ impl AuthService {
         )
         .await?;
 
+        // password resetは「本人以外が既存sessionを持っている」可能性に備える操作でもある。
+        // 新しいpasswordに切り替わった時点で、同じユーザーの既存active sessionを全てrevokeする。
+        AuthRepository::revoke_active_sessions_by_user_id_in_tx(&mut tx, reset_token.user_id)
+            .await?;
+
         AuthRepository::mark_password_reset_token_used_in_tx(&mut tx, &token_hash).await?;
 
         tx.commit().await?;
@@ -723,6 +728,62 @@ mod tests {
         assert!(
             super::verify_password("new-password-123", &updated_user.password_hash).is_ok(),
             "updated password hash should verify the new password"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_password_revokes_existing_sessions_for_user() {
+        let db = test_db_pool().await;
+        let email = format!("reset-revokes-session-{}@example.com", uuid::Uuid::new_v4());
+        let old_password_hash =
+            hash_password("old-password-123").expect("old password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "reset-user", &old_password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("user query should succeed")
+            .expect("user should exist");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        AuthRepository::create_session(&db, user.id, &session_token_hash)
+            .await
+            .expect("existing session should be created");
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = hash_token(&token);
+
+        AuthRepository::upsert_password_reset_token(&db, user.id, &token_hash)
+            .await
+            .expect("password reset token should be stored");
+
+        let result = AuthService::reset_password(&db, token, "new-password-123".to_string()).await;
+
+        assert!(
+            result.is_ok(),
+            "reset_password should succeed for a valid token: {:?}",
+            result
+        );
+
+        let session = sqlx::query!(
+            r#"
+            SELECT revoked_at
+            FROM sessions
+            WHERE session_token_hash = $1
+            "#,
+            session_token_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("session should still exist after password reset");
+
+        assert!(
+            session.revoked_at.is_some(),
+            "password reset should revoke existing sessions for the user"
         );
     }
 
