@@ -41,7 +41,7 @@ handler -> service -> policy / model / port -> infrastructure
 
 - SQLを書かない
 - SPARQLを書かない
-- MinIOの詳細処理を書かない
+- Garage/S3互換ストレージの詳細処理を書かない
 - メール送信の詳細を書かない
 - 複雑な業務ロジックを書かない
 
@@ -80,7 +80,7 @@ handler -> service -> policy / model / port -> infrastructure
 
 - PostgreSQL接続
 - Jena/Fuseki接続
-- MinIO接続
+- Garage/S3互換ストレージ接続
 - メール送信
 - 外部サービスI/O
 - SQL / SPARQL / S3 API の具体実装

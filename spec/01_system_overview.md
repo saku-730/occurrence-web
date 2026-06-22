@@ -15,7 +15,7 @@
 | バックエンド | Rust + axum |
 | アプリ管理DB | PostgreSQL |
 | RDFストア | Apache Jena Fuseki |
-| メディア保存 | MinIO |
+| メディア保存 | Garage |
 | RDF検証 | SHACL |
 | メール送信 | 外部SMTP/Resend等 |
 
@@ -35,7 +35,7 @@
 | オカレンス本体 | Apache Jena |
 | オカレンスRDFメタデータ | Apache Jena |
 | 公開範囲RDF | Apache Jena |
-| メディア本体 | MinIO |
+| メディア本体 | Garage |
 
 ---
 

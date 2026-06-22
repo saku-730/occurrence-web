@@ -7,7 +7,7 @@
 - エラーレスポンスも JSON で統一する
 - API追加・変更時は OpenAPI を必ず更新する
 - 認証・認可は backend で行う
-- frontend は Jena / MinIO に直接アクセスしない
+- frontend は Jena / Garage に直接アクセスしない
 
 ---
 
@@ -58,7 +58,7 @@
 | サイズ超過 | 413 |
 | unsupported media type | 415 |
 | 外部メールサービス失敗 | 502 |
-| Jena/MinIO等の外部ストア失敗 | 502 または 500 |
+| Jena/Garage等の外部ストア失敗 | 502 または 500 |
 | 予期しないエラー | 500 |
 
 ---

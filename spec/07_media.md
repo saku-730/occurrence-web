@@ -2,12 +2,13 @@
 
 ## 基本方針
 
-- メディア本体は MinIO に保存する
+- メディア本体は Garage に保存する
+- backend から Garage へは S3互換 API で接続する
 - メディアメタデータは PostgreSQL に保存する
 - RDFからメディアを参照する場合は media URI を使う
-- MinIO object key に元ファイル名を使わない
-- MinIO bucket は private 固定
-- フロントエンドから MinIO に直接アクセスさせない
+- Garage object key に元ファイル名を使わない
+- Garage bucket は private 固定
+- フロントエンドから Garage に直接アクセスさせない
 
 ---
 
@@ -94,7 +95,7 @@ media/{media_uuid}
 
 ---
 
-## MinIO bucket
+## Garage bucket
 
 - bucket は1つ
 - private 固定
@@ -124,7 +125,7 @@ presigned URL は将来検討。
 例。
 
 1. frontend がメディアをアップロード
-2. backend が MinIO に保存
+2. backend が Garage に保存
 3. backend が `media_objects` に保存
 4. media URI を返す
 5. frontend が occurrence RDF に media URI を含める
@@ -134,17 +135,54 @@ presigned URL は将来検討。
 
 ---
 
+## API パス
+
+### `POST /media`
+
+メディアファイルをアップロードする。
+
+- login 必須
+- request は `multipart/form-data`
+- backend が MIME type、拡張子、サイズ上限を検証する
+- backend が Garage に object を保存する
+- backend が PostgreSQL `media_objects` にメタデータを保存する
+- response は `media_id` と `media_uri` を返す
+- occurrence との紐付けは、この response の `media_uri` を occurrence RDF に含めることで表現する
+
+### `GET /media/{media_id}`
+
+メディアファイルを backend 経由で取得する。
+
+- frontend は Garage に直接アクセスしない
+- backend が `media_objects` を参照して Garage object を取得する
+- backend が occurrence RDF との紐付けを確認して認可判定を行う
+- public occurrence に紐づく media は非ログインでも取得可能
+- private occurrence にのみ紐づく media は、作成者または admin のみ取得可能
+
+### `DELETE /media/{media_id}`
+
+メディアファイルを明示的に削除する。
+
+- login 必須
+- 原則として upload したユーザーまたは admin のみ削除可能
+- Garage object を削除する
+- PostgreSQL `media_objects` レコードを削除する
+- occurrence RDF に残っている media URI は自動削除しない
+- occurrence RDF からの参照削除は occurrence 更新APIで行う
+
+---
+
 ## メディア付きオカレンス作成時の一貫性
 
 以下の順序で失敗した場合は補償処理を行う。
 
-1. MinIO 保存成功
+1. Garage 保存成功
 2. PostgreSQL `media_objects` 保存成功
 3. Jena 保存失敗
 
 この場合。
 
-- MinIO object を削除する
+- Garage object を削除する
 - `media_objects` レコードを削除する
 - 操作全体を失敗扱いにする
 
@@ -154,7 +192,7 @@ presigned URL は将来検討。
 
 MVPでは自動削除しない。
 
-- occurrence 削除時に MinIO object を自動削除しない
+- occurrence 削除時に Garage object を自動削除しない
 - occurrence 削除時に `media_objects` を自動削除しない
 - 孤立メディアの自動削除は MVP 対象外
 

@@ -7,7 +7,7 @@
 - 仕様を機能単位に分割する
 - 各ファイルは、実装時にそのまま LLM に渡せる粒度を目指す
 - TDD を前提とし、テスト要件を明記する
-- RDF / PostgreSQL / MinIO / メール / OpenAPI などの責務境界を明確にする
+- RDF / PostgreSQL / Garage(S3互換) / メール / OpenAPI などの責務境界を明確にする
 - 仕様にない機能を勝手に追加しない
 
 ## ファイル一覧
@@ -21,7 +21,7 @@
 | `04_authorization_policy.md` | ロール、認可、404/403方針 |
 | `05_occurrence_rdf.md` | RDF/N-Quads/URI/named graph/CRUD仕様 |
 | `06_shacl_validation.md` | SHACLおよび保存前検証 |
-| `07_media.md` | MinIO、PostgreSQL media_objects、メディア配信 |
+| `07_media.md` | Garage、PostgreSQL media_objects、メディア配信 |
 | `08_search.md` | `dwc:scientificName` 検索、taxonomy階層探索 |
 | `09_export.md` | エクスポート方針、MVP対象外 |
 | `10_audit_log.md` | 監査ログ、pending/success/failed |
@@ -38,5 +38,5 @@
 - バックエンドは occurrence URI を発行し、blank node 主語を置換する
 - オカレンス本体は Apache Jena に RDF として保存する
 - 認証・ユーザー・セッション・監査ログ・メディアメタデータは PostgreSQL に保存する
-- メディア本体は MinIO に保存する
+- メディア本体は Garage に保存する
 - すべての機能追加・仕様変更はテスト駆動で行う

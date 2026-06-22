@@ -32,7 +32,7 @@
 - handler / app route
 - PostgreSQL repository
 - Fuseki client
-- MinIO client
+- Garage S3 client
 - mail fake / Mailpit
 - CSRF
 - session
@@ -144,7 +144,7 @@
 - media_objects row is created
 - media URI uses same UUID as media_objects.id
 - private bucket access is not exposed directly
-- MinIO + PostgreSQL success and Jena failure triggers rollback
+- Garage + PostgreSQL success and Jena failure triggers rollback
 - orphan media cleanup is not automatic in MVP
 
 ---
@@ -200,4 +200,4 @@
 - 外部サービスはDocker Composeで起動する
 - メールは fake mailer または Mailpit を使う
 - Fusekiテストはデータセット初期化を行う
-- MinIOテストはテスト用bucketまたはprefixを使う
+- Garageテストはテスト用bucketまたはprefixを使う
