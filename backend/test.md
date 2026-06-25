@@ -100,6 +100,16 @@
 - [x] `AuthService::reset_password` で期限切れ token を使おうとすると、`AuthServiceError::InvalidToken` で拒否され、`users.password_hash` は更新されない。`reset_password_rejects_expired_token_and_does_not_update_password`
 - [x] `AuthService::reset_password` が正常完了したら、対象ユーザーの既存セッションが無効化される。`reset_password_revokes_existing_sessions_for_user`
 
+## Media attachments
+
+### app
+
+- [x] `POST /media` に有効 session と有効な multipart file を送ると、app 経由で `MediaService::upload_media` が呼ばれ、Garage/S3互換 object storage に object が書き込まれ、`201 Created` と media metadata JSON が返る。`upload_media_route_with_valid_session_writes_object_and_returns_media_metadata`
+
+### service
+
+- [x] `MediaService::upload_media` に有効な添付データを渡すと、Garage/S3互換 object storage に object が書き込まれ、`media_id` と `media_uri`、`object_key`、`content_type`、`size_bytes` を含む結果が返る。`upload_media_writes_attachment_object_and_returns_media_metadata`
+
 ## Session, Login/Logout
 
 ### app

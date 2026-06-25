@@ -41,11 +41,13 @@ FUSEKI_DATASET=occurrence
 backend は Garage に S3互換 API で接続する。
 
 ```env
-GARAGE_ENDPOINT=http://127.0.0.1:9000
-GARAGE_ACCESS_KEY_ID=...
-GARAGE_SECRET_ACCESS_KEY=...
-GARAGE_BUCKET=occurrence-media
-GARAGE_REGION=us-east-1
+OBJECT_STORE_BACKEND=s3
+S3_ENDPOINT=http://127.0.0.1:3900
+S3_REGION=garage
+S3_BUCKET=occurrence-media
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+S3_FORCE_PATH_STYLE=true
 ```
 
 ### Mail

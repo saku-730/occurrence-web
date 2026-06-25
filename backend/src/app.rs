@@ -12,6 +12,7 @@ use crate::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
             reset_password,
         },
+        media::handler::upload_media,
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
             update_occurrence,
@@ -35,6 +36,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
+        // media: 添付ファイルのupload/download/deleteを扱う。まずはuploadを接続する。
+        .route("/media", post(upload_media))
         // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
@@ -81,6 +84,9 @@ mod tests {
     use sqlx::{PgPool, postgres::PgPoolOptions};
     use tower::util::ServiceExt; // oneshot
 
+    use crate::features::media::service::{
+        MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+    };
     use crate::features::occurrences::service::{
         OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceStoreRow,
         SearchOccurrencesStoreInput, SearchOccurrencesStorePage, SearchVisibility,
@@ -149,6 +155,55 @@ mod tests {
         ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
             Ok(None)
         }
+    }
+
+    fn test_state_with_media_object_store(
+        media_object_store: Arc<dyn MediaObjectStore>,
+    ) -> AppState {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for app tests");
+
+        let config = Config {
+            app: AppConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                app_base_url: "http://127.0.0.1:3000".to_string(),
+                environment: "test".to_string(),
+                cookie_secure: false,
+            },
+            posgre: PosgreConfig {
+                url: database_url.clone(),
+            },
+            smtp: SmtpConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1025,
+                username: "".to_string(),
+                password: "".to_string(),
+                tls: "none".to_string(),
+                from: "no-replay@example.com".to_string(),
+            },
+            fuseki: FusekiConfig {
+                base_url: std::env::var("FUSEKI_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+                user: std::env::var("FUSEKI_USER")
+                    .unwrap_or_else(|_| "occurrence_backend".to_string()),
+                password: std::env::var("FUSEKI_PASSWORD")
+                    .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+            },
+        };
+
+        let posgre = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+
+        AppState::new_with_media_object_store(
+            config,
+            posgre,
+            Arc::new(NoopOccurrenceRdfStore),
+            media_object_store,
+        )
     }
 
     // occurrence系appテストではRDF storeを差し替え、handlerからserviceまでの接続を検証する。
@@ -946,6 +1001,128 @@ mod tests {
         assert!(body.contains("token="));
 
         delete_mailpit_messages().await;
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingMediaObjectStore {
+        written_objects: Arc<Mutex<Vec<RecordedMediaObjectWrite>>>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedMediaObjectWrite {
+        bucket: String,
+        object_key: String,
+        content_type: String,
+        bytes: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for RecordingMediaObjectStore {
+        async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            self.written_objects
+                .lock()
+                .expect("recorded media object writes lock should not be poisoned")
+                .push(RecordedMediaObjectWrite {
+                    bucket: input.bucket,
+                    object_key: input.object_key,
+                    content_type: input.content_type,
+                    bytes: input.bytes,
+                });
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_media_route_with_valid_session_writes_object_and_returns_media_metadata() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!("media-upload-user-{}@example.com", uuid::Uuid::new_v4());
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            "media-user",
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+        let boundary = "----occurrence-media-boundary";
+        let file_bytes = b"fake-jpeg-bytes";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n{}\r\n--{boundary}--\r\n",
+            std::str::from_utf8(file_bytes).expect("test bytes should be utf8")
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let media_id = body_json["media_id"]
+            .as_str()
+            .expect("media_id should be returned");
+        assert_eq!(
+            body_json["media_uri"],
+            format!("http://127.0.0.1:3000/media/{media_id}")
+        );
+        assert_eq!(body_json["bucket"], "occurrence-media");
+        assert_eq!(body_json["object_key"], format!("media/{media_id}"));
+        assert_eq!(body_json["content_type"], "image/jpeg");
+        assert_eq!(body_json["size_bytes"], file_bytes.len() as i64);
+        assert_eq!(body_json["original_filename"], "sample.jpg");
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media object writes lock should not be poisoned");
+
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].bucket, "occurrence-media");
+        assert_eq!(writes[0].object_key, format!("media/{media_id}"));
+        assert_eq!(writes[0].content_type, "image/jpeg");
+        assert_eq!(writes[0].bytes, file_bytes);
     }
 
     #[tokio::test]
