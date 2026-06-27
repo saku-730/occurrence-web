@@ -45,6 +45,7 @@ impl From<MediaServiceError> for MediaHandlerError {
     fn from(error: MediaServiceError) -> Self {
         match error {
             MediaServiceError::InvalidInput => Self::InvalidInput,
+            MediaServiceError::PayloadTooLarge => Self::PayloadTooLarge,
             MediaServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
         }
     }

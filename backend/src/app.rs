@@ -1127,6 +1127,43 @@ mod tests {
         assert_eq!(writes[0].bytes, file_bytes);
     }
 
+    #[tokio::test]
+    async fn upload_media_route_without_session_returns_unauthorized_and_does_not_write_object() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let app = build_app(state);
+
+        let boundary = "----occurrence-unauthorized-media-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.jpg\"\r\nContent-Type: image/jpeg\r\n\r\nfake-jpeg-bytes\r\n--{boundary}--\r\n"
+        );
+
+        // Cookieを意図的に付けず、routeから認証処理を通して401になることを確認する。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // 認証に失敗したrequestがobject storageへ到達していないことも保証する。
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media object writes lock should not be poisoned");
+        assert!(writes.is_empty());
+    }
+
     fn required_garage_env(key: &str) -> String {
         std::env::var(key)
             .unwrap_or_else(|_| panic!("{} must be set for real Garage app test", key))

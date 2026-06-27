@@ -105,12 +105,14 @@
 ### app
 
 - [x] `POST /media` に有効 session と有効な multipart file を送ると、app 経由で `MediaService::upload_media` が呼ばれ、Garage/S3互換 object storage に object が書き込まれ、`201 Created` と media metadata JSON が返る。`upload_media_route_with_valid_session_writes_object_and_returns_media_metadata`
+- [x] 未ログインで `POST /media` に有効な multipart file を送ると `401 Unauthorized` を返し、object storageには書き込まれない。`upload_media_route_without_session_returns_unauthorized_and_does_not_write_object`
 - [x] `POST /media` に全体上限 1000MB を超える `Content-Length` の添付データを送ると、`413 Payload Too Large` を返し、object storage には書き込まれない。`upload_media_route_rejects_payload_larger_than_global_limit_and_does_not_write_object`
 
 ### service
 
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、Garage/S3互換 object storage に object が書き込まれ、`media_id` と `media_uri`、`object_key`、`content_type`、`size_bytes` を含む結果が返る。`upload_media_writes_attachment_object_and_returns_media_metadata`
 - [x] `MediaService::upload_media` に spec で許可していない `content_type` を渡すと `MediaServiceError::InvalidInput` で拒否され、object storage には書き込まれない。`upload_media_rejects_unsupported_content_type_and_does_not_write_object`
+- [x] `MediaService` の添付データサイズ判定は1000MBを許可し、1001MBを `MediaServiceError::PayloadTooLarge` で拒否する。`media_size_validation_accepts_1000_mb_and_rejects_1001_mb`
 
 ## Session, Login/Logout
 

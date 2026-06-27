@@ -3,6 +3,7 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub enum MediaServiceError {
     InvalidInput,
+    PayloadTooLarge,
     ObjectStoreFailed,
 }
 
@@ -39,6 +40,18 @@ pub struct PutMediaObjectInput {
 #[async_trait::async_trait]
 pub trait MediaObjectStore: Send + Sync {
     async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError>;
+}
+
+// 添付ファイル本体の上限。handlerのContent-Length検査は早期拒否用であり、
+// 信頼できる最終判定はserviceが実際に受け取ったbyte数に対して行う。
+const MEDIA_FILE_SIZE_LIMIT_BYTES: usize = 1000 * 1024 * 1024;
+
+fn validate_media_size_bytes(size_bytes: usize) -> Result<(), MediaServiceError> {
+    if size_bytes > MEDIA_FILE_SIZE_LIMIT_BYTES {
+        return Err(MediaServiceError::PayloadTooLarge);
+    }
+
+    Ok(())
 }
 
 fn is_allowed_content_type(content_type: &str) -> bool {
@@ -86,6 +99,10 @@ impl MediaService {
         if !is_allowed_content_type(content_type) {
             return Err(MediaServiceError::InvalidInput);
         }
+
+        // Content-Lengthは省略や偽装が可能なので、保存直前に実データ長を必ず検証する。
+        // この判定をobject storage呼び出しより前に置き、上限超過objectを作らない。
+        validate_media_size_bytes(input.bytes.len())?;
 
         let media_id = Uuid::new_v4();
         let object_key = format!("media/{media_id}");
@@ -182,6 +199,20 @@ mod tests {
             writes.is_empty(),
             "unsupported content type must not be written to object storage"
         );
+    }
+
+    #[test]
+    fn media_size_validation_accepts_1000_mb_and_rejects_1001_mb() {
+        const MEBIBYTE: usize = 1024 * 1024;
+
+        assert!(
+            validate_media_size_bytes(1000 * MEBIBYTE).is_ok(),
+            "an attachment exactly at the 1000MB limit should be accepted"
+        );
+        assert!(matches!(
+            validate_media_size_bytes(1001 * MEBIBYTE),
+            Err(MediaServiceError::PayloadTooLarge)
+        ));
     }
 
     #[tokio::test]
