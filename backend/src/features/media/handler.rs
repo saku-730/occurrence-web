@@ -1,7 +1,10 @@
 use axum::{
     Json,
     extract::{Multipart, State},
-    http::{HeaderMap, StatusCode, header::COOKIE},
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_LENGTH, COOKIE},
+    },
     response::{IntoResponse, Response},
 };
 
@@ -23,6 +26,7 @@ use crate::{
 pub enum MediaHandlerError {
     InvalidSession,
     InvalidInput,
+    PayloadTooLarge,
     ObjectStoreFailed,
     Database(sqlx::Error),
 }
@@ -65,6 +69,14 @@ impl IntoResponse for MediaHandlerError {
                 }),
             )
                 .into_response(),
+            MediaHandlerError::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(ErrorResponse {
+                    error: "payload_too_large".to_string(),
+                    message: "Payload too large".to_string(),
+                }),
+            )
+                .into_response(),
             MediaHandlerError::ObjectStoreFailed => (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse {
@@ -90,6 +102,8 @@ pub async fn upload_media(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<UploadMediaResponse>), MediaHandlerError> {
+    reject_oversized_request_by_content_length(&headers)?;
+
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
@@ -147,6 +161,30 @@ pub async fn upload_media(
             original_filename: output.original_filename,
         }),
     ))
+}
+
+const MEDIA_REQUEST_LIMIT_BYTES: u64 = 1000 * 1024 * 1024;
+
+fn reject_oversized_request_by_content_length(
+    headers: &HeaderMap,
+) -> Result<(), MediaHandlerError> {
+    let Some(content_length) = headers.get(CONTENT_LENGTH) else {
+        return Ok(());
+    };
+
+    let content_length = content_length
+        .to_str()
+        .map_err(|_| MediaHandlerError::InvalidInput)?
+        .parse::<u64>()
+        .map_err(|_| MediaHandlerError::InvalidInput)?;
+
+    // multipart全体のContent-Lengthが最大メディア上限を超えるなら、bodyを読まずに拒否する。
+    // spec上の最大は動画の1000MBなので、入口では全content typeに対して1000MBを共通上限にする。
+    if content_length > MEDIA_REQUEST_LIMIT_BYTES {
+        return Err(MediaHandlerError::PayloadTooLarge);
+    }
+
+    Ok(())
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, MediaHandlerError> {

@@ -3,7 +3,7 @@ use sqlx::postgres::PgPoolOptions;
 use backend::{app::build_app, config::Config, state::AppState};
 use std::sync::Arc;
 
-use backend::infrastructure::fuseki::FusekiClient;
+use backend::infrastructure::{fuseki::FusekiClient, garage::GarageMediaObjectStore};
 
 #[tokio::main]
 async fn main() {
@@ -25,7 +25,18 @@ async fn main() {
         FusekiClient::new(config.fuseki.clone()),
     );
 
-    let state = AppState::new(config, posgre, occurrence_rdf_store);
+    // 添付ファイルの本番保存先にはGarageのS3互換APIを使う。
+    // 設定不備のまま起動してupload時だけ失敗するのを避けるため、起動時に必須環境変数を検証する。
+    let media_object_store = Arc::new(
+        GarageMediaObjectStore::from_env().expect("failed to configure Garage object storage"),
+    );
+
+    let state = AppState::new_with_media_object_store(
+        config,
+        posgre,
+        occurrence_rdf_store,
+        media_object_store,
+    );
     let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();

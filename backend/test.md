@@ -105,10 +105,12 @@
 ### app
 
 - [x] `POST /media` に有効 session と有効な multipart file を送ると、app 経由で `MediaService::upload_media` が呼ばれ、Garage/S3互換 object storage に object が書き込まれ、`201 Created` と media metadata JSON が返る。`upload_media_route_with_valid_session_writes_object_and_returns_media_metadata`
+- [x] `POST /media` に全体上限 1000MB を超える `Content-Length` の添付データを送ると、`413 Payload Too Large` を返し、object storage には書き込まれない。`upload_media_route_rejects_payload_larger_than_global_limit_and_does_not_write_object`
 
 ### service
 
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、Garage/S3互換 object storage に object が書き込まれ、`media_id` と `media_uri`、`object_key`、`content_type`、`size_bytes` を含む結果が返る。`upload_media_writes_attachment_object_and_returns_media_metadata`
+- [x] `MediaService::upload_media` に spec で許可していない `content_type` を渡すと `MediaServiceError::InvalidInput` で拒否され、object storage には書き込まれない。`upload_media_rejects_unsupported_content_type_and_does_not_write_object`
 
 ## Session, Login/Logout
 
@@ -268,6 +270,11 @@
 - [x] `FusekiClient::search_occurrences` はscientificName以外のpredicate filterでも実Fusekiから一致するoccurrenceを取得できる（ignored）`fuseki_client_search_occurrences_matches_non_scientific_name_filter_from_real_fuseki`
 - [x] `FusekiClient::search_occurrences` は実Fuseki検索でデータがlimitを超えるとlimit件だけ返しnext_cursorを生成する（ignored）`fuseki_client_search_occurrences_returns_next_cursor_when_results_exceed_limit`
 - [x] `FusekiClient::search_occurrences` はcursorを渡すと実Fuseki検索の次ページを取得できる（ignored）`fuseki_client_search_occurrences_uses_cursor_to_return_next_page`
+
+## Real Garage test 統合テスト
+
+- [x] `backend/.env` の S3設定を使って実Garageの `occurrence-media` bucket に一時objectをupload/list/deleteできる（ignored）`garage_client_puts_lists_and_deletes_object_from_real_garage`
+- [x] appの`build_app`に本番Garage object storeを入れると、`POST /media`で実Garageに添付データを保存できる（ignored）`upload_media_route_writes_object_to_real_garage`
 
 ## Real fuseki test 統合テスト
 

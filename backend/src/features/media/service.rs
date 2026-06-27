@@ -41,6 +41,22 @@ pub trait MediaObjectStore: Send + Sync {
     async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError>;
 }
 
+fn is_allowed_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type.trim().to_ascii_lowercase().as_str(),
+        // jpg/jpeg, png, webp
+        "image/jpeg" | "image/png" | "image/webp"
+            // mp3, wav, m4a
+            | "audio/mpeg"
+            | "audio/wav"
+            | "audio/x-wav"
+            | "audio/mp4"
+            // mp4, mov
+            | "video/mp4"
+            | "video/quicktime"
+    )
+}
+
 pub struct MediaService;
 
 impl MediaService {
@@ -62,6 +78,12 @@ impl MediaService {
             || content_type.is_empty()
             || input.bytes.is_empty()
         {
+            return Err(MediaServiceError::InvalidInput);
+        }
+
+        // spec/07_media.mdでMVP対象にした画像・音声・動画だけを受け付ける。
+        // 許可外のMIME typeはGarageへ書き込む前に拒否し、不要なobjectや後始末を発生させない。
+        if !is_allowed_content_type(content_type) {
             return Err(MediaServiceError::InvalidInput);
         }
 
@@ -127,6 +149,39 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn upload_media_rejects_unsupported_content_type_and_does_not_write_object() {
+        let store = RecordingMediaObjectStore::default();
+        let result = MediaService::upload_media(
+            UploadMediaInput {
+                app_base_url: "https://bio-database.net".to_string(),
+                bucket: "occurrence-media".to_string(),
+                uploaded_by: Uuid::new_v4(),
+                original_filename: Some("note.txt".to_string()),
+                content_type: "text/plain".to_string(),
+                bytes: b"plain text is not a supported media attachment".to_vec(),
+            },
+            &store,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(MediaServiceError::InvalidInput)),
+            "unsupported content type should be rejected: {:?}",
+            result
+        );
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded object writes lock should not be poisoned");
+
+        assert!(
+            writes.is_empty(),
+            "unsupported content type must not be written to object storage"
+        );
     }
 
     #[tokio::test]

@@ -73,6 +73,7 @@ mod tests {
     use crate::features::auth::repository::AuthRepository;
     use crate::features::auth::service::{AuthService, hash_password, hash_token};
     use crate::infrastructure::fuseki::FusekiClient;
+    use crate::infrastructure::garage::GarageMediaObjectStore;
     use crate::state::AppState;
 
     use axum::http::header::{CONTENT_TYPE, COOKIE, SET_COOKIE};
@@ -93,6 +94,7 @@ mod tests {
     };
     use oxrdfio::{RdfFormat, RdfParser};
     use std::collections::HashMap;
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
 
     // appテストはrouterを直接叩くため、実HTTP serverを立てずにAppStateだけ構築する。
@@ -1123,6 +1125,207 @@ mod tests {
         assert_eq!(writes[0].object_key, format!("media/{media_id}"));
         assert_eq!(writes[0].content_type, "image/jpeg");
         assert_eq!(writes[0].bytes, file_bytes);
+    }
+
+    fn required_garage_env(key: &str) -> String {
+        std::env::var(key)
+            .unwrap_or_else(|_| panic!("{} must be set for real Garage app test", key))
+    }
+
+    fn run_aws_s3_command_for_real_garage(args: &[String]) {
+        let endpoint = required_garage_env("S3_ENDPOINT");
+        let region = required_garage_env("S3_REGION");
+        let access_key = required_garage_env("S3_ACCESS_KEY");
+        let secret_key = required_garage_env("S3_SECRET_KEY");
+
+        let output = Command::new("aws")
+            .env("AWS_ACCESS_KEY_ID", access_key)
+            .env("AWS_SECRET_ACCESS_KEY", secret_key)
+            .env("AWS_DEFAULT_REGION", region)
+            .arg("--endpoint-url")
+            .arg(endpoint)
+            .args(args)
+            .output()
+            .expect("aws CLI should be installed for real Garage app test");
+
+        assert!(
+            output.status.success(),
+            "aws command failed: status={:?}, stdout={}, stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running Garage server, backend/.env S3_* credentials, and PostgreSQL"]
+    async fn upload_media_route_writes_object_to_real_garage() {
+        dotenvy::dotenv().ok();
+
+        let bucket = required_garage_env("S3_BUCKET");
+        let media_object_store = Arc::new(
+            GarageMediaObjectStore::from_env()
+                .expect("Garage object store should be created from backend/.env S3 settings"),
+        );
+        let state = test_state_with_media_object_store(media_object_store);
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "real-garage-media-upload-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            "real-garage-media-user",
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+        let boundary = "----occurrence-real-garage-media-boundary";
+        let file_bytes = b"real-garage-app-upload-test-bytes";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"real-garage.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n{}\r\n--{boundary}--\r\n",
+            std::str::from_utf8(file_bytes).expect("test bytes should be utf8")
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let object_key = body_json["object_key"]
+            .as_str()
+            .expect("object_key should be returned");
+        let object_uri = format!("s3://{bucket}/{object_key}");
+
+        // app routeから本番Garage object storeへ実際に書けたかを、GarageのS3互換APIで確認する。
+        run_aws_s3_command_for_real_garage(&vec![
+            "s3".to_string(),
+            "ls".to_string(),
+            object_uri.clone(),
+        ]);
+
+        run_aws_s3_command_for_real_garage(&vec!["s3".to_string(), "rm".to_string(), object_uri]);
+    }
+
+    #[tokio::test]
+    async fn upload_media_route_rejects_payload_larger_than_global_limit_and_does_not_write_object()
+    {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+
+        let email = format!(
+            "media-upload-large-user-{}@example.com",
+            uuid::Uuid::new_v4()
+        );
+        let password_hash = hash_password("password123").expect("password should be hashed");
+
+        let user_id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+            email,
+            "media-user",
+            password_hash
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should be inserted");
+
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+
+        sqlx::query!(
+            r#"
+            INSERT INTO sessions (user_id, session_token_hash, expires_at)
+            VALUES ($1, $2, now() + interval '30 days')
+            "#,
+            user_id,
+            session_token_hash
+        )
+        .execute(&db)
+        .await
+        .expect("session should be inserted");
+
+        let app = build_app(state);
+        let boundary = "----occurrence-media-boundary";
+        let file_bytes = b"small-body-but-content-length-is-larger-than-global-limit";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"large.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n{}\r\n--{boundary}--\r\n",
+            std::str::from_utf8(file_bytes).expect("test bytes should be utf8")
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(header::CONTENT_LENGTH, (1000 * 1024 * 1024 + 1).to_string())
+                    .header(COOKIE, format!("session={}", session_token))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media object writes lock should not be poisoned");
+
+        assert!(
+            writes.is_empty(),
+            "oversized media must not be written to object storage"
+        );
     }
 
     #[tokio::test]
