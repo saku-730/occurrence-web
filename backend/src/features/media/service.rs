@@ -1,10 +1,20 @@
+use sqlx::PgPool;
 use uuid::Uuid;
+
+use super::repository::{InsertMediaMetadata, MediaRepository};
 
 #[derive(Debug)]
 pub enum MediaServiceError {
     InvalidInput,
     PayloadTooLarge,
     ObjectStoreFailed,
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for MediaServiceError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +86,7 @@ impl MediaService {
     pub async fn upload_media<S>(
         input: UploadMediaInput,
         store: &S,
+        db: &PgPool,
     ) -> Result<UploadMediaOutput, MediaServiceError>
     where
         S: MediaObjectStore + ?Sized,
@@ -120,6 +131,22 @@ impl MediaService {
             })
             .await?;
 
+        // Garageへの保存が成功した後、公開URIの解決と所有者認可に必要なmetadataを永続化する。
+        // PostgreSQL失敗時のGarage object補償削除は、delete API追加時に同じstore抽象へ実装する。
+        MediaRepository::insert(
+            db,
+            InsertMediaMetadata {
+                id: media_id,
+                bucket,
+                object_key: &object_key,
+                content_type,
+                size_bytes,
+                original_filename: input.original_filename.as_deref(),
+                uploaded_by: input.uploaded_by,
+            },
+        )
+        .await?;
+
         Ok(UploadMediaOutput {
             media_id,
             media_uri,
@@ -136,6 +163,7 @@ impl MediaService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     #[derive(Debug, Default)]
@@ -171,6 +199,10 @@ mod tests {
     #[tokio::test]
     async fn upload_media_rejects_unsupported_content_type_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
+        // 入力検証でDB到達前に失敗することも確認できるよう、接続を確立しないpoolを使う。
+        let db = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("lazy PostgreSQL pool should be constructible");
         let result = MediaService::upload_media(
             UploadMediaInput {
                 app_base_url: "https://bio-database.net".to_string(),
@@ -181,6 +213,7 @@ mod tests {
                 bytes: b"plain text is not a supported media attachment".to_vec(),
             },
             &store,
+            &db,
         )
         .await;
 
@@ -217,8 +250,27 @@ mod tests {
 
     #[tokio::test]
     async fn upload_media_writes_attachment_object_and_returns_media_metadata() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let email = format!("media-output-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind("media-output-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media output test user should be inserted");
+
         let store = RecordingMediaObjectStore::default();
-        let uploaded_by = Uuid::new_v4();
         let bytes = b"fake-jpeg-bytes".to_vec();
 
         let output = MediaService::upload_media(
@@ -231,6 +283,7 @@ mod tests {
                 bytes: bytes.clone(),
             },
             &store,
+            &db,
         )
         .await
         .expect("valid attachment upload should succeed");
@@ -256,5 +309,97 @@ mod tests {
         assert_eq!(writes[0].object_key, output.object_key);
         assert_eq!(writes[0].content_type, "image/jpeg");
         assert_eq!(writes[0].bytes, bytes);
+        drop(writes);
+
+        // metadataの外部キーを考慮し、子レコードから削除してテスト間の状態を分離する。
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(output.media_id)
+            .execute(&db)
+            .await
+            .expect("media output metadata should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media output test user should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn upload_media_saves_metadata_to_postgresql() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+
+        let email = format!("media-service-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+        )
+        .bind(&email)
+        .bind("media-service-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media test user should be inserted");
+
+        let store = RecordingMediaObjectStore::default();
+        let bytes = b"postgresql-metadata-test-image".to_vec();
+        let output = MediaService::upload_media(
+            UploadMediaInput {
+                app_base_url: "https://bio-database.net".to_string(),
+                bucket: "occurrence-media".to_string(),
+                uploaded_by,
+                original_filename: Some("metadata.jpg".to_string()),
+                content_type: "image/jpeg".to_string(),
+                bytes: bytes.clone(),
+            },
+            &store,
+            &db,
+        )
+        .await
+        .expect("valid upload should save metadata");
+
+        // serviceの戻り値だけではなく、PostgreSQLを直接参照して永続化を確認する。
+        let metadata =
+            sqlx::query_as::<_, (Uuid, String, String, String, i64, Option<String>, Uuid)>(
+                r#"
+            SELECT id, bucket, object_key, content_type, size_bytes, original_filename, uploaded_by
+            FROM media_objects
+            WHERE id = $1
+            "#,
+            )
+            .bind(output.media_id)
+            .fetch_one(&db)
+            .await
+            .expect("saved media metadata should be queryable");
+
+        assert_eq!(metadata.0, output.media_id);
+        assert_eq!(metadata.1, "occurrence-media");
+        assert_eq!(metadata.2, output.object_key);
+        assert_eq!(metadata.3, "image/jpeg");
+        assert_eq!(metadata.4, bytes.len() as i64);
+        assert_eq!(metadata.5.as_deref(), Some("metadata.jpg"));
+        assert_eq!(metadata.6, uploaded_by);
+
+        // 他テストへ永続データを残さないよう、外部キーの子から順に後始末する。
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(output.media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media test user should be removed after test");
     }
 }

@@ -47,6 +47,7 @@ impl From<MediaServiceError> for MediaHandlerError {
             MediaServiceError::InvalidInput => Self::InvalidInput,
             MediaServiceError::PayloadTooLarge => Self::PayloadTooLarge,
             MediaServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
+            MediaServiceError::Database(error) => Self::Database(error),
         }
     }
 }
@@ -147,6 +148,7 @@ pub async fn upload_media(
             bytes,
         },
         state.media_object_store.as_ref(),
+        &state.posgre,
     )
     .await?;
 
