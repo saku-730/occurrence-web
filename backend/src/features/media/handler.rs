@@ -137,11 +137,11 @@ pub async fn upload_media(
     let bytes = bytes.ok_or(MediaHandlerError::InvalidInput)?;
     let content_type = content_type.ok_or(MediaHandlerError::InvalidInput)?;
 
-    // bucketは当面MVP仕様の固定値を使う。S3_BUCKETのConfig化はobject store本番実装時にまとめる。
+    // 起動時に検証済みのS3_BUCKETを使い、環境ごとのbucket名をhandlerへ固定しない。
     let output = MediaService::upload_media(
         UploadMediaInput {
             app_base_url: state.config.app.app_base_url.clone(),
-            bucket: "occurrence-media".to_string(),
+            bucket: state.config.garage.bucket.clone(),
             uploaded_by: current_user.user_id,
             original_filename: file_name,
             content_type,

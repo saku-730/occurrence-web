@@ -8,6 +8,7 @@ pub struct Config {
     pub posgre: PosgreConfig,
     pub smtp: SmtpConfig,     //メール関係
     pub fuseki: FusekiConfig, //Fuseki関係
+    pub garage: GarageConfig, //Garage/S3互換object storage
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,12 @@ pub struct SmtpConfig {
     pub password: String,
     pub tls: String,
     pub from: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GarageConfig {
+    // bucket名は環境ごとに異なり得るため、handlerへ固定値を持ち込まない。
+    pub bucket: String,
 }
 
 #[derive(Debug, Clone)]
@@ -122,11 +129,16 @@ impl Config {
             password: get_required_env("FUSEKI_PASSWORD")?,
         };
 
+        let garage = GarageConfig {
+            bucket: get_required_env("S3_BUCKET")?,
+        };
+
         Ok(Self {
             app,
             posgre,
             smtp,
             fuseki,
+            garage,
         })
     }
 }
@@ -226,7 +238,17 @@ mod tests {
             EnvGuard::set("FUSEKI_BASE_URL", "http://127.0.0.1:3030/ds"),
             EnvGuard::set("FUSEKI_USER", "admin"),
             EnvGuard::set("FUSEKI_PASSWORD", "password"),
+            EnvGuard::set("S3_BUCKET", "test-required-bucket"),
         ]
+    }
+
+    #[test]
+    fn from_env_reads_s3_bucket() {
+        let _guards = set_required_config_env();
+
+        let config = Config::from_env().expect("config should load S3 bucket");
+
+        assert_eq!(config.garage.bucket, "test-required-bucket");
     }
 
     #[test]

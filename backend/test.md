@@ -116,6 +116,10 @@
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、返された `media_id` を主キーとして `media_objects` にGarage保存先、MIME type、サイズ、元ファイル名、登録ユーザーが保存される。`upload_media_saves_metadata_to_postgresql`
 - [x] Garageへのobject保存成功後にPostgreSQL `media_objects` のINSERTが失敗すると、同じGarage objectを削除して補償し、`MediaServiceError::Database`を返す。`upload_media_deletes_garage_object_when_postgresql_metadata_save_fails`
 
+### config
+
+- [x] `Config::from_env` は `S3_BUCKET` を読み込み、media uploadで使うGarage bucket設定として保持する。`from_env_reads_s3_bucket`
+
 ## Session, Login/Logout
 
 ### app

@@ -69,7 +69,7 @@ async fn info(State(state): State<AppState>) -> String {
 #[cfg(test)] //test section
 mod tests {
     use super::build_app;
-    use crate::config::{AppConfig, Config, FusekiConfig, PosgreConfig, SmtpConfig};
+    use crate::config::{AppConfig, Config, FusekiConfig, GarageConfig, PosgreConfig, SmtpConfig};
     use crate::features::auth::repository::AuthRepository;
     use crate::features::auth::service::{AuthService, hash_password, hash_token};
     use crate::infrastructure::fuseki::FusekiClient;
@@ -116,6 +116,10 @@ mod tests {
                 url: database_url.clone(),
             },
 
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
+            },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
@@ -178,6 +182,10 @@ mod tests {
             posgre: PosgreConfig {
                 url: database_url.clone(),
             },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
+            },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
@@ -227,6 +235,10 @@ mod tests {
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
             },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
@@ -1597,6 +1609,10 @@ mod tests {
             posgre: PosgreConfig {
                 url: database_url.clone(),
             },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
+            },
             smtp: SmtpConfig {
                 host: smtp_host,
                 port: smtp_port,
@@ -1992,6 +2008,10 @@ mod tests {
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
             },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
@@ -3680,6 +3700,10 @@ mod tests {
             posgre: PosgreConfig {
                 url: database_url.clone(),
             },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
+            },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
@@ -3849,6 +3873,10 @@ mod tests {
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
             },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
@@ -4031,6 +4059,10 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
             },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
@@ -5303,6 +5335,10 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             posgre: PosgreConfig {
                 url: database_url.clone(),
             },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
+            },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
@@ -5423,6 +5459,10 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
+            },
+            garage: GarageConfig {
+                bucket: std::env::var("S3_BUCKET")
+                    .unwrap_or_else(|_| "occurrence-media".to_string()),
             },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
