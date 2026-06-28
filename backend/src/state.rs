@@ -5,7 +5,9 @@ use sqlx::PgPool;
 use crate::{
     config::Config,
     features::{
-        media::service::{MediaObjectStore, MediaServiceError, PutMediaObjectInput},
+        media::service::{
+            DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+        },
         occurrences::service::OccurrenceRdfStore,
     },
 };
@@ -58,6 +60,10 @@ struct UnconfiguredMediaObjectStore;
 impl MediaObjectStore for UnconfiguredMediaObjectStore {
     async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
         // 本番用S3/Garage clientを差し込むまでは、誤って成功扱いにしない。
+        Err(MediaServiceError::ObjectStoreFailed)
+    }
+
+    async fn delete_object(&self, _input: DeleteMediaObjectInput) -> Result<(), MediaServiceError> {
         Err(MediaServiceError::ObjectStoreFailed)
     }
 }

@@ -47,9 +47,16 @@ pub struct PutMediaObjectInput {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeleteMediaObjectInput {
+    pub bucket: String,
+    pub object_key: String,
+}
+
 #[async_trait::async_trait]
 pub trait MediaObjectStore: Send + Sync {
     async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError>;
+    async fn delete_object(&self, input: DeleteMediaObjectInput) -> Result<(), MediaServiceError>;
 }
 
 // 添付ファイル本体の上限。handlerのContent-Length検査は早期拒否用であり、
@@ -133,7 +140,7 @@ impl MediaService {
 
         // Garageへの保存が成功した後、公開URIの解決と所有者認可に必要なmetadataを永続化する。
         // PostgreSQL失敗時のGarage object補償削除は、delete API追加時に同じstore抽象へ実装する。
-        MediaRepository::insert(
+        let metadata_result = MediaRepository::insert(
             db,
             InsertMediaMetadata {
                 id: media_id,
@@ -145,7 +152,20 @@ impl MediaService {
                 uploaded_by: input.uploaded_by,
             },
         )
-        .await?;
+        .await;
+
+        if let Err(database_error) = metadata_result {
+            // DBにmedia URIの解決情報が残らない場合、先に作成したGarage objectは孤立する。
+            // 同じbucket/keyを補償削除し、削除成功後は原因だったDBエラーを呼び出し元へ返す。
+            store
+                .delete_object(DeleteMediaObjectInput {
+                    bucket: bucket.to_string(),
+                    object_key: object_key.clone(),
+                })
+                .await?;
+
+            return Err(MediaServiceError::Database(database_error));
+        }
 
         Ok(UploadMediaOutput {
             media_id,
@@ -169,6 +189,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingMediaObjectStore {
         written_objects: std::sync::Mutex<Vec<RecordedObjectWrite>>,
+        deleted_objects: std::sync::Mutex<Vec<RecordedObjectDelete>>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +198,12 @@ mod tests {
         object_key: String,
         content_type: String,
         bytes: Vec<u8>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedObjectDelete {
+        bucket: String,
+        object_key: String,
     }
 
     #[async_trait::async_trait]
@@ -190,6 +217,21 @@ mod tests {
                     object_key: input.object_key,
                     content_type: input.content_type,
                     bytes: input.bytes,
+                });
+
+            Ok(())
+        }
+
+        async fn delete_object(
+            &self,
+            input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            self.deleted_objects
+                .lock()
+                .expect("recorded media object deletes lock should not be poisoned")
+                .push(RecordedObjectDelete {
+                    bucket: input.bucket,
+                    object_key: input.object_key,
                 });
 
             Ok(())
@@ -322,6 +364,57 @@ mod tests {
             .execute(&db)
             .await
             .expect("media output test user should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn upload_media_deletes_garage_object_when_postgresql_metadata_save_fails() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+
+        let store = RecordingMediaObjectStore::default();
+        // usersに存在しないUUIDを指定し、Garage PUT後のmetadata INSERTだけを確実に失敗させる。
+        let result = MediaService::upload_media(
+            UploadMediaInput {
+                app_base_url: "https://bio-database.net".to_string(),
+                bucket: "occurrence-media".to_string(),
+                uploaded_by: Uuid::new_v4(),
+                original_filename: Some("rollback.jpg".to_string()),
+                content_type: "image/jpeg".to_string(),
+                bytes: b"garage-compensation-test".to_vec(),
+            },
+            &store,
+            &db,
+        )
+        .await;
+
+        assert!(matches!(result, Err(MediaServiceError::Database(_))));
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media object writes lock should not be poisoned");
+        assert_eq!(
+            writes.len(),
+            1,
+            "Garage PUT should succeed before DB failure"
+        );
+        let written_object = writes[0].clone();
+        drop(writes);
+
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert_eq!(deletes.len(), 1, "failed metadata save must be compensated");
+        assert_eq!(deletes[0].bucket, written_object.bucket);
+        assert_eq!(deletes[0].object_key, written_object.object_key);
     }
 
     #[tokio::test]

@@ -86,7 +86,7 @@ mod tests {
     use tower::util::ServiceExt; // oneshot
 
     use crate::features::media::service::{
-        MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+        DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
     };
     use crate::features::occurrences::service::{
         OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceStoreRow,
@@ -1033,10 +1033,17 @@ mod tests {
 
             Ok(())
         }
+
+        async fn delete_object(
+            &self,
+            _input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
-    async fn upload_media_route_with_valid_session_writes_object_and_returns_media_metadata() {
+    async fn upload_media_route_saves_object_and_metadata_to_postgresql() {
         let store = RecordingMediaObjectStore::default();
         let state = test_state_with_media_object_store(Arc::new(store.clone()));
         let db = state.posgre.clone();
@@ -1125,6 +1132,60 @@ mod tests {
         assert_eq!(writes[0].object_key, format!("media/{media_id}"));
         assert_eq!(writes[0].content_type, "image/jpeg");
         assert_eq!(writes[0].bytes, file_bytes);
+        drop(writes);
+
+        let media_id = uuid::Uuid::parse_str(media_id).expect("media_id should be a UUID");
+        // HTTPレスポンスだけではなくDBを直接読み、app -> handler -> service -> repositoryの接続を確認する。
+        let metadata = sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                String,
+                String,
+                String,
+                i64,
+                Option<String>,
+                uuid::Uuid,
+                chrono::DateTime<chrono::Utc>,
+            ),
+        >(
+            r#"
+            SELECT id, bucket, object_key, content_type, size_bytes,
+                   original_filename, uploaded_by, created_at
+            FROM media_objects
+            WHERE id = $1
+            "#,
+        )
+        .bind(media_id)
+        .fetch_one(&db)
+        .await
+        .expect("app upload metadata should be saved to PostgreSQL");
+
+        assert_eq!(metadata.0, media_id);
+        assert_eq!(metadata.1, "occurrence-media");
+        assert_eq!(metadata.2, format!("media/{media_id}"));
+        assert_eq!(metadata.3, "image/jpeg");
+        assert_eq!(metadata.4, file_bytes.len() as i64);
+        assert_eq!(metadata.5.as_deref(), Some("sample.jpg"));
+        assert_eq!(metadata.6, user_id);
+        assert!(metadata.7 <= chrono::Utc::now());
+
+        // 外部キー制約に従い、子レコードから削除してテストデータを残さない。
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("app upload metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media app test session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media app test user should be removed after test");
     }
 
     #[tokio::test]
