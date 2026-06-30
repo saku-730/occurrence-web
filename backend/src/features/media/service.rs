@@ -87,6 +87,23 @@ fn is_allowed_content_type(content_type: &str) -> bool {
     )
 }
 
+fn detected_content_type_matches(declared_content_type: &str, bytes: &[u8]) -> bool {
+    let Some(detected) = infer::get(bytes) else {
+        // 判定不能なデータを申告値だけで許可すると偽装を防げないため拒否する。
+        return false;
+    };
+
+    let declared = declared_content_type.trim().to_ascii_lowercase();
+    let detected = detected.mime_type();
+
+    declared == detected
+        || matches!(
+            (declared.as_str(), detected),
+            // inferのWAV/M4A表記とHTTPで一般的に使われる許可MIMEの差だけを吸収する。
+            ("audio/wav", "audio/x-wav") | ("audio/mp4", "audio/m4a")
+        )
+}
+
 pub struct MediaService;
 
 impl MediaService {
@@ -115,6 +132,12 @@ impl MediaService {
         // spec/07_media.mdでMVP対象にした画像・音声・動画だけを受け付ける。
         // 許可外のMIME typeはGarageへ書き込む前に拒否し、不要なobjectや後始末を発生させない。
         if !is_allowed_content_type(content_type) {
+            return Err(MediaServiceError::InvalidInput);
+        }
+
+        // multipartのContent-Typeは送信者が自由に指定できるため、magic bytesから検出した形式とも照合する。
+        // 許可形式でも実データと一致しない場合はGarageへ送る前に拒否する。
+        if !detected_content_type_matches(content_type, &input.bytes) {
             return Err(MediaServiceError::InvalidInput);
         }
 
@@ -185,6 +208,9 @@ mod tests {
     use super::*;
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
+
+    // inferがJPEGとして判定できる最小限のsignatureを正常系fixtureで共用する。
+    const TEST_JPEG_BYTES: &[u8] = &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00];
 
     #[derive(Debug, Default)]
     struct RecordingMediaObjectStore {
@@ -276,6 +302,49 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn upload_media_rejects_content_when_detected_mime_does_not_match_declared_mime() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let store = RecordingMediaObjectStore::default();
+
+        let result = MediaService::upload_media(
+            UploadMediaInput {
+                app_base_url: "https://bio-database.net".to_string(),
+                bucket: "occurrence-media".to_string(),
+                uploaded_by: Uuid::new_v4(),
+                original_filename: Some("disguised.jpg".to_string()),
+                content_type: "image/jpeg".to_string(),
+                bytes: b"%PDF-1.7 disguised as a JPEG".to_vec(),
+            },
+            &store,
+            &db,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(MediaServiceError::InvalidInput)),
+            "declared MIME must match the format detected from file bytes: {:?}",
+            result
+        );
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media object writes lock should not be poisoned");
+        assert!(
+            writes.is_empty(),
+            "disguised content must be rejected before Garage PUT"
+        );
+    }
+
     #[test]
     fn media_size_validation_accepts_1000_mb_and_rejects_1001_mb() {
         const MEBIBYTE: usize = 1024 * 1024;
@@ -313,7 +382,7 @@ mod tests {
         .expect("media output test user should be inserted");
 
         let store = RecordingMediaObjectStore::default();
-        let bytes = b"fake-jpeg-bytes".to_vec();
+        let bytes = TEST_JPEG_BYTES.to_vec();
 
         let output = MediaService::upload_media(
             UploadMediaInput {
@@ -387,7 +456,7 @@ mod tests {
                 uploaded_by: Uuid::new_v4(),
                 original_filename: Some("rollback.jpg".to_string()),
                 content_type: "image/jpeg".to_string(),
-                bytes: b"garage-compensation-test".to_vec(),
+                bytes: TEST_JPEG_BYTES.to_vec(),
             },
             &store,
             &db,
@@ -445,7 +514,7 @@ mod tests {
         .expect("media test user should be inserted");
 
         let store = RecordingMediaObjectStore::default();
-        let bytes = b"postgresql-metadata-test-image".to_vec();
+        let bytes = TEST_JPEG_BYTES.to_vec();
         let output = MediaService::upload_media(
             UploadMediaInput {
                 app_base_url: "https://bio-database.net".to_string(),

@@ -97,6 +97,9 @@ mod tests {
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
+    // multipart正常系でinferの実データ判定を通すJPEG signature。
+    const TEST_JPEG_BYTES: &[u8] = &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00];
+
     // appテストはrouterを直接叩くため、実HTTP serverを立てずにAppStateだけ構築する。
     fn test_state() -> AppState {
         dotenvy::dotenv().ok();
@@ -1094,11 +1097,13 @@ mod tests {
 
         let app = build_app(state);
         let boundary = "----occurrence-media-boundary";
-        let file_bytes = b"fake-jpeg-bytes";
-        let body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n{}\r\n--{boundary}--\r\n",
-            std::str::from_utf8(file_bytes).expect("test bytes should be utf8")
-        );
+        let file_bytes = TEST_JPEG_BYTES;
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(file_bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
         let response = app
             .oneshot(
@@ -1317,11 +1322,13 @@ mod tests {
 
         let app = build_app(state);
         let boundary = "----occurrence-real-garage-media-boundary";
-        let file_bytes = b"real-garage-app-upload-test-bytes";
-        let body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"real-garage.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n{}\r\n--{boundary}--\r\n",
-            std::str::from_utf8(file_bytes).expect("test bytes should be utf8")
-        );
+        let file_bytes = TEST_JPEG_BYTES;
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"real-garage.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(file_bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
         let response = app
             .oneshot(

@@ -112,6 +112,7 @@
 
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、Garage/S3互換 object storage に object が書き込まれ、`media_id` と `media_uri`、`object_key`、`content_type`、`size_bytes` を含む結果が返る。`upload_media_writes_attachment_object_and_returns_media_metadata`
 - [x] `MediaService::upload_media` に spec で許可していない `content_type` を渡すと `MediaServiceError::InvalidInput` で拒否され、object storage には書き込まれない。`upload_media_rejects_unsupported_content_type_and_does_not_write_object`
+- [x] 許可MIMEを申告していても実データのmagic bytesが別形式なら、`MediaService::upload_media` は `InvalidInput` で拒否しobject storageへ書き込まない。`upload_media_rejects_content_when_detected_mime_does_not_match_declared_mime`
 - [x] `MediaService` の添付データサイズ判定は1000MBを許可し、1001MBを `MediaServiceError::PayloadTooLarge` で拒否する。`media_size_validation_accepts_1000_mb_and_rejects_1001_mb`
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、返された `media_id` を主キーとして `media_objects` にGarage保存先、MIME type、サイズ、元ファイル名、登録ユーザーが保存される。`upload_media_saves_metadata_to_postgresql`
 - [x] Garageへのobject保存成功後にPostgreSQL `media_objects` のINSERTが失敗すると、同じGarage objectを削除して補償し、`MediaServiceError::Database`を返す。`upload_media_deletes_garage_object_when_postgresql_metadata_save_fails`

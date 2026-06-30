@@ -38,3 +38,4 @@ chrono = { version = "0.4", features = ["serde"] }
 oxrdf = "0.3.3"
 oxrdfio = "0.2.5"
 reqwest = { version = "0.13.3", default-features = false, features = ["rustls","json"] }
+infer = "0.19.0"
