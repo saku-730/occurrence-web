@@ -291,6 +291,7 @@
 
 - [x] `backend/.env` の S3設定を使って実Garageの `occurrence-media` bucket に一時objectをupload/list/deleteできる（ignored）`garage_client_puts_lists_and_deletes_object_from_real_garage`
 - [x] appの`build_app`に本番Garage object storeを入れると、`POST /media`で実Garageに添付データを保存できる（ignored）`upload_media_route_writes_object_to_real_garage`
+- [x] appの`build_app`に本番Garage object storeを入れ、`POST /media`で保存した添付データを所有者の`GET /media/{media_id}`で取得すると、同一bytesとMIME typeが返る（ignored）`get_media_route_reads_object_from_real_garage`
 
 ## Real fuseki test 統合テスト
 

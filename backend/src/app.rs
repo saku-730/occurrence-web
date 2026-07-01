@@ -1753,6 +1753,103 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a running Garage server, backend/.env S3_* credentials, and PostgreSQL"]
+    async fn get_media_route_reads_object_from_real_garage() {
+        dotenvy::dotenv().ok();
+
+        let bucket = required_garage_env("S3_BUCKET");
+        let media_object_store = Arc::new(
+            GarageMediaObjectStore::from_env()
+                .expect("Garage object store should be created from backend/.env S3 settings"),
+        );
+        let state = test_state_with_media_object_store(media_object_store);
+        let db = state.posgre.clone();
+        let (user_id, session_token) =
+            create_media_test_session(&db, "real-garage-media-get").await;
+        let app = build_app(state);
+        let boundary = "----occurrence-real-garage-get-boundary";
+        let upload_body = multipart_file_body(
+            boundary,
+            "real-garage-get.jpg",
+            "image/jpeg",
+            TEST_JPEG_BYTES,
+        );
+
+        // Upload through the same public API first so the test covers the actual
+        // Garage object key and PostgreSQL metadata used by the GET route.
+        let upload_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(upload_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upload_response.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        let media_id = upload_json["media_id"]
+            .as_str()
+            .expect("media_id should be returned");
+        let object_key = upload_json["object_key"]
+            .as_str()
+            .expect("object_key should be returned");
+
+        let get_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(get_response.headers()[CONTENT_TYPE], "image/jpeg");
+        assert_eq!(
+            get_response.headers()[CONTENT_LENGTH],
+            TEST_JPEG_BYTES.len().to_string()
+        );
+        let downloaded = to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(downloaded.as_ref(), TEST_JPEG_BYTES);
+
+        // Remove both physical and metadata records so repeated ignored runs remain independent.
+        let object_uri = format!("s3://{bucket}/{object_key}");
+        run_aws_s3_command_for_real_garage(&vec!["s3".to_string(), "rm".to_string(), object_uri]);
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(uuid::Uuid::parse_str(media_id).expect("media_id should be a UUID"))
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media owner should be removed after test");
+    }
+
+    #[tokio::test]
     async fn upload_media_route_rejects_payload_larger_than_global_limit_and_does_not_write_object()
     {
         let store = RecordingMediaObjectStore::default();
