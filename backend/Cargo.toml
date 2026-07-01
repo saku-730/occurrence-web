@@ -37,5 +37,7 @@ argon2 = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
 oxrdf = "0.3.3"
 oxrdfio = "0.2.5"
-reqwest = { version = "0.13.3", default-features = false, features = ["rustls","json"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls", "json", "stream"] }
 infer = "0.19.0"
+tempfile = "3.27.0"
+tokio-util = { version = "0.7", features = ["io"] }

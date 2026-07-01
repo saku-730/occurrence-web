@@ -1,12 +1,16 @@
 use axum::{
     Json,
-    extract::{Multipart, State},
+    extract::{Multipart, State, multipart::Field},
     http::{
         HeaderMap, StatusCode,
         header::{CONTENT_LENGTH, COOKIE},
     },
     response::{IntoResponse, Response},
 };
+
+use sha2::{Digest, Sha256};
+use tempfile::TempPath;
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     features::{
@@ -16,7 +20,9 @@ use crate::{
         },
         media::{
             dto::UploadMediaResponse,
-            service::{MediaService, MediaServiceError, UploadMediaInput},
+            service::{
+                MEDIA_FILE_SIZE_LIMIT_BYTES, MediaService, MediaServiceError, UploadMediaInput,
+            },
         },
     },
     state::AppState,
@@ -29,6 +35,7 @@ pub enum MediaHandlerError {
     PayloadTooLarge,
     ObjectStoreFailed,
     Database(sqlx::Error),
+    FileSystem(std::io::Error),
 }
 
 impl From<AuthServiceError> for MediaHandlerError {
@@ -87,7 +94,7 @@ impl IntoResponse for MediaHandlerError {
                 }),
             )
                 .into_response(),
-            MediaHandlerError::Database(_) => (
+            MediaHandlerError::Database(_) | MediaHandlerError::FileSystem(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: "internal_server_error".to_string(),
@@ -109,11 +116,9 @@ pub async fn upload_media(
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
-    let mut file_name = None;
-    let mut content_type = None;
-    let mut bytes = None;
+    let mut prepared_upload = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|_| MediaHandlerError::InvalidInput)?
@@ -122,35 +127,56 @@ pub async fn upload_media(
             continue;
         }
 
-        file_name = field.file_name().map(ToString::to_string);
-        content_type = field.content_type().map(ToString::to_string);
-        bytes = Some(
-            field
-                .bytes()
-                .await
-                .map_err(|_| MediaHandlerError::InvalidInput)?
-                .to_vec(),
-        );
+        let original_filename = field.file_name().map(ToString::to_string);
+        let content_type = field
+            .content_type()
+            .map(ToString::to_string)
+            .ok_or(MediaHandlerError::InvalidInput)?;
+        let staged_file = stage_field_to_temporary_file(&mut field).await?;
+        prepared_upload = Some((original_filename, content_type, staged_file));
         break;
     }
 
-    let bytes = bytes.ok_or(MediaHandlerError::InvalidInput)?;
-    let content_type = content_type.ok_or(MediaHandlerError::InvalidInput)?;
+    let (original_filename, content_type, staged_file) =
+        prepared_upload.ok_or(MediaHandlerError::InvalidInput)?;
+    let StagedMediaFile {
+        temp_path,
+        size_bytes,
+        payload_sha256,
+        mime_probe,
+    } = staged_file;
 
     // 起動時に検証済みのS3_BUCKETを使い、環境ごとのbucket名をhandlerへ固定しない。
-    let output = MediaService::upload_media(
+    let upload_result = MediaService::upload_media(
         UploadMediaInput {
             app_base_url: state.config.app.app_base_url.clone(),
             bucket: state.config.garage.bucket.clone(),
             uploaded_by: current_user.user_id,
-            original_filename: file_name,
+            original_filename,
             content_type,
-            bytes,
+            file_path: temp_path.to_path_buf(),
+            size_bytes,
+            payload_sha256,
+            mime_probe,
         },
         state.media_object_store.as_ref(),
         &state.posgre,
     )
-    .await?;
+    .await;
+
+    // serviceが成功・失敗のどちらでも、responseを返す前に一時ファイルを削除する。
+    // service側エラーがある場合は元の原因を優先し、cleanup失敗で上書きしない。
+    let cleanup_result = temp_path.close();
+    let output = match upload_result {
+        Ok(output) => {
+            cleanup_result.map_err(MediaHandlerError::FileSystem)?;
+            output
+        }
+        Err(error) => {
+            let _ = cleanup_result;
+            return Err(error.into());
+        }
+    };
 
     Ok((
         StatusCode::CREATED,
@@ -166,7 +192,10 @@ pub async fn upload_media(
     ))
 }
 
-const MEDIA_REQUEST_LIMIT_BYTES: u64 = 1000 * 1024 * 1024;
+const MULTIPART_OVERHEAD_ALLOWANCE_BYTES: usize = 1024 * 1024;
+pub const MEDIA_REQUEST_BODY_LIMIT_BYTES: usize =
+    MEDIA_FILE_SIZE_LIMIT_BYTES as usize + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
+const MIME_PROBE_LIMIT_BYTES: usize = 8192;
 
 fn reject_oversized_request_by_content_length(
     headers: &HeaderMap,
@@ -181,13 +210,76 @@ fn reject_oversized_request_by_content_length(
         .parse::<u64>()
         .map_err(|_| MediaHandlerError::InvalidInput)?;
 
-    // multipart全体のContent-Lengthが最大メディア上限を超えるなら、bodyを読まずに拒否する。
-    // spec上の最大は動画の1000MBなので、入口では全content typeに対して1000MBを共通上限にする。
-    if content_length > MEDIA_REQUEST_LIMIT_BYTES {
+    // multipart全体にはboundary/headerが含まれるため、ファイル上限に1MiBの余裕を加えたrequest上限で早期拒否する。
+    // Content-Lengthは信用せず、実ファイル上限はchunk読込中のsize_bytesで別途強制する。
+    if content_length > MEDIA_REQUEST_BODY_LIMIT_BYTES as u64 {
         return Err(MediaHandlerError::PayloadTooLarge);
     }
 
     Ok(())
+}
+
+struct StagedMediaFile {
+    temp_path: TempPath,
+    size_bytes: u64,
+    payload_sha256: String,
+    mime_probe: Vec<u8>,
+}
+
+async fn stage_field_to_temporary_file(
+    field: &mut Field<'_>,
+) -> Result<StagedMediaFile, MediaHandlerError> {
+    // tempfileが安全な一意名を作り、TempPathのDropでも削除されるためearly return時も残留しない。
+    let temp_path = tempfile::Builder::new()
+        .prefix("occurrence-media-upload-")
+        .tempfile()
+        .map_err(MediaHandlerError::FileSystem)?
+        .into_temp_path();
+    let mut output = tokio::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&temp_path)
+        .await
+        .map_err(MediaHandlerError::FileSystem)?;
+    let mut hasher = Sha256::new();
+    let mut size_bytes = 0_u64;
+    let mut mime_probe = Vec::with_capacity(MIME_PROBE_LIMIT_BYTES);
+
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|_| MediaHandlerError::InvalidInput)?
+    {
+        size_bytes = size_bytes
+            .checked_add(chunk.len() as u64)
+            .ok_or(MediaHandlerError::PayloadTooLarge)?;
+        if size_bytes > MEDIA_FILE_SIZE_LIMIT_BYTES {
+            return Err(MediaHandlerError::PayloadTooLarge);
+        }
+
+        hasher.update(&chunk);
+        if mime_probe.len() < MIME_PROBE_LIMIT_BYTES {
+            let remaining = MIME_PROBE_LIMIT_BYTES - mime_probe.len();
+            mime_probe.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        }
+        output
+            .write_all(&chunk)
+            .await
+            .map_err(MediaHandlerError::FileSystem)?;
+    }
+
+    output
+        .flush()
+        .await
+        .map_err(MediaHandlerError::FileSystem)?;
+    drop(output);
+
+    Ok(StagedMediaFile {
+        temp_path,
+        size_bytes,
+        payload_sha256: hex::encode(hasher.finalize()),
+        mime_probe,
+    })
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, MediaHandlerError> {

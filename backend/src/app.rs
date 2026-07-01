@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
@@ -12,7 +13,7 @@ use crate::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
             reset_password,
         },
-        media::handler::upload_media,
+        media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, upload_media},
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
             update_occurrence,
@@ -37,7 +38,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         // media: 添付ファイルのupload/download/deleteを扱う。まずはuploadを接続する。
-        .route("/media", post(upload_media))
+        .route(
+            "/media",
+            post(upload_media).layer(DefaultBodyLimit::max(MEDIA_REQUEST_BODY_LIMIT_BYTES)),
+        )
         // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
@@ -94,6 +98,7 @@ mod tests {
     };
     use oxrdfio::{RdfFormat, RdfParser};
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
@@ -1021,6 +1026,70 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct FailingMediaObjectStore {
+        attempted_paths: Arc<Mutex<Vec<PathBuf>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for FailingMediaObjectStore {
+        async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            self.attempted_paths
+                .lock()
+                .expect("failed media store paths lock should not be poisoned")
+                .push(input.file_path);
+            Err(MediaServiceError::ObjectStoreFailed)
+        }
+
+        async fn delete_object(
+            &self,
+            _input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+    }
+
+    async fn create_media_test_session(db: &PgPool, prefix: &str) -> (uuid::Uuid, String) {
+        let email = format!("{prefix}-{}@example.com", uuid::Uuid::new_v4());
+        let password_hash = hash_password("password123").expect("password should be hashed");
+        let user_id = sqlx::query_scalar::<_, uuid::Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind(prefix)
+        .bind(password_hash)
+        .fetch_one(db)
+        .await
+        .expect("media test user should be inserted");
+        let session_token = uuid::Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+        sqlx::query(
+            "INSERT INTO sessions (user_id, session_token_hash, expires_at) VALUES ($1, $2, now() + interval \x2730 days\x27)",
+        )
+        .bind(user_id)
+        .bind(session_token_hash)
+        .execute(db)
+        .await
+        .expect("media test session should be inserted");
+
+        (user_id, session_token)
+    }
+
+    fn multipart_file_body(
+        boundary: &str,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Vec<u8> {
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
+    }
+
+    #[derive(Clone, Default)]
     struct RecordingMediaObjectStore {
         written_objects: Arc<Mutex<Vec<RecordedMediaObjectWrite>>>,
     }
@@ -1030,12 +1099,16 @@ mod tests {
         bucket: String,
         object_key: String,
         content_type: String,
+        source_path: PathBuf,
         bytes: Vec<u8>,
     }
 
     #[async_trait::async_trait]
     impl MediaObjectStore for RecordingMediaObjectStore {
         async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            let bytes = tokio::fs::read(&input.file_path)
+                .await
+                .map_err(|_| MediaServiceError::ObjectStoreFailed)?;
             self.written_objects
                 .lock()
                 .expect("recorded media object writes lock should not be poisoned")
@@ -1043,7 +1116,8 @@ mod tests {
                     bucket: input.bucket,
                     object_key: input.object_key,
                     content_type: input.content_type,
-                    bytes: input.bytes,
+                    source_path: input.file_path,
+                    bytes,
                 });
 
             Ok(())
@@ -1149,6 +1223,10 @@ mod tests {
         assert_eq!(writes[0].object_key, format!("media/{media_id}"));
         assert_eq!(writes[0].content_type, "image/jpeg");
         assert_eq!(writes[0].bytes, file_bytes);
+        assert!(
+            !writes[0].source_path.exists(),
+            "temporary upload file must be removed before the response is returned"
+        );
         drop(writes);
 
         let media_id = uuid::Uuid::parse_str(media_id).expect("media_id should be a UUID");
@@ -1203,6 +1281,120 @@ mod tests {
             .execute(&db)
             .await
             .expect("media app test user should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn upload_media_route_accepts_body_larger_than_axum_default_limit() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (user_id, session_token) = create_media_test_session(&db, "large-media-user").await;
+        let app = build_app(state);
+
+        let boundary = "----occurrence-large-streaming-boundary";
+        let mut file_bytes = vec![0_u8; 3 * 1024 * 1024];
+        file_bytes[..TEST_JPEG_BYTES.len()].copy_from_slice(TEST_JPEG_BYTES);
+        let body = multipart_file_body(boundary, "large.jpg", "image/jpeg", &file_bytes);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+        let media_id = uuid::Uuid::parse_str(
+            response_json["media_id"]
+                .as_str()
+                .expect("media_id should be returned"),
+        )
+        .expect("media_id should be a UUID");
+
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded media writes lock should not be poisoned");
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].bytes.len(), file_bytes.len());
+        assert!(!writes[0].source_path.exists());
+        drop(writes);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn upload_media_route_removes_temporary_file_after_upload() {
+        let store = FailingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (user_id, session_token) = create_media_test_session(&db, "failed-media-user").await;
+        let app = build_app(state);
+        let boundary = "----occurrence-failed-streaming-boundary";
+        let body = multipart_file_body(boundary, "failed.jpg", "image/jpeg", TEST_JPEG_BYTES);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempted_paths = store
+            .attempted_paths
+            .lock()
+            .expect("failed media store paths lock should not be poisoned");
+        assert_eq!(attempted_paths.len(), 1);
+        assert!(
+            !attempted_paths[0].exists(),
+            "temporary file must be removed after object store failure"
+        );
+        drop(attempted_paths);
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1424,7 +1616,10 @@ mod tests {
                         CONTENT_TYPE,
                         format!("multipart/form-data; boundary={boundary}"),
                     )
-                    .header(header::CONTENT_LENGTH, (1000 * 1024 * 1024 + 1).to_string())
+                    .header(
+                        header::CONTENT_LENGTH,
+                        (super::MEDIA_REQUEST_BODY_LIMIT_BYTES + 1).to_string(),
+                    )
                     .header(COOKIE, format!("session={}", session_token))
                     .body(Body::from(body))
                     .unwrap(),

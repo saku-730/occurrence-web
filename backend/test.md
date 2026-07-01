@@ -107,6 +107,8 @@
 - [x] `POST /media` に有効 session と有効な multipart file を送ると、Garage/S3互換 object storageへの書き込みとPostgreSQL `media_objects`へのmetadata保存が行われ、`201 Created` とmetadata JSONが返る。`upload_media_route_saves_object_and_metadata_to_postgresql`
 - [x] 未ログインで `POST /media` に有効な multipart file を送ると `401 Unauthorized` を返し、object storageには書き込まれない。`upload_media_route_without_session_returns_unauthorized_and_does_not_write_object`
 - [x] `POST /media` に全体上限 1000MB を超える `Content-Length` の添付データを送ると、`413 Payload Too Large` を返し、object storage には書き込まれない。`upload_media_route_rejects_payload_larger_than_global_limit_and_does_not_write_object`
+- [x] `POST /media` はAxum既定2MBを超える有効ファイルを受け付け、chunk経由でobject storageへ保存する。`upload_media_route_accepts_body_larger_than_axum_default_limit`
+- [x] `POST /media` の一時ファイルはobject storage保存の成功・失敗にかかわらず削除される。`upload_media_route_removes_temporary_file_after_upload`
 
 ### service
 
@@ -115,6 +117,7 @@
 - [x] 許可MIMEを申告していても実データのmagic bytesが別形式なら、`MediaService::upload_media` は `InvalidInput` で拒否しobject storageへ書き込まない。`upload_media_rejects_content_when_detected_mime_does_not_match_declared_mime`
 - [x] `MediaService` の添付データサイズ判定は1000MBを許可し、1001MBを `MediaServiceError::PayloadTooLarge` で拒否する。`media_size_validation_accepts_1000_mb_and_rejects_1001_mb`
 - [x] `MediaService::upload_media` に有効な添付データを渡すと、返された `media_id` を主キーとして `media_objects` にGarage保存先、MIME type、サイズ、元ファイル名、登録ユーザーが保存される。`upload_media_saves_metadata_to_postgresql`
+- [x] 同じユーザーが同じSHA-256のファイルを再アップロードすると、Garageへ再保存せず既存 `media_id` とmetadataを返し、`media_objects`も1件のままになる。`upload_media_reuses_existing_media_for_same_user_and_sha256`
 - [x] Garageへのobject保存成功後にPostgreSQL `media_objects` のINSERTが失敗すると、同じGarage objectを削除して補償し、`MediaServiceError::Database`を返す。`upload_media_deletes_garage_object_when_postgresql_metadata_save_fails`
 
 ### config

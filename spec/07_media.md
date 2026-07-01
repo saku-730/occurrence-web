@@ -33,6 +33,7 @@ CREATE TABLE media_objects (
     size_bytes BIGINT NOT NULL,
     original_filename TEXT,
     uploaded_by UUID NOT NULL REFERENCES users(id),
+    sha256 TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -45,6 +46,10 @@ CREATE TABLE media_objects (
 - 元ファイル名をそのまま使わない
 - `media_objects.object_key` は一意にする
 - `original_filename` はメタデータとして PostgreSQL に保存してよい
+- backendはファイル全体のSHA-256を`media_objects.sha256`へ保存する
+- 同一ユーザーの`uploaded_by + sha256`は一意とし、同じファイルの再uploadでは既存mediaを返す
+- ユーザーをまたいだdedupは行わず、所有権と公開範囲を共有しない
+- migration前の既存mediaはbackfillまで`sha256 = NULL`を許可する
 
 例。
 
@@ -89,8 +94,8 @@ media/{media_uuid}
 
 | 種別 | 上限 |
 |---|---:|
-| 画像 | 500MB |
-| 音声 | 500MB |
+| 画像 | 1000MB |
+| 音声 | 1000MB |
 | 動画 | 1000MB |
 
 ---
@@ -132,6 +137,16 @@ presigned URL は将来検討。
 6. occurrence 作成APIを呼ぶ
 
 ただし、ユーザーからは一連の登録操作に見えるようにする。
+
+### 大容量アップロード
+
+- `POST /media` のrequest body上限は、ファイル上限1000MBにmultipart header用の余裕を加えて設定する
+- backendはmultipart fileをchunk単位で読み、一時ファイルへ保存する
+- chunk読込中に実ファイルサイズを集計し、1000MBを超えた時点で413を返す
+- chunk読込と同時にファイル全体のSHA-256を逐次計算する
+- MIME判定にはファイル先頭のprobe bytesを使い、ファイル全体をメモリへ保持しない
+- Garage PUTは一時ファイルをstreamとして送信する
+- 一時ファイルはGarage/PostgreSQL処理の成功・失敗にかかわらず削除する
 
 ---
 

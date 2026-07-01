@@ -1,7 +1,9 @@
+use std::path::PathBuf;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::repository::{InsertMediaMetadata, MediaRepository};
+use super::repository::{InsertMediaMetadata, MediaMetadata, MediaRepository};
 
 #[derive(Debug)]
 pub enum MediaServiceError {
@@ -24,7 +26,12 @@ pub struct UploadMediaInput {
     pub uploaded_by: Uuid,
     pub original_filename: Option<String>,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    // handlerがchunk単位で作成した一時ファイル。service完了まで呼び出し元が寿命を保持する。
+    pub file_path: PathBuf,
+    pub size_bytes: u64,
+    pub payload_sha256: String,
+    // inferはファイル先頭のsignatureを使うため、全ファイルではなくprobeだけを渡す。
+    pub mime_probe: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +51,9 @@ pub struct PutMediaObjectInput {
     pub bucket: String,
     pub object_key: String,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    pub file_path: PathBuf,
+    pub size_bytes: u64,
+    pub payload_sha256: String,
 }
 
 #[derive(Debug, Clone)]
@@ -61,9 +70,9 @@ pub trait MediaObjectStore: Send + Sync {
 
 // 添付ファイル本体の上限。handlerのContent-Length検査は早期拒否用であり、
 // 信頼できる最終判定はserviceが実際に受け取ったbyte数に対して行う。
-const MEDIA_FILE_SIZE_LIMIT_BYTES: usize = 1000 * 1024 * 1024;
+pub const MEDIA_FILE_SIZE_LIMIT_BYTES: u64 = 1000 * 1024 * 1024;
 
-fn validate_media_size_bytes(size_bytes: usize) -> Result<(), MediaServiceError> {
+fn validate_media_size_bytes(size_bytes: u64) -> Result<(), MediaServiceError> {
     if size_bytes > MEDIA_FILE_SIZE_LIMIT_BYTES {
         return Err(MediaServiceError::PayloadTooLarge);
     }
@@ -85,6 +94,23 @@ fn is_allowed_content_type(content_type: &str) -> bool {
             | "video/mp4"
             | "video/quicktime"
     )
+}
+
+fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn output_from_existing_metadata(app_base_url: &str, metadata: MediaMetadata) -> UploadMediaOutput {
+    UploadMediaOutput {
+        media_id: metadata.id,
+        media_uri: format!("{app_base_url}/media/{}", metadata.id),
+        bucket: metadata.bucket,
+        object_key: metadata.object_key,
+        content_type: metadata.content_type,
+        size_bytes: metadata.size_bytes,
+        original_filename: metadata.original_filename,
+        uploaded_by: metadata.uploaded_by,
+    }
 }
 
 fn detected_content_type_matches(declared_content_type: &str, bytes: &[u8]) -> bool {
@@ -118,13 +144,16 @@ impl MediaService {
         let app_base_url = input.app_base_url.trim().trim_end_matches('/');
         let bucket = input.bucket.trim();
         let content_type = input.content_type.trim();
+        let payload_sha256 = input.payload_sha256.trim().to_ascii_lowercase();
 
         // object storageへ空objectや保存先不明のobjectを書かないよう、service境界で最低限の入力を弾く。
         // 拡張子/MIME/サイズ上限の詳細validationは、この正常系の次に個別テストで固める。
         if app_base_url.is_empty()
             || bucket.is_empty()
             || content_type.is_empty()
-            || input.bytes.is_empty()
+            || input.size_bytes == 0
+            || input.mime_probe.is_empty()
+            || !is_valid_sha256_hex(&payload_sha256)
         {
             return Err(MediaServiceError::InvalidInput);
         }
@@ -137,18 +166,28 @@ impl MediaService {
 
         // multipartのContent-Typeは送信者が自由に指定できるため、magic bytesから検出した形式とも照合する。
         // 許可形式でも実データと一致しない場合はGarageへ送る前に拒否する。
-        if !detected_content_type_matches(content_type, &input.bytes) {
+        if !detected_content_type_matches(content_type, &input.mime_probe) {
             return Err(MediaServiceError::InvalidInput);
         }
 
         // Content-Lengthは省略や偽装が可能なので、保存直前に実データ長を必ず検証する。
         // この判定をobject storage呼び出しより前に置き、上限超過objectを作らない。
-        validate_media_size_bytes(input.bytes.len())?;
+        validate_media_size_bytes(input.size_bytes)?;
+
+        // 同じユーザーが同一bytesを再送した場合は、論理mediaとGarage objectを再利用する。
+        // ユーザーを検索条件へ含め、他人のmedia URIや所有権を共有しない。
+        if let Some(existing) =
+            MediaRepository::find_by_uploader_and_sha256(db, input.uploaded_by, &payload_sha256)
+                .await?
+        {
+            return Ok(output_from_existing_metadata(app_base_url, existing));
+        }
 
         let media_id = Uuid::new_v4();
         let object_key = format!("media/{media_id}");
         let media_uri = format!("{app_base_url}/media/{media_id}");
-        let size_bytes = input.bytes.len() as i64;
+        let size_bytes =
+            i64::try_from(input.size_bytes).map_err(|_| MediaServiceError::PayloadTooLarge)?;
 
         // PostgreSQLのmedia_objectsへ保存するmetadataと同じ識別子を使ってobject keyを作る。
         // これにより、RDFで参照するmedia URI、PostgreSQLのid、Garage上のobjectを追跡しやすくする。
@@ -157,7 +196,9 @@ impl MediaService {
                 bucket: bucket.to_string(),
                 object_key: object_key.clone(),
                 content_type: content_type.to_string(),
-                bytes: input.bytes,
+                file_path: input.file_path,
+                size_bytes: input.size_bytes,
+                payload_sha256: payload_sha256.clone(),
             })
             .await?;
 
@@ -173,6 +214,7 @@ impl MediaService {
                 size_bytes,
                 original_filename: input.original_filename.as_deref(),
                 uploaded_by: input.uploaded_by,
+                sha256: &payload_sha256,
             },
         )
         .await;
@@ -186,6 +228,23 @@ impl MediaService {
                     object_key: object_key.clone(),
                 })
                 .await?;
+
+            // 同じファイルが並行uploadされ、一意index競合になった場合は勝った既存行を返す。
+            // 競合側のGarage objectは上で削除済みなので、物理objectも1つだけ残る。
+            let is_unique_violation = database_error
+                .as_database_error()
+                .is_some_and(|error| error.is_unique_violation());
+            if is_unique_violation {
+                if let Some(existing) = MediaRepository::find_by_uploader_and_sha256(
+                    db,
+                    input.uploaded_by,
+                    &payload_sha256,
+                )
+                .await?
+                {
+                    return Ok(output_from_existing_metadata(app_base_url, existing));
+                }
+            }
 
             return Err(MediaServiceError::Database(database_error));
         }
@@ -205,12 +264,40 @@ impl MediaService {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
+    use sha2::{Digest, Sha256};
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     // inferがJPEGとして判定できる最小限のsignatureを正常系fixtureで共用する。
     const TEST_JPEG_BYTES: &[u8] = &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00];
+
+    fn test_upload_input(
+        bytes: &[u8],
+        uploaded_by: Uuid,
+        original_filename: &str,
+        content_type: &str,
+    ) -> (tempfile::TempPath, UploadMediaInput) {
+        let mut file = tempfile::NamedTempFile::new().expect("test temporary file should open");
+        file.write_all(bytes)
+            .expect("test temporary file should be writable");
+        let temp_path = file.into_temp_path();
+        let input = UploadMediaInput {
+            app_base_url: "https://bio-database.net".to_string(),
+            bucket: "occurrence-media".to_string(),
+            uploaded_by,
+            original_filename: Some(original_filename.to_string()),
+            content_type: content_type.to_string(),
+            file_path: temp_path.to_path_buf(),
+            size_bytes: bytes.len() as u64,
+            payload_sha256: hex::encode(Sha256::digest(bytes)),
+            mime_probe: bytes[..bytes.len().min(8192)].to_vec(),
+        };
+
+        (temp_path, input)
+    }
 
     #[derive(Debug, Default)]
     struct RecordingMediaObjectStore {
@@ -235,6 +322,9 @@ mod tests {
     #[async_trait::async_trait]
     impl MediaObjectStore for RecordingMediaObjectStore {
         async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            let bytes = tokio::fs::read(&input.file_path)
+                .await
+                .map_err(|_| MediaServiceError::ObjectStoreFailed)?;
             self.written_objects
                 .lock()
                 .expect("recorded object writes lock should not be poisoned")
@@ -242,7 +332,7 @@ mod tests {
                     bucket: input.bucket,
                     object_key: input.object_key,
                     content_type: input.content_type,
-                    bytes: input.bytes,
+                    bytes,
                 });
 
             Ok(())
@@ -271,19 +361,13 @@ mod tests {
         let db = PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .expect("lazy PostgreSQL pool should be constructible");
-        let result = MediaService::upload_media(
-            UploadMediaInput {
-                app_base_url: "https://bio-database.net".to_string(),
-                bucket: "occurrence-media".to_string(),
-                uploaded_by: Uuid::new_v4(),
-                original_filename: Some("note.txt".to_string()),
-                content_type: "text/plain".to_string(),
-                bytes: b"plain text is not a supported media attachment".to_vec(),
-            },
-            &store,
-            &db,
-        )
-        .await;
+        let (_temp_path, input) = test_upload_input(
+            b"plain text is not a supported media attachment",
+            Uuid::new_v4(),
+            "note.txt",
+            "text/plain",
+        );
+        let result = MediaService::upload_media(input, &store, &db).await;
 
         assert!(
             matches!(result, Err(MediaServiceError::InvalidInput)),
@@ -315,19 +399,13 @@ mod tests {
             .expect("PostgreSQL should be available for media tests");
         let store = RecordingMediaObjectStore::default();
 
-        let result = MediaService::upload_media(
-            UploadMediaInput {
-                app_base_url: "https://bio-database.net".to_string(),
-                bucket: "occurrence-media".to_string(),
-                uploaded_by: Uuid::new_v4(),
-                original_filename: Some("disguised.jpg".to_string()),
-                content_type: "image/jpeg".to_string(),
-                bytes: b"%PDF-1.7 disguised as a JPEG".to_vec(),
-            },
-            &store,
-            &db,
-        )
-        .await;
+        let (_temp_path, input) = test_upload_input(
+            b"%PDF-1.7 disguised as a JPEG",
+            Uuid::new_v4(),
+            "disguised.jpg",
+            "image/jpeg",
+        );
+        let result = MediaService::upload_media(input, &store, &db).await;
 
         assert!(
             matches!(result, Err(MediaServiceError::InvalidInput)),
@@ -347,7 +425,7 @@ mod tests {
 
     #[test]
     fn media_size_validation_accepts_1000_mb_and_rejects_1001_mb() {
-        const MEBIBYTE: usize = 1024 * 1024;
+        const MEBIBYTE: u64 = 1024 * 1024;
 
         assert!(
             validate_media_size_bytes(1000 * MEBIBYTE).is_ok(),
@@ -384,20 +462,11 @@ mod tests {
         let store = RecordingMediaObjectStore::default();
         let bytes = TEST_JPEG_BYTES.to_vec();
 
-        let output = MediaService::upload_media(
-            UploadMediaInput {
-                app_base_url: "https://bio-database.net".to_string(),
-                bucket: "occurrence-media".to_string(),
-                uploaded_by,
-                original_filename: Some("sample.jpg".to_string()),
-                content_type: "image/jpeg".to_string(),
-                bytes: bytes.clone(),
-            },
-            &store,
-            &db,
-        )
-        .await
-        .expect("valid attachment upload should succeed");
+        let (_temp_path, input) =
+            test_upload_input(&bytes, uploaded_by, "sample.jpg", "image/jpeg");
+        let output = MediaService::upload_media(input, &store, &db)
+            .await
+            .expect("valid attachment upload should succeed");
 
         assert_eq!(output.bucket, "occurrence-media");
         assert_eq!(output.content_type, "image/jpeg");
@@ -436,6 +505,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_media_reuses_existing_media_for_same_user_and_sha256() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let email = format!("media-dedup-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind("media-dedup-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media dedup test user should be inserted");
+        let store = RecordingMediaObjectStore::default();
+
+        let (_first_temp_path, first_input) =
+            test_upload_input(TEST_JPEG_BYTES, uploaded_by, "first.jpg", "image/jpeg");
+        let first = MediaService::upload_media(first_input, &store, &db)
+            .await
+            .expect("first upload should succeed");
+
+        let (_second_temp_path, second_input) =
+            test_upload_input(TEST_JPEG_BYTES, uploaded_by, "renamed.jpg", "image/jpeg");
+        let second = MediaService::upload_media(second_input, &store, &db)
+            .await
+            .expect("duplicate upload should return existing media");
+
+        assert_eq!(second.media_id, first.media_id);
+        assert_eq!(second.object_key, first.object_key);
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded object writes lock should not be poisoned");
+        assert_eq!(writes.len(), 1, "duplicate bytes must not be PUT twice");
+        drop(writes);
+
+        let row_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM media_objects WHERE uploaded_by = $1",
+        )
+        .bind(uploaded_by)
+        .fetch_one(&db)
+        .await
+        .expect("media row count should be queryable");
+        assert_eq!(row_count, 1);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(first.media_id)
+            .execute(&db)
+            .await
+            .expect("deduplicated media metadata should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media dedup test user should be removed after test");
+    }
+
+    #[tokio::test]
     async fn upload_media_deletes_garage_object_when_postgresql_metadata_save_fails() {
         dotenvy::dotenv().ok();
 
@@ -449,19 +583,13 @@ mod tests {
 
         let store = RecordingMediaObjectStore::default();
         // usersに存在しないUUIDを指定し、Garage PUT後のmetadata INSERTだけを確実に失敗させる。
-        let result = MediaService::upload_media(
-            UploadMediaInput {
-                app_base_url: "https://bio-database.net".to_string(),
-                bucket: "occurrence-media".to_string(),
-                uploaded_by: Uuid::new_v4(),
-                original_filename: Some("rollback.jpg".to_string()),
-                content_type: "image/jpeg".to_string(),
-                bytes: TEST_JPEG_BYTES.to_vec(),
-            },
-            &store,
-            &db,
-        )
-        .await;
+        let (_temp_path, input) = test_upload_input(
+            TEST_JPEG_BYTES,
+            Uuid::new_v4(),
+            "rollback.jpg",
+            "image/jpeg",
+        );
+        let result = MediaService::upload_media(input, &store, &db).await;
 
         assert!(matches!(result, Err(MediaServiceError::Database(_))));
 
@@ -515,20 +643,11 @@ mod tests {
 
         let store = RecordingMediaObjectStore::default();
         let bytes = TEST_JPEG_BYTES.to_vec();
-        let output = MediaService::upload_media(
-            UploadMediaInput {
-                app_base_url: "https://bio-database.net".to_string(),
-                bucket: "occurrence-media".to_string(),
-                uploaded_by,
-                original_filename: Some("metadata.jpg".to_string()),
-                content_type: "image/jpeg".to_string(),
-                bytes: bytes.clone(),
-            },
-            &store,
-            &db,
-        )
-        .await
-        .expect("valid upload should save metadata");
+        let (_temp_path, input) =
+            test_upload_input(&bytes, uploaded_by, "metadata.jpg", "image/jpeg");
+        let output = MediaService::upload_media(input, &store, &db)
+            .await
+            .expect("valid upload should save metadata");
 
         // serviceの戻り値だけではなく、PostgreSQLを直接参照して永続化を確認する。
         let metadata =

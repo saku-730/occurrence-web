@@ -3,9 +3,10 @@ use std::{env, fmt};
 use chrono::Utc;
 use reqwest::{
     Client, Url,
-    header::{AUTHORIZATION, CONTENT_TYPE, HOST},
+    header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST},
 };
 use sha2::{Digest, Sha256};
+use tokio_util::io::ReaderStream;
 
 use crate::features::media::service::{
     DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
@@ -94,7 +95,18 @@ impl GarageMediaObjectStore {
         let url = Url::parse(&object_url)
             .map_err(|error| GarageClientError::new(format!("invalid object URL: {error}")))?;
         let host = host_header_value(&url)?;
-        let payload_hash = sha256_hex(&input.bytes);
+        let metadata = tokio::fs::metadata(&input.file_path)
+            .await
+            .map_err(|error| {
+                GarageClientError::new(format!("temporary media file metadata failed: {error}"))
+            })?;
+        if metadata.len() != input.size_bytes {
+            return Err(GarageClientError::new(
+                "temporary media file size changed before Garage PUT",
+            ));
+        }
+        let payload_hash = input.payload_sha256;
+
         let now = Utc::now();
         let date = now.format("%Y%m%d").to_string();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -125,15 +137,23 @@ impl GarageMediaObjectStore {
             self.access_key
         );
 
+        let file = tokio::fs::File::open(&input.file_path)
+            .await
+            .map_err(|error| {
+                GarageClientError::new(format!("temporary media file open failed: {error}"))
+            })?;
+        let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+
         let response = self
             .http
             .put(url)
             .header(HOST, host)
             .header(CONTENT_TYPE, content_type)
+            .header(CONTENT_LENGTH, input.size_bytes)
             .header("x-amz-content-sha256", payload_hash)
             .header("x-amz-date", amz_date)
             .header(AUTHORIZATION, authorization)
-            .body(input.bytes)
+            .body(body)
             .send()
             .await
             .map_err(|error| GarageClientError::new(format!("Garage PUT failed: {error}")))?;
