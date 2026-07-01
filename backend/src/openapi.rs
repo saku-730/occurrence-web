@@ -7,6 +7,8 @@ use crate::features::auth::dto::{
     RegisterResponse,
 };
 
+use crate::features::media::dto::{UploadMediaRequest, UploadMediaResponse};
+
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrenceFilter,
     SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesRequest,
@@ -29,6 +31,7 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::get_occurrence,
         crate::features::occurrences::handler::delete_occurrence,
         crate::features::occurrences::handler::update_occurrence,
+        crate::features::media::handler::upload_media,
     ),
     components(
         schemas(
@@ -53,11 +56,14 @@ use crate::features::occurrences::dto::{
             SearchOccurrencesRequest,
             SearchOccurrenceFilter,
             SearchOccurrencesRequestPage,
+            UploadMediaRequest,
+            UploadMediaResponse,
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
-        (name = "occurrences", description = "Occurrence RDF endpoints")
+        (name = "occurrences", description = "Occurrence RDF endpoints"),
+        (name = "media", description = "Media attachment endpoints")
     )
 )]
 pub struct ApiDoc;

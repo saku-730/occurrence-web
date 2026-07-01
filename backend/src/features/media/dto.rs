@@ -2,6 +2,13 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+#[derive(Debug, ToSchema)]
+pub struct UploadMediaRequest {
+    // OpenAPIではmultipart fileをstring/binaryとして表現する。実際の受信はAxum Multipartが担当する。
+    #[schema(value_type = String, format = Binary)]
+    pub file: Vec<u8>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UploadMediaResponse {
     pub media_id: Uuid,

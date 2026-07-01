@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -113,6 +113,40 @@ fn output_from_existing_metadata(app_base_url: &str, metadata: MediaMetadata) ->
     }
 }
 
+fn filename_extension_matches_content_type(
+    original_filename: Option<&str>,
+    content_type: &str,
+) -> bool {
+    let Some(filename) = original_filename
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return false;
+    };
+    let Some(extension) = Path::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+    else {
+        return false;
+    };
+    let extension = extension.to_ascii_lowercase();
+
+    matches!(
+        (
+            content_type.trim().to_ascii_lowercase().as_str(),
+            extension.as_str()
+        ),
+        ("image/jpeg", "jpg" | "jpeg")
+            | ("image/png", "png")
+            | ("image/webp", "webp")
+            | ("audio/mpeg", "mp3")
+            | ("audio/wav" | "audio/x-wav", "wav")
+            | ("audio/mp4", "m4a")
+            | ("video/mp4", "mp4")
+            | ("video/quicktime", "mov")
+    )
+}
+
 fn detected_content_type_matches(declared_content_type: &str, bytes: &[u8]) -> bool {
     let Some(detected) = infer::get(bytes) else {
         // 判定不能なデータを申告値だけで許可すると偽装を防げないため拒否する。
@@ -167,6 +201,15 @@ impl MediaService {
         // multipartのContent-Typeは送信者が自由に指定できるため、magic bytesから検出した形式とも照合する。
         // 許可形式でも実データと一致しない場合はGarageへ送る前に拒否する。
         if !detected_content_type_matches(content_type, &input.mime_probe) {
+            return Err(MediaServiceError::InvalidInput);
+        }
+
+        // 元ファイル名はmetadata用途だが、拡張子偽装を見逃さないためMIMEとの組み合わせも検証する。
+        // 大文字拡張子は許可する一方、二重拡張子は最後の拡張子だけで判断する。
+        if !filename_extension_matches_content_type(
+            input.original_filename.as_deref(),
+            content_type,
+        ) {
             return Err(MediaServiceError::InvalidInput);
         }
 
@@ -420,6 +463,42 @@ mod tests {
         assert!(
             writes.is_empty(),
             "disguised content must be rejected before Garage PUT"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_media_rejects_filename_extension_that_does_not_match_mime() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let store = RecordingMediaObjectStore::default();
+        let (_temp_path, input) = test_upload_input(
+            TEST_JPEG_BYTES,
+            Uuid::new_v4(),
+            "jpeg-content-with-png-extension.png",
+            "image/jpeg",
+        );
+
+        let result = MediaService::upload_media(input, &store, &db).await;
+
+        assert!(
+            matches!(result, Err(MediaServiceError::InvalidInput)),
+            "filename extension must match the declared and detected MIME: {:?}",
+            result
+        );
+        let writes = store
+            .written_objects
+            .lock()
+            .expect("recorded object writes lock should not be poisoned");
+        assert!(
+            writes.is_empty(),
+            "extension mismatch must be rejected before Garage PUT"
         );
     }
 

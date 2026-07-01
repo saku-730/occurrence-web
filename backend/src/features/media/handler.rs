@@ -19,7 +19,7 @@ use crate::{
             service::{AuthService, AuthServiceError},
         },
         media::{
-            dto::UploadMediaResponse,
+            dto::{UploadMediaRequest, UploadMediaResponse},
             service::{
                 MEDIA_FILE_SIZE_LIMIT_BYTES, MediaService, MediaServiceError, UploadMediaInput,
             },
@@ -106,6 +106,48 @@ impl IntoResponse for MediaHandlerError {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/media",
+    request_body(
+        content = UploadMediaRequest,
+        content_type = "multipart/form-data",
+        description = "Authenticated media upload. The file field accepts jpg/jpeg, png, webp, mp3, wav, m4a, mp4, or mov up to 1000MB."
+    ),
+    responses(
+        (
+            status = 201,
+            description = "Media object and metadata created, or existing media reused for the same user and SHA-256",
+            body = UploadMediaResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid multipart body, MIME type, detected file format, or filename extension",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Authentication required",
+            body = ErrorResponse
+        ),
+        (
+            status = 413,
+            description = "Media file exceeds the 1000MB limit",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "PostgreSQL or temporary file operation failed",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Garage object storage operation failed",
+            body = ErrorResponse
+        )
+    ),
+    tag = "media"
+)]
 pub async fn upload_media(
     State(state): State<AppState>,
     headers: HeaderMap,
