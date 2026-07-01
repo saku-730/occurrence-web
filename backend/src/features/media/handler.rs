@@ -121,6 +121,51 @@ impl IntoResponse for MediaHandlerError {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/media/{media_id}",
+    params(
+        (
+            "media_id" = uuid::Uuid,
+            Path,
+            description = "Media UUID"
+        )
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Media binary stream. Content-Type and Content-Length use the stored media metadata. Public occurrence media is available anonymously; private media requires its owner.",
+            body = Vec<u8>,
+            content_type = "application/octet-stream"
+        ),
+        (
+            status = 400,
+            description = "Invalid media UUID",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "A supplied session cookie is invalid",
+            body = ErrorResponse
+        ),
+        (
+            status = 404,
+            description = "Media not found or not visible to the requester",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "PostgreSQL or response metadata operation failed",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Fuseki or Garage operation failed",
+            body = ErrorResponse
+        )
+    ),
+    tag = "media"
+)]
 pub async fn get_media(
     Path(media_id): Path<uuid::Uuid>,
     State(state): State<AppState>,

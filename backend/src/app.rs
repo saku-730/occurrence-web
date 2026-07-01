@@ -1700,6 +1700,180 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_media_route_hides_private_occurrence_media_from_anonymous_user() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            uuid::Uuid::new_v4()
+        );
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_nquads = format!(
+            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+             <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <{graph_uri}> .
+"
+        );
+
+        let occurrence_store = FakeOccurrenceRdfStore::default();
+        occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
+        let media_store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let mut state = test_state_with_media_object_store(Arc::new(media_store));
+        state.occurrence_rdf_store = Arc::new(occurrence_store);
+        let db = state.posgre.clone();
+        let (owner_id, _) = create_media_test_session(&db, "private-occurrence-media-owner").await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("private-occurrence-photo.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        // No cookie is supplied. A private RDF reference must not grant anonymous
+        // access or disclose whether the media object exists.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_ne!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn get_media_route_hides_private_occurrence_media_from_logged_in_non_owner() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            uuid::Uuid::new_v4()
+        );
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_nquads = format!(
+            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+             <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <{graph_uri}> .
+"
+        );
+
+        let occurrence_store = FakeOccurrenceRdfStore::default();
+        occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
+        let media_store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let mut state = test_state_with_media_object_store(Arc::new(media_store));
+        state.occurrence_rdf_store = Arc::new(occurrence_store);
+        let db = state.posgre.clone();
+        let (owner_id, _) =
+            create_media_test_session(&db, "private-media-owner-for-other-user").await;
+        let (viewer_id, viewer_session_token) =
+            create_media_test_session(&db, "private-media-non-owner-viewer").await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("private-photo-owned-by-another-user.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        // The session is valid but belongs to neither the media uploader nor the
+        // private occurrence owner, so the media must remain undisclosed.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={viewer_session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_ne!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(viewer_id)
+            .execute(&db)
+            .await
+            .expect("media test sessions should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(viewer_id)
+            .execute(&db)
+            .await
+            .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
     async fn get_media_route_allows_logged_in_non_owner_when_linked_from_public_occurrence() {
         let media_id = uuid::Uuid::new_v4();
         let object_key = format!("media/{media_id}");
@@ -2049,6 +2223,151 @@ mod tests {
             .execute(&db)
             .await
             .expect("media owner should be removed after test");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires running Fuseki, Garage, PostgreSQL, and backend/.env integration settings"]
+    async fn get_public_occurrence_media_from_real_fuseki_and_real_garage() {
+        dotenvy::dotenv().ok();
+
+        let config = Config::from_env().expect("integration configuration should be valid");
+        let bucket = config.garage.bucket.clone();
+        let db = PgPoolOptions::new()
+            .connect_lazy(&config.posgre.url)
+            .expect("failed to create lazy database pool");
+        let fuseki_store = Arc::new(FusekiClient::new(config.fuseki.clone()));
+        let garage_store = Arc::new(
+            GarageMediaObjectStore::from_env()
+                .expect("Garage object store should be created from backend/.env S3 settings"),
+        );
+        let state =
+            AppState::new_with_media_object_store(config, db.clone(), fuseki_store, garage_store);
+        let (owner_id, session_token) =
+            create_media_test_session(&db, "real-fuseki-garage-public-media").await;
+        let app = build_app(state);
+
+        let boundary = "----occurrence-real-fuseki-garage-boundary";
+        let upload_body =
+            multipart_file_body(boundary, "public-real.jpg", "image/jpeg", TEST_JPEG_BYTES);
+        let upload_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(upload_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upload_response.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        let media_id = upload_json["media_id"]
+            .as_str()
+            .expect("media_id should be returned")
+            .to_string();
+        let media_uri = upload_json["media_uri"]
+            .as_str()
+            .expect("media_uri should be returned")
+            .to_string();
+        let object_key = upload_json["object_key"]
+            .as_str()
+            .expect("object_key should be returned")
+            .to_string();
+
+        // Register through the public API so Fuseki receives backend-managed
+        // creator, timestamps, and the default public accessRights statement.
+        let occurrence_nquads = format!(
+            "_:occurrence <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+"
+        );
+        let occurrence_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(occurrence_nquads))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(occurrence_response.status(), StatusCode::CREATED);
+        let occurrence_body = to_bytes(occurrence_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let occurrence_json: serde_json::Value = serde_json::from_slice(&occurrence_body).unwrap();
+        let occurrence_id = occurrence_json["occurrence_id"]
+            .as_str()
+            .expect("occurrence_id should be returned")
+            .to_string();
+
+        // No session is supplied. Fuseki's public reference must authorize the
+        // Garage stream through the same GET route used by frontend clients.
+        let get_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert_eq!(get_response.headers()[CONTENT_TYPE], "image/jpeg");
+        let downloaded = to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(downloaded.as_ref(), TEST_JPEG_BYTES);
+
+        let delete_occurrence_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/occurrences/{occurrence_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_occurrence_response.status(), StatusCode::OK);
+
+        run_aws_s3_command_for_real_garage(&vec![
+            "s3".to_string(),
+            "rm".to_string(),
+            format!("s3://{bucket}/{object_key}"),
+        ]);
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(uuid::Uuid::parse_str(&media_id).expect("media_id should be a UUID"))
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner should be removed after test");
     }
 
     #[tokio::test]

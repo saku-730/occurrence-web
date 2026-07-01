@@ -113,6 +113,8 @@
 - [x] media所有者ではないユーザーのsessionで `GET /media/{media_id}` を呼ぶと、ファイルを返さず `404 Not Found` になる。`get_media_route_returns_not_found_for_non_owner`
 - [x] public occurrence RDFからmedia URIが参照されている場合、未ログインで `GET /media/{media_id}` を呼んでも保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_allows_anonymous_access_when_linked_from_public_occurrence`
 - [x] public occurrence RDFからmedia URIが参照されている場合、media所有者とは異なるログイン済みユーザーが `GET /media/{media_id}` を呼んでも `200 OK` でファイルを取得できる。`get_media_route_allows_logged_in_non_owner_when_linked_from_public_occurrence`
+- [x] private occurrence RDFからmedia URIが参照されている場合、未ログインで `GET /media/{media_id}` を呼ぶとファイルを返さず `404 Not Found` になる。`get_media_route_hides_private_occurrence_media_from_anonymous_user`
+- [x] private occurrence RDFからmedia URIが参照されている場合、media所有者とは異なるログイン済みユーザーが `GET /media/{media_id}` を呼ぶとファイルを返さず `404 Not Found` になる。`get_media_route_hides_private_occurrence_media_from_logged_in_non_owner`
 
 ### service
 
@@ -297,6 +299,7 @@
 - [x] appの`build_app`に本番Garage object storeを入れると、`POST /media`で実Garageに添付データを保存できる（ignored）`upload_media_route_writes_object_to_real_garage`
 - [x] appの`build_app`に本番Garage object storeを入れ、`POST /media`で保存した添付データを所有者の`GET /media/{media_id}`で取得すると、同一bytesとMIME typeが返る（ignored）`get_media_route_reads_object_from_real_garage`
 
+- [x] appの`build_app`に実Fusekiと実Garageを同時に入れ、所有者がmedia uploadとpublic occurrence登録を行った後、未ログインの`GET /media/{media_id}`で同一bytesを取得できる（ignored）`get_public_occurrence_media_from_real_fuseki_and_real_garage`
 ## Real fuseki test 統合テスト
 
 - [x] app経由で`POST /occurrences`に有効sessionと正しいN-Quadsを送ると、実Fusekiに保存されSPARQL ASKで確認できる（ignored）`create_occurrence_route_saves_data_to_real_fuseki`

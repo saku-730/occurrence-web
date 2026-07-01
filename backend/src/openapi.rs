@@ -32,6 +32,7 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::delete_occurrence,
         crate::features::occurrences::handler::update_occurrence,
         crate::features::media::handler::upload_media,
+        crate::features::media::handler::get_media,
     ),
     components(
         schemas(
