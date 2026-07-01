@@ -194,6 +194,30 @@ fn detected_content_type_matches(declared_content_type: &str, bytes: &[u8]) -> b
 
 pub struct MediaService;
 
+async fn get_media_from_metadata<S>(
+    metadata: MediaMetadata,
+    store: &S,
+) -> Result<GetMediaOutput, MediaServiceError>
+where
+    S: MediaObjectStore + ?Sized,
+{
+    let stream = store
+        .get_object(GetMediaObjectInput {
+            bucket: metadata.bucket,
+            object_key: metadata.object_key,
+        })
+        .await?;
+
+    Ok(GetMediaOutput {
+        media_id: metadata.id,
+        content_type: metadata.content_type,
+        size_bytes: metadata.size_bytes,
+        original_filename: metadata.original_filename,
+        uploaded_by: metadata.uploaded_by,
+        stream,
+    })
+}
+
 impl MediaService {
     pub async fn get_media<S>(
         media_id: Uuid,
@@ -208,21 +232,28 @@ impl MediaService {
         };
 
         // PostgreSQLをobject storageの索引として使い、bucket/keyをクライアント入力から受け取らない。
-        let stream = store
-            .get_object(GetMediaObjectInput {
-                bucket: metadata.bucket,
-                object_key: metadata.object_key,
-            })
-            .await?;
+        Ok(Some(get_media_from_metadata(metadata, store).await?))
+    }
 
-        Ok(Some(GetMediaOutput {
-            media_id: metadata.id,
-            content_type: metadata.content_type,
-            size_bytes: metadata.size_bytes,
-            original_filename: metadata.original_filename,
-            uploaded_by: metadata.uploaded_by,
-            stream,
-        }))
+    pub async fn get_media_for_owner<S>(
+        media_id: Uuid,
+        owner_user_id: Uuid,
+        store: &S,
+        db: &PgPool,
+    ) -> Result<Option<GetMediaOutput>, MediaServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+    {
+        let Some(metadata) = MediaRepository::find_by_id(db, media_id).await? else {
+            return Ok(None);
+        };
+
+        // 認可失敗時にGarage GETを発行しない。存在有無も外部へ区別させないためNoneで返す。
+        if metadata.uploaded_by != owner_user_id {
+            return Ok(None);
+        }
+
+        Ok(Some(get_media_from_metadata(metadata, store).await?))
     }
 
     pub async fn upload_media<S>(

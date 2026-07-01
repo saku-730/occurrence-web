@@ -13,7 +13,7 @@ use crate::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
             reset_password,
         },
-        media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, upload_media},
+        media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, get_media, upload_media},
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
             update_occurrence,
@@ -42,6 +42,7 @@ pub fn build_app(state: AppState) -> Router {
             "/media",
             post(upload_media).layer(DefaultBodyLimit::max(MEDIA_REQUEST_BODY_LIMIT_BYTES)),
         )
+        .route("/media/{media_id}", get(get_media))
         // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
@@ -80,9 +81,9 @@ mod tests {
     use crate::infrastructure::garage::GarageMediaObjectStore;
     use crate::state::AppState;
 
-    use axum::http::header::{CONTENT_TYPE, COOKIE, SET_COOKIE};
+    use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, COOKIE, SET_COOKIE};
     use axum::{
-        body::{Body, to_bytes},
+        body::{Body, Bytes, to_bytes},
         http::{Method, Request, StatusCode, header},
     };
     use sha2::Digest;
@@ -1026,6 +1027,39 @@ mod tests {
         delete_mailpit_messages().await;
     }
 
+    #[derive(Clone)]
+    struct ReadableAppMediaObjectStore {
+        expected_bucket: String,
+        expected_object_key: String,
+        bytes: Arc<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for ReadableAppMediaObjectStore {
+        async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+
+        async fn get_object(
+            &self,
+            input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            assert_eq!(input.bucket, self.expected_bucket);
+            assert_eq!(input.object_key, self.expected_object_key);
+            let bytes = self.bytes.clone();
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(Bytes::copy_from_slice(bytes.as_slice()))
+            })))
+        }
+
+        async fn delete_object(
+            &self,
+            _input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+    }
+
     #[derive(Clone, Default)]
     struct FailingMediaObjectStore {
         attempted_paths: Arc<Mutex<Vec<PathBuf>>>,
@@ -1410,6 +1444,78 @@ mod tests {
             .execute(&db)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_media_route_returns_object_stream_for_owner() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let state = test_state_with_media_object_store(Arc::new(store));
+        let db = state.posgre.clone();
+        let (user_id, session_token) = create_media_test_session(&db, "get-media-owner").await;
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("owner-photo.jpg")
+        .bind(user_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "image/jpeg");
+        assert_eq!(
+            response.headers()[CONTENT_LENGTH],
+            TEST_JPEG_BYTES.len().to_string()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("media owner should be removed after test");
     }
 
     #[tokio::test]

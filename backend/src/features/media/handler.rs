@@ -1,13 +1,15 @@
 use axum::{
     Json,
-    extract::{Multipart, State, multipart::Field},
+    body::Body,
+    extract::{Multipart, Path, State, multipart::Field},
     http::{
         HeaderMap, StatusCode,
-        header::{CONTENT_LENGTH, COOKIE},
+        header::{CONTENT_LENGTH, CONTENT_TYPE, COOKIE},
     },
     response::{IntoResponse, Response},
 };
 
+use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
@@ -36,6 +38,8 @@ pub enum MediaHandlerError {
     ObjectStoreFailed,
     Database(sqlx::Error),
     FileSystem(std::io::Error),
+    NotFound,
+    Internal,
 }
 
 impl From<AuthServiceError> for MediaHandlerError {
@@ -86,6 +90,14 @@ impl IntoResponse for MediaHandlerError {
                 }),
             )
                 .into_response(),
+            MediaHandlerError::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "media_not_found".to_string(),
+                    message: "Media not found".to_string(),
+                }),
+            )
+                .into_response(),
             MediaHandlerError::ObjectStoreFailed => (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse {
@@ -94,7 +106,9 @@ impl IntoResponse for MediaHandlerError {
                 }),
             )
                 .into_response(),
-            MediaHandlerError::Database(_) | MediaHandlerError::FileSystem(_) => (
+            MediaHandlerError::Database(_)
+            | MediaHandlerError::FileSystem(_)
+            | MediaHandlerError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: "internal_server_error".to_string(),
@@ -104,6 +118,40 @@ impl IntoResponse for MediaHandlerError {
                 .into_response(),
         }
     }
+}
+
+pub async fn get_media(
+    Path(media_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, MediaHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    let output = MediaService::get_media_for_owner(
+        media_id,
+        current_user.user_id,
+        state.media_object_store.as_ref(),
+        &state.posgre,
+    )
+    .await?
+    .ok_or(MediaHandlerError::NotFound)?;
+
+    let content_type = axum::http::HeaderValue::from_str(&output.content_type)
+        .map_err(|_| MediaHandlerError::Internal)?;
+    let content_length = axum::http::HeaderValue::from_str(&output.size_bytes.to_string())
+        .map_err(|_| MediaHandlerError::Internal)?;
+    // object storageのchunk errorはresponse stream errorへ変換し、全体をメモリへ集約しない。
+    let stream = output
+        .stream
+        .map(|chunk| chunk.map_err(|_| std::io::Error::other("media object stream failed")));
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(CONTENT_LENGTH, content_length);
+
+    Ok(response)
 }
 
 #[utoipa::path(
