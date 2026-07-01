@@ -1519,6 +1519,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_media_route_returns_not_found_for_non_owner() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let state = test_state_with_media_object_store(Arc::new(store));
+        let db = state.posgre.clone();
+        let (owner_id, _) = create_media_test_session(&db, "get-media-owner").await;
+        let (other_user_id, other_session_token) =
+            create_media_test_session(&db, "get-media-non-owner").await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("private-owner-photo.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        // 別ユーザーの有効なsessionを使い、未認証ではなく所有権判定による拒否を確認する。
+        // 404を返すことで、media_idの存在自体も所有者以外へ開示しない。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={other_session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_ne!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(other_user_id)
+            .execute(&db)
+            .await
+            .expect("media test sessions should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(other_user_id)
+            .execute(&db)
+            .await
+            .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
     async fn upload_media_route_without_session_returns_unauthorized_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
         let state = test_state_with_media_object_store(Arc::new(store.clone()));

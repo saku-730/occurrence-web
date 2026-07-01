@@ -110,6 +110,7 @@
 - [x] `POST /media` はAxum既定2MBを超える有効ファイルを受け付け、chunk経由でobject storageへ保存する。`upload_media_route_accepts_body_larger_than_axum_default_limit`
 - [x] `POST /media` の一時ファイルはobject storage保存の成功・失敗にかかわらず削除される。`upload_media_route_removes_temporary_file_after_upload`
 - [x] ログイン済みのmedia所有者が `GET /media/{media_id}` を呼ぶと、app経由で `MediaService::get_media` が使われ、保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_returns_object_stream_for_owner`
+- [x] media所有者ではないユーザーのsessionで `GET /media/{media_id}` を呼ぶと、ファイルを返さず `404 Not Found` になる。`get_media_route_returns_not_found_for_non_owner`
 
 ### service
 
