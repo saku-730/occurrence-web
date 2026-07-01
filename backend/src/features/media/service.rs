@@ -80,6 +80,11 @@ pub struct GetMediaOutput {
     pub stream: MediaObjectByteStream,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteMediaOutput {
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeleteMediaObjectInput {
     pub bucket: String,
@@ -254,6 +259,34 @@ impl MediaService {
         }
 
         Ok(Some(get_media_from_metadata(metadata, store).await?))
+    }
+
+    pub async fn delete_media<S>(
+        media_id: Uuid,
+        store: &S,
+        db: &PgPool,
+    ) -> Result<DeleteMediaOutput, MediaServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+    {
+        let Some(metadata) = MediaRepository::find_by_id(db, media_id).await? else {
+            return Ok(DeleteMediaOutput { deleted: false });
+        };
+
+        // Delete the physical object first. If Garage rejects the operation,
+        // metadata remains available so the deletion can be retried safely.
+        store
+            .delete_object(DeleteMediaObjectInput {
+                bucket: metadata.bucket,
+                object_key: metadata.object_key,
+            })
+            .await?;
+
+        // Garage deletion is complete. Remove the lookup row so future GET
+        // requests cannot resolve the deleted object.
+        let deleted = MediaRepository::delete_by_id(db, media_id).await?;
+
+        Ok(DeleteMediaOutput { deleted })
     }
 
     pub async fn upload_media<S>(
@@ -969,5 +1002,79 @@ mod tests {
             .execute(&db)
             .await
             .expect("media test user should be removed after test");
+    }
+    #[tokio::test]
+    async fn delete_media_removes_object_and_metadata_by_id() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let email = format!("media-delete-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind("media-delete-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media delete test user should be inserted");
+        let media_id = Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("delete-target.jpg")
+        .bind(uploaded_by)
+        .bind(hex::encode(Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let store = RecordingMediaObjectStore::default();
+
+        let output = MediaService::delete_media(media_id, &store, &db)
+            .await
+            .expect("existing media should be deleted");
+
+        assert!(output.deleted);
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].bucket, "occurrence-media");
+        assert_eq!(deletes[0].object_key, object_key);
+        drop(deletes);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(metadata_count, 0, "deleted media metadata must not remain");
+
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media delete test user should be removed after test");
     }
 }

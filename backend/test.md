@@ -127,6 +127,7 @@
 - [x] 同じユーザーが同じSHA-256のファイルを再アップロードすると、Garageへ再保存せず既存 `media_id` とmetadataを返し、`media_objects`も1件のままになる。`upload_media_reuses_existing_media_for_same_user_and_sha256`
 - [x] Garageへのobject保存成功後にPostgreSQL `media_objects` のINSERTが失敗すると、同じGarage objectを削除して補償し、`MediaServiceError::Database`を返す。`upload_media_deletes_garage_object_when_postgresql_metadata_save_fails`
 - [x] `MediaService::get_media` に存在する `media_id` を渡すと、PostgreSQLのmetadataとobject storageのファイルstreamを取得できる。`get_media_returns_metadata_and_object_stream_for_existing_media`
+- [x] `MediaService::delete_media` に存在する `media_id` を渡すと、PostgreSQL metadataに記録されたGarage objectを削除し、`media_objects`の行も削除して `deleted=true` を返す。`delete_media_removes_object_and_metadata_by_id`
 
 ### config
 

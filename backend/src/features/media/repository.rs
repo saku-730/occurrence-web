@@ -64,6 +64,15 @@ impl MediaRepository {
         .await
     }
 
+    pub async fn delete_by_id(db: &PgPool, media_id: Uuid) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(db)
+            .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn insert(db: &PgPool, metadata: InsertMediaMetadata<'_>) -> Result<(), sqlx::Error> {
         // media URI、Garage object、DB rowを同じUUIDで追跡できるよう、service生成IDをそのまま保存する。
         sqlx::query(
