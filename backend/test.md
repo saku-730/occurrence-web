@@ -112,6 +112,7 @@
 - [x] ログイン済みのmedia所有者が `GET /media/{media_id}` を呼ぶと、app経由で `MediaService::get_media` が使われ、保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_returns_object_stream_for_owner`
 - [x] media所有者ではないユーザーのsessionで `GET /media/{media_id}` を呼ぶと、ファイルを返さず `404 Not Found` になる。`get_media_route_returns_not_found_for_non_owner`
 - [x] public occurrence RDFからmedia URIが参照されている場合、未ログインで `GET /media/{media_id}` を呼んでも保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_allows_anonymous_access_when_linked_from_public_occurrence`
+- [x] public occurrence RDFからmedia URIが参照されている場合、media所有者とは異なるログイン済みユーザーが `GET /media/{media_id}` を呼んでも `200 OK` でファイルを取得できる。`get_media_route_allows_logged_in_non_owner_when_linked_from_public_occurrence`
 
 ### service
 
@@ -167,6 +168,7 @@
 - [x] `POST /occurrences`に有効なユーザーで有効リクエストしたときに201created response`create_occurrence_route_with_valid_session_returns_created`
 - [x] `POST /occurrences`に有効 session と正しい N-Quads を送ると、route 経由で保存用 N-Quads が OccurrenceRdfStore に渡される`create_occurrence_route_with_valid_session_saves_nquads_to_store`
 - [x] `POST /occurrences`に有効 session と壊れた N-Quads を送ると、400 Bad Request を返し、OccurrenceRdfStore には保存されない。`create_occurrence_route_with_invalid_nquads_returns_bad_request_and_does_not_save`
+- [x] `POST /occurrences` のN-Quadsにログインユーザーとは別のユーザーが所有するmedia URIが含まれる場合、`403 Forbidden`で拒否しOccurrenceRdfStoreへ保存しない。`create_occurrence_route_rejects_media_owned_by_another_user_and_does_not_save`
 - [x] `POST /occurrences`にaccessRightsのリテラル、不正URI、複数指定を送ると400 Bad Requestを返し、OccurrenceRdfStoreには保存されない`create_occurrence_route_rejects_invalid_access_rights_and_does_not_save`
 - [x] `POST /occurrences`に有効 session と正しい N-Quads を送ったが、OccurrenceRdfStore の保存処理が失敗した場合、502 Bad Gateway`create_occurrence_route_when_rdf_store_fails_returns_bad_gateway`
 - [x] `POST /occurrences`にfrontend が backend 管理 predicate を送ってきたら拒否する`create_occurrence_route_rejects_frontend_creator_and_does_not_save`

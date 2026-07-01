@@ -13,9 +13,12 @@ use oxrdfio::{RdfFormat, RdfParser};
 use uuid::Uuid;
 
 use crate::{
-    features::auth::{
-        dto::ErrorResponse,
-        service::{AuthService, AuthServiceError},
+    features::{
+        auth::{
+            dto::ErrorResponse,
+            service::{AuthService, AuthServiceError},
+        },
+        media::repository::MediaRepository,
     },
     state::AppState,
 };
@@ -49,6 +52,7 @@ pub enum OccurrenceHandlerError {
     InvalidLicense,          //licenseが仕様外
     InvalidBlankNodeSubject, //blank node subjectが仕様外
     InvalidObjectBlankNode,  //object blank nodeは拒否
+    ForbiddenMedia,          //存在しないmediaまたは他人所有mediaへの参照を拒否
     InvalidSearchFilter,     //検索filterが仕様外
     NotFound,                //
 }
@@ -211,6 +215,14 @@ impl IntoResponse for OccurrenceHandlerError {
 
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
+            OccurrenceHandlerError::ForbiddenMedia => {
+                let body = ErrorResponse {
+                    error: "forbidden_media".to_string(),
+                    message: "Occurrence media must be owned by the authenticated user".to_string(),
+                };
+
+                (StatusCode::FORBIDDEN, Json(body)).into_response()
+            }
             OccurrenceHandlerError::InvalidSearchFilter => {
                 let body = ErrorResponse {
                     error: "invalid_search_filter".to_string(),
@@ -256,6 +268,11 @@ impl IntoResponse for OccurrenceHandlerError {
             body = ErrorResponse
         ),
         (
+            status = 403,
+            description = "Referenced media is not owned by the authenticated user",
+            body = ErrorResponse
+        ),
+        (
             status = 415,
             description = "Content-Type must be application/n-quads",
             body = ErrorResponse
@@ -286,6 +303,13 @@ pub async fn create_occurrence(
 
     let content_type = ensure_supported_rdf_content_type(&headers)?;
     ensure_non_empty_body(&body)?;
+    ensure_referenced_media_owned_by_user(
+        &body,
+        &state.config.app.app_base_url,
+        current_user.user_id,
+        &state.posgre,
+    )
+    .await?;
 
     let input = CreateOccurrenceInput {
         create_user_id: current_user.user_id,
@@ -671,6 +695,45 @@ pub async fn update_occurrence(
     };
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+async fn ensure_referenced_media_owned_by_user(
+    nquads: &[u8],
+    app_base_url: &str,
+    user_id: Uuid,
+    db: &sqlx::PgPool,
+) -> Result<(), OccurrenceHandlerError> {
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceHandlerError::InvalidRdf)?;
+    let media_uri_base = format!("{}/media/", app_base_url.trim().trim_end_matches('/'));
+    let mut media_ids = std::collections::HashSet::new();
+
+    for quad in quads {
+        let Term::NamedNode(object) = quad.object else {
+            continue;
+        };
+        let Some(media_id) = object.as_str().strip_prefix(&media_uri_base) else {
+            continue;
+        };
+        // Application media URIs must contain exactly one valid UUID.
+        // Unknown and malformed IDs share one response so row existence is not disclosed.
+        let media_id =
+            Uuid::parse_str(media_id).map_err(|_| OccurrenceHandlerError::ForbiddenMedia)?;
+        media_ids.insert(media_id);
+    }
+
+    for media_id in media_ids {
+        let metadata = MediaRepository::find_by_id(db, media_id)
+            .await
+            .map_err(OccurrenceHandlerError::Database)?;
+        if !metadata.is_some_and(|metadata| metadata.uploaded_by == user_id) {
+            return Err(OccurrenceHandlerError::ForbiddenMedia);
+        }
+    }
+
+    Ok(())
 }
 
 const ACCESS_RIGHTS_PREDICATE_URI: &str = "http://purl.org/dc/terms/accessRights";

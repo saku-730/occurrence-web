@@ -1700,6 +1700,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_media_route_allows_logged_in_non_owner_when_linked_from_public_occurrence() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            uuid::Uuid::new_v4()
+        );
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_nquads = format!(
+            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+             <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <{graph_uri}> .
+"
+        );
+
+        let occurrence_store = FakeOccurrenceRdfStore::default();
+        occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
+        let media_store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let mut state = test_state_with_media_object_store(Arc::new(media_store));
+        state.occurrence_rdf_store = Arc::new(occurrence_store);
+        let db = state.posgre.clone();
+        let (owner_id, _) =
+            create_media_test_session(&db, "public-media-owner-for-other-user").await;
+        let (viewer_id, viewer_session_token) =
+            create_media_test_session(&db, "public-media-viewer").await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("public-photo-owned-by-another-user.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        // The valid session belongs to a different user. Access therefore proves
+        // that public RDF linkage, rather than ownership, grants the read.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={viewer_session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "image/jpeg");
+        assert_eq!(
+            response.headers()[CONTENT_LENGTH],
+            TEST_JPEG_BYTES.len().to_string()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(viewer_id)
+            .execute(&db)
+            .await
+            .expect("media test sessions should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(viewer_id)
+            .execute(&db)
+            .await
+            .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
     async fn upload_media_route_without_session_returns_unauthorized_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
         let state = test_state_with_media_object_store(Arc::new(store.clone()));
@@ -3357,6 +3452,91 @@ mod tests {
             has_access_rights_quad,
             "saved N-Quads should default missing accessRights to public"
         );
+    }
+
+    #[tokio::test]
+    async fn create_occurrence_route_rejects_media_owned_by_another_user_and_does_not_save() {
+        let store = FakeOccurrenceRdfStore::default();
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (request_user_id, request_session_token) =
+            create_media_test_session(&db, "occurrence-media-request-user").await;
+        let (media_owner_id, _) =
+            create_media_test_session(&db, "occurrence-media-other-owner").await;
+        let media_id = uuid::Uuid::new_v4();
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("other-users-photo.jpg")
+        .bind(media_owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("other user's media metadata should be inserted");
+
+        let frontend_nquads = format!(
+            "_:occurrence <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+"
+        );
+        let app = build_app(state);
+
+        // The media exists, but uploaded_by differs from the authenticated occurrence creator.
+        // Reject before RDF persistence so another user's object cannot be exposed by a new occurrence.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/occurrences")
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={request_session_token}"))
+                    .body(Body::from(frontend_nquads))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let saved = store
+            .saved_nquads
+            .lock()
+            .expect("mutex should not be poisoned");
+        assert!(
+            saved.is_empty(),
+            "occurrence containing another user's media URI must not be saved"
+        );
+        drop(saved);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(request_user_id)
+            .bind(media_owner_id)
+            .execute(&db)
+            .await
+            .expect("test sessions should be removed");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(request_user_id)
+            .bind(media_owner_id)
+            .execute(&db)
+            .await
+            .expect("test users should be removed");
     }
 
     #[tokio::test]
