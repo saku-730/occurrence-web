@@ -27,6 +27,23 @@ pub struct MediaMetadata {
 pub struct MediaRepository;
 
 impl MediaRepository {
+    pub async fn find_by_id(
+        db: &PgPool,
+        media_id: Uuid,
+    ) -> Result<Option<MediaMetadata>, sqlx::Error> {
+        sqlx::query_as::<_, MediaMetadata>(
+            r#"
+            SELECT id, bucket, object_key, content_type, size_bytes,
+                   original_filename, uploaded_by
+            FROM media_objects
+            WHERE id = $1
+            "#,
+        )
+        .bind(media_id)
+        .fetch_optional(db)
+        .await
+    }
+
     pub async fn find_by_uploader_and_sha256(
         db: &PgPool,
         uploaded_by: Uuid,

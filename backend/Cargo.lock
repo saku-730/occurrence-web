@@ -176,6 +176,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "email_address",
+ "futures-util",
  "hex",
  "infer",
  "lettre",

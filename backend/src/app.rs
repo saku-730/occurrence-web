@@ -90,7 +90,8 @@ mod tests {
     use tower::util::ServiceExt; // oneshot
 
     use crate::features::media::service::{
-        DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+        DeleteMediaObjectInput, GetMediaObjectInput, MediaObjectByteStream, MediaObjectStore,
+        MediaServiceError, PutMediaObjectInput,
     };
     use crate::features::occurrences::service::{
         OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceStoreRow,
@@ -1040,6 +1041,13 @@ mod tests {
             Err(MediaServiceError::ObjectStoreFailed)
         }
 
+        async fn get_object(
+            &self,
+            _input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            Err(MediaServiceError::ObjectStoreFailed)
+        }
+
         async fn delete_object(
             &self,
             _input: DeleteMediaObjectInput,
@@ -1121,6 +1129,13 @@ mod tests {
                 });
 
             Ok(())
+        }
+
+        async fn get_object(
+            &self,
+            _input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            Err(MediaServiceError::ObjectStoreFailed)
         }
 
         async fn delete_object(

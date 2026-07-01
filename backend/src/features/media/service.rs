@@ -1,4 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    pin::Pin,
+};
+
+use axum::body::Bytes;
+use futures_util::Stream;
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -57,6 +63,24 @@ pub struct PutMediaObjectInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct GetMediaObjectInput {
+    pub bucket: String,
+    pub object_key: String,
+}
+
+pub type MediaObjectByteStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, MediaServiceError>> + Send>>;
+
+pub struct GetMediaOutput {
+    pub media_id: Uuid,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub original_filename: Option<String>,
+    pub uploaded_by: Uuid,
+    pub stream: MediaObjectByteStream,
+}
+
+#[derive(Debug, Clone)]
 pub struct DeleteMediaObjectInput {
     pub bucket: String,
     pub object_key: String,
@@ -65,6 +89,10 @@ pub struct DeleteMediaObjectInput {
 #[async_trait::async_trait]
 pub trait MediaObjectStore: Send + Sync {
     async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError>;
+    async fn get_object(
+        &self,
+        input: GetMediaObjectInput,
+    ) -> Result<MediaObjectByteStream, MediaServiceError>;
     async fn delete_object(&self, input: DeleteMediaObjectInput) -> Result<(), MediaServiceError>;
 }
 
@@ -167,6 +195,36 @@ fn detected_content_type_matches(declared_content_type: &str, bytes: &[u8]) -> b
 pub struct MediaService;
 
 impl MediaService {
+    pub async fn get_media<S>(
+        media_id: Uuid,
+        store: &S,
+        db: &PgPool,
+    ) -> Result<Option<GetMediaOutput>, MediaServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+    {
+        let Some(metadata) = MediaRepository::find_by_id(db, media_id).await? else {
+            return Ok(None);
+        };
+
+        // PostgreSQLをobject storageの索引として使い、bucket/keyをクライアント入力から受け取らない。
+        let stream = store
+            .get_object(GetMediaObjectInput {
+                bucket: metadata.bucket,
+                object_key: metadata.object_key,
+            })
+            .await?;
+
+        Ok(Some(GetMediaOutput {
+            media_id: metadata.id,
+            content_type: metadata.content_type,
+            size_bytes: metadata.size_bytes,
+            original_filename: metadata.original_filename,
+            uploaded_by: metadata.uploaded_by,
+            stream,
+        }))
+    }
+
     pub async fn upload_media<S>(
         input: UploadMediaInput,
         store: &S,
@@ -308,8 +366,10 @@ impl MediaService {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::sync::Arc;
 
     use super::*;
+    use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
@@ -381,6 +441,13 @@ mod tests {
             Ok(())
         }
 
+        async fn get_object(
+            &self,
+            _input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            Err(MediaServiceError::ObjectStoreFailed)
+        }
+
         async fn delete_object(
             &self,
             input: DeleteMediaObjectInput,
@@ -395,6 +462,116 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[derive(Clone)]
+    struct ReadableMediaObjectStore {
+        expected_bucket: String,
+        expected_object_key: String,
+        bytes: Arc<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for ReadableMediaObjectStore {
+        async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+
+        async fn get_object(
+            &self,
+            input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            assert_eq!(input.bucket, self.expected_bucket);
+            assert_eq!(input.object_key, self.expected_object_key);
+            let bytes = self.bytes.clone();
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(Bytes::copy_from_slice(bytes.as_slice()))
+            })))
+        }
+
+        async fn delete_object(
+            &self,
+            _input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn get_media_returns_metadata_and_object_stream_for_existing_media() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let email = format!("media-get-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind("media-get-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media get test user should be inserted");
+        let media_id = Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("retrieved.jpg")
+        .bind(uploaded_by)
+        .bind(hex::encode(Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let store = ReadableMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key,
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+
+        let output = MediaService::get_media(media_id, &store, &db)
+            .await
+            .expect("media get should succeed")
+            .expect("existing media should be returned");
+
+        assert_eq!(output.media_id, media_id);
+        assert_eq!(output.content_type, "image/jpeg");
+        assert_eq!(output.size_bytes, TEST_JPEG_BYTES.len() as i64);
+        assert_eq!(output.original_filename.as_deref(), Some("retrieved.jpg"));
+        let mut stream = output.stream;
+        let mut actual_bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            actual_bytes.extend_from_slice(&chunk.expect("object stream chunk should succeed"));
+        }
+        assert_eq!(actual_bytes, TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media get test metadata should be removed");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media get test user should be removed");
     }
 
     #[tokio::test]

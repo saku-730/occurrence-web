@@ -1,6 +1,7 @@
 use std::{env, fmt};
 
 use chrono::Utc;
+use futures_util::StreamExt;
 use reqwest::{
     Client, Url,
     header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST},
@@ -9,7 +10,8 @@ use sha2::{Digest, Sha256};
 use tokio_util::io::ReaderStream;
 
 use crate::features::media::service::{
-    DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+    DeleteMediaObjectInput, GetMediaObjectInput, MediaObjectByteStream, MediaObjectStore,
+    MediaServiceError, PutMediaObjectInput,
 };
 
 // GarageはS3互換APIを提供するため、backendではS3のpath-style PUTだけを利用する。
@@ -168,6 +170,73 @@ impl GarageMediaObjectStore {
         Ok(())
     }
 
+    async fn get_object_from_garage(
+        &self,
+        input: GetMediaObjectInput,
+    ) -> Result<reqwest::Response, GarageClientError> {
+        if input.bucket != self.bucket {
+            return Err(GarageClientError::new(format!(
+                "requested bucket {} does not match configured bucket {}",
+                input.bucket, self.bucket
+            )));
+        }
+
+        let object_url = format!(
+            "{}/{}/{}",
+            self.endpoint,
+            encode_uri_path_segment(&input.bucket),
+            encode_object_key(&input.object_key)
+        );
+        let url = Url::parse(&object_url)
+            .map_err(|error| GarageClientError::new(format!("invalid object URL: {error}")))?;
+        let host = host_header_value(&url)?;
+        let payload_hash = sha256_hex(&[]);
+        let now = Utc::now();
+        let date = now.format("%Y%m%d").to_string();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let canonical_headers =
+            format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
+        let signed_headers = "host;x-amz-content-sha256;x-amz-date";
+        let canonical_request = format!(
+            "GET\n{}\n\n{}\n{}\n{}",
+            url.path(),
+            canonical_headers,
+            signed_headers,
+            payload_hash
+        );
+        let credential_scope = format!("{date}/{}/s3/aws4_request", self.region);
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+            sha256_hex(canonical_request.as_bytes())
+        );
+        let signing_key = signing_key(&self.secret_key, &date, &self.region);
+        let signature = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes()));
+        let authorization = format!(
+            "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
+            self.access_key
+        );
+
+        let response = self
+            .http
+            .get(url)
+            .header(HOST, host)
+            .header("x-amz-content-sha256", payload_hash)
+            .header("x-amz-date", amz_date)
+            .header(AUTHORIZATION, authorization)
+            .send()
+            .await
+            .map_err(|error| GarageClientError::new(format!("Garage GET failed: {error}")))?;
+
+        if !response.status().is_success() {
+            return Err(GarageClientError::new(format!(
+                "Garage GET returned unexpected status {}",
+                response.status()
+            )));
+        }
+
+        Ok(response)
+    }
+
     async fn delete_object_from_garage(
         &self,
         input: DeleteMediaObjectInput,
@@ -246,6 +315,20 @@ impl MediaObjectStore for GarageMediaObjectStore {
         self.put_object_to_garage(input)
             .await
             .map_err(|_| MediaServiceError::ObjectStoreFailed)
+    }
+
+    async fn get_object(
+        &self,
+        input: GetMediaObjectInput,
+    ) -> Result<MediaObjectByteStream, MediaServiceError> {
+        let response = self
+            .get_object_from_garage(input)
+            .await
+            .map_err(|_| MediaServiceError::ObjectStoreFailed)?;
+        let stream = response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|_| MediaServiceError::ObjectStoreFailed));
+        Ok(Box::pin(stream))
     }
 
     async fn delete_object(&self, input: DeleteMediaObjectInput) -> Result<(), MediaServiceError> {

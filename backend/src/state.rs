@@ -6,7 +6,8 @@ use crate::{
     config::Config,
     features::{
         media::service::{
-            DeleteMediaObjectInput, MediaObjectStore, MediaServiceError, PutMediaObjectInput,
+            DeleteMediaObjectInput, GetMediaObjectInput, MediaObjectByteStream, MediaObjectStore,
+            MediaServiceError, PutMediaObjectInput,
         },
         occurrences::service::OccurrenceRdfStore,
     },
@@ -60,6 +61,13 @@ struct UnconfiguredMediaObjectStore;
 impl MediaObjectStore for UnconfiguredMediaObjectStore {
     async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
         // 本番用S3/Garage clientを差し込むまでは、誤って成功扱いにしない。
+        Err(MediaServiceError::ObjectStoreFailed)
+    }
+
+    async fn get_object(
+        &self,
+        _input: GetMediaObjectInput,
+    ) -> Result<MediaObjectByteStream, MediaServiceError> {
         Err(MediaServiceError::ObjectStoreFailed)
     }
 
