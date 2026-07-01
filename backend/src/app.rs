@@ -5528,6 +5528,104 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
     }
 
     #[tokio::test]
+    async fn update_occurrence_route_rejects_media_owned_by_another_user_and_does_not_update() {
+        let store = FakeOccurrenceRdfStore::default();
+        let state = test_state_with_occurrence_rdf_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (occurrence_owner_id, occurrence_owner_session) =
+            create_media_test_session(&db, "occurrence-update-media-owner").await;
+        let (media_owner_id, _) =
+            create_media_test_session(&db, "occurrence-update-other-media-owner").await;
+        let media_id = uuid::Uuid::new_v4();
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("other-users-update-photo.jpg")
+        .bind(media_owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("other user's media metadata should be inserted");
+
+        let occurrence_id = uuid::Uuid::new_v4();
+        let occurrence_uri = format!("https://bio-database.net/occurrences/{occurrence_id}");
+        let existing_nquads = format!(
+            r#"<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/scientificName> "Original name" <https://bio-database.net/graphs/occurrences> .
+<{occurrence_uri}> <http://purl.org/dc/terms/creator> <https://bio-database.net/users/{occurrence_owner_id}> <https://bio-database.net/graphs/occurrences> .
+<{occurrence_uri}> <http://purl.org/dc/terms/created> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{occurrence_uri}> <http://purl.org/dc/terms/modified> "2026-06-02T10:20:30Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <https://bio-database.net/graphs/occurrences> .
+<{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <https://bio-database.net/graphs/occurrences> .
+"#
+        );
+        store
+            .insert_occurrence_nquads(occurrence_uri.clone(), existing_nquads.clone().into_bytes());
+
+        let frontend_nquads = format!(
+            r#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated name" <https://bio-database.net/graphs/occurrences> .
+_:updated <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+"#
+        );
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/occurrences/{occurrence_id}"))
+                    .header(CONTENT_TYPE, "application/n-quads")
+                    .header(COOKIE, format!("session={occurrence_owner_session}"))
+                    .body(Body::from(frontend_nquads))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let stored_nquads = store
+            .get_occurrence_nquads(&occurrence_uri)
+            .await
+            .expect("fake store should return occurrence")
+            .expect("occurrence should still exist");
+        assert_eq!(
+            stored_nquads,
+            existing_nquads.as_bytes(),
+            "another user's media URI must not replace the existing occurrence RDF"
+        );
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(occurrence_owner_id)
+            .bind(media_owner_id)
+            .execute(&db)
+            .await
+            .expect("test sessions should be removed");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(occurrence_owner_id)
+            .bind(media_owner_id)
+            .execute(&db)
+            .await
+            .expect("test users should be removed");
+    }
+
+    #[tokio::test]
     async fn update_occurrence_route_with_valid_session_updates_existing_occurrence() {
         let store = FakeOccurrenceRdfStore::default();
 

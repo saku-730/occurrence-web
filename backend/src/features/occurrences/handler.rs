@@ -627,6 +627,11 @@ pub async fn delete_occurrence(
             body = ErrorResponse
         ),
         (
+            status = 403,
+            description = "Referenced media is not owned by the occurrence creator",
+            body = ErrorResponse
+        ),
+        (
             status = 404,
             description = "Occurrence not found or update is not allowed",
             body = ErrorResponse
@@ -679,6 +684,16 @@ pub async fn update_occurrence(
     if current_user.role != "admin" && current_user.user_id != creator_user_id {
         return Err(OccurrenceHandlerError::NotFound);
     }
+
+    // Preserve the invariant that every referenced media object is owned by the
+    // occurrence creator. This also applies when an admin performs the update.
+    ensure_referenced_media_owned_by_user(
+        &body,
+        &state.config.app.app_base_url,
+        creator_user_id,
+        &state.posgre,
+    )
+    .await?;
 
     let output = OccurrenceService::update_occurrence(
         UpdateOccurrenceInput {
