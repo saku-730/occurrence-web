@@ -118,6 +118,17 @@ pub trait OccurrenceRdfStore: Send + Sync {
         occurrence_uri: &str,
     ) -> Result<Option<Vec<u8>>, OccurrenceServiceError>;
 
+    // Media access is derived from RDF, so the media handler asks the RDF store
+    // whether at least one public occurrence currently references the media URI.
+    async fn is_media_referenced_by_public_occurrence(
+        &self,
+        _media_uri: &str,
+    ) -> Result<bool, OccurrenceServiceError> {
+        // Stores that do not support public media lookup must not accidentally
+        // disclose media. Production Fuseki overrides this method.
+        Ok(false)
+    }
+
     async fn replace_occurrence_nquads(
         &self,
         _occurrence_uri: &str,

@@ -57,6 +57,54 @@ impl OccurrenceRdfStore for FusekiClient {
             .map_err(|_| OccurrenceServiceError::StoreFailed)
     }
 
+    async fn is_media_referenced_by_public_occurrence(
+        &self,
+        media_uri: &str,
+    ) -> Result<bool, OccurrenceServiceError> {
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_uri_base = "https://bio-database.net/occurrences/";
+        let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
+        let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
+        let media_uri = escape_sparql_iri(media_uri)?;
+
+        // The media predicate is intentionally unrestricted: the RDF model permits
+        // media URIs through extension vocabularies, while accessRights controls disclosure.
+        let query = format!(
+            r#"
+            ASK WHERE {{
+              GRAPH <{graph_uri}> {{
+                ?occurrence ?mediaPredicate <{media_uri}> .
+                ?occurrence <{access_rights_predicate}> <{public_access_rights_uri}> .
+                FILTER(STRSTARTS(STR(?occurrence), "{occurrence_uri_base}"))
+              }}
+            }}
+            "#
+        );
+        let sparql_url = format!("{}/sparql", self.config.base_url.trim_end_matches('/'));
+        let response = self
+            .http
+            .post(sparql_url)
+            .basic_auth(&self.config.user, Some(&self.config.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/sparql-results+json")
+            .body(query)
+            .send()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+
+        if !response.status().is_success() {
+            return Err(OccurrenceServiceError::StoreFailed);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        body.get("boolean")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or(OccurrenceServiceError::StoreFailed)
+    }
+
     async fn search_occurrences(
         &self,
         input: SearchOccurrencesStoreInput,

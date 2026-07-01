@@ -111,6 +111,7 @@
 - [x] `POST /media` の一時ファイルはobject storage保存の成功・失敗にかかわらず削除される。`upload_media_route_removes_temporary_file_after_upload`
 - [x] ログイン済みのmedia所有者が `GET /media/{media_id}` を呼ぶと、app経由で `MediaService::get_media` が使われ、保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_returns_object_stream_for_owner`
 - [x] media所有者ではないユーザーのsessionで `GET /media/{media_id}` を呼ぶと、ファイルを返さず `404 Not Found` になる。`get_media_route_returns_not_found_for_non_owner`
+- [x] public occurrence RDFからmedia URIが参照されている場合、未ログインで `GET /media/{media_id}` を呼んでも保存MIME・Content-Length・ファイルstreamを含む `200 OK` が返る。`get_media_route_allows_anonymous_access_when_linked_from_public_occurrence`
 
 ### service
 

@@ -39,6 +39,7 @@ pub enum MediaHandlerError {
     Database(sqlx::Error),
     FileSystem(std::io::Error),
     NotFound,
+    RdfStoreFailed,
     Internal,
 }
 
@@ -98,11 +99,11 @@ impl IntoResponse for MediaHandlerError {
                 }),
             )
                 .into_response(),
-            MediaHandlerError::ObjectStoreFailed => (
+            MediaHandlerError::ObjectStoreFailed | MediaHandlerError::RdfStoreFailed => (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse {
-                    error: "object_store_error".to_string(),
-                    message: "Object store error".to_string(),
+                    error: "upstream_store_error".to_string(),
+                    message: "Upstream store error".to_string(),
                 }),
             )
                 .into_response(),
@@ -125,15 +126,49 @@ pub async fn get_media(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, MediaHandlerError> {
-    let session_token = extract_session_token(&headers)?;
-    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
-    let output = MediaService::get_media_for_owner(
-        media_id,
-        current_user.user_id,
-        state.media_object_store.as_ref(),
-        &state.posgre,
-    )
-    .await?
+    // GET is also an anonymous endpoint for media referenced by public occurrence RDF.
+    // A supplied but invalid session remains an authentication error instead of being ignored.
+    let current_user_id = match extract_optional_session_token(&headers)? {
+        Some(session_token) => Some(
+            AuthService::current_user(&state.posgre, session_token)
+                .await?
+                .user_id,
+        ),
+        None => None,
+    };
+
+    // Ownership is resolved from PostgreSQL first. An owner must not lose access
+    // merely because Fuseki is temporarily unavailable.
+    let owner_output = if let Some(user_id) = current_user_id {
+        MediaService::get_media_for_owner(
+            media_id,
+            user_id,
+            state.media_object_store.as_ref(),
+            &state.posgre,
+        )
+        .await?
+    } else {
+        None
+    };
+
+    let output = if owner_output.is_some() {
+        owner_output
+    } else {
+        let app_base_url = state.config.app.app_base_url.trim().trim_end_matches('/');
+        let media_uri = format!("{app_base_url}/media/{media_id}");
+        let is_publicly_referenced = state
+            .occurrence_rdf_store
+            .is_media_referenced_by_public_occurrence(&media_uri)
+            .await
+            .map_err(|_| MediaHandlerError::RdfStoreFailed)?;
+
+        if is_publicly_referenced {
+            MediaService::get_media(media_id, state.media_object_store.as_ref(), &state.posgre)
+                .await?
+        } else {
+            None
+        }
+    }
     .ok_or(MediaHandlerError::NotFound)?;
 
     let content_type = axum::http::HeaderValue::from_str(&output.content_type)
@@ -372,10 +407,13 @@ async fn stage_field_to_temporary_file(
     })
 }
 
-fn extract_session_token(headers: &HeaderMap) -> Result<String, MediaHandlerError> {
-    let cookie_header = headers
-        .get(COOKIE)
-        .ok_or(MediaHandlerError::InvalidSession)?
+fn extract_optional_session_token(
+    headers: &HeaderMap,
+) -> Result<Option<String>, MediaHandlerError> {
+    let Some(cookie_header) = headers.get(COOKIE) else {
+        return Ok(None);
+    };
+    let cookie_header = cookie_header
         .to_str()
         .map_err(|_| MediaHandlerError::InvalidSession)?;
 
@@ -385,9 +423,13 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, MediaHandlerErro
             if session_token.trim().is_empty() {
                 return Err(MediaHandlerError::InvalidSession);
             }
-            return Ok(session_token.to_string());
+            return Ok(Some(session_token.to_string()));
         }
     }
 
-    Err(MediaHandlerError::InvalidSession)
+    Ok(None)
+}
+
+fn extract_session_token(headers: &HeaderMap) -> Result<String, MediaHandlerError> {
+    extract_optional_session_token(headers)?.ok_or(MediaHandlerError::InvalidSession)
 }

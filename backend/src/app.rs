@@ -333,6 +333,24 @@ mod tests {
                 .cloned())
         }
 
+        async fn is_media_referenced_by_public_occurrence(
+            &self,
+            media_uri: &str,
+        ) -> Result<bool, OccurrenceServiceError> {
+            let media_object = format!("<{media_uri}>");
+            let public_access = "<https://bio-database.net/terms/access-rights/public>";
+
+            Ok(self
+                .occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .values()
+                .any(|nquads| {
+                    let nquads = String::from_utf8_lossy(nquads);
+                    nquads.contains(&media_object) && nquads.contains(public_access)
+                }))
+        }
+
         async fn replace_occurrence_nquads(
             &self,
             occurrence_uri: &str,
@@ -1590,6 +1608,95 @@ mod tests {
             .execute(&db)
             .await
             .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn get_media_route_allows_anonymous_access_when_linked_from_public_occurrence() {
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            uuid::Uuid::new_v4()
+        );
+        let graph_uri = "https://bio-database.net/graphs/occurrences";
+        let occurrence_nquads = format!(
+            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+             <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <{graph_uri}> .
+"
+        );
+
+        let occurrence_store = FakeOccurrenceRdfStore::default();
+        occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
+        let media_store = ReadableAppMediaObjectStore {
+            expected_bucket: "occurrence-media".to_string(),
+            expected_object_key: object_key.clone(),
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+        };
+        let mut state = test_state_with_media_object_store(Arc::new(media_store));
+        state.occurrence_rdf_store = Arc::new(occurrence_store);
+        let db = state.posgre.clone();
+        let (owner_id, _) = create_media_test_session(&db, "public-occurrence-media-owner").await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("public-occurrence-photo.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        // No session cookie is sent. Access must be granted only because a public
+        // occurrence references this media URI in RDF.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/media/{media_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "image/jpeg");
+        assert_eq!(
+            response.headers()[CONTENT_LENGTH],
+            TEST_JPEG_BYTES.len().to_string()
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), TEST_JPEG_BYTES);
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner should be removed after test");
     }
 
     #[tokio::test]
