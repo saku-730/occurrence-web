@@ -4,9 +4,11 @@ use std::{
 };
 
 use axum::body::Bytes;
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use super::repository::{InsertMediaMetadata, MediaMetadata, MediaRepository};
@@ -16,6 +18,7 @@ pub enum MediaServiceError {
     InvalidInput,
     PayloadTooLarge,
     ObjectStoreFailed,
+    FileSystem(std::io::Error),
     Database(sqlx::Error),
 }
 
@@ -307,21 +310,69 @@ impl MediaService {
         S: MediaObjectStore + ?Sized,
     {
         let media_id = metadata.id;
+        let bucket = metadata.bucket;
+        let object_key = metadata.object_key;
+        let content_type = metadata.content_type;
 
-        // Delete the physical object first. If Garage rejects the operation,
-        // metadata remains available so the deletion can be retried safely.
+        // PostgreSQL deletion can fail after Garage deletion. Keep a streamed
+        // temporary backup so the same object can be restored without holding it in memory.
+        let mut object_stream = store
+            .get_object(GetMediaObjectInput {
+                bucket: bucket.clone(),
+                object_key: object_key.clone(),
+            })
+            .await?;
+        let temporary_file =
+            tempfile::NamedTempFile::new().map_err(MediaServiceError::FileSystem)?;
+        let temporary_path = temporary_file.into_temp_path();
+        let mut file = tokio::fs::File::create(&temporary_path)
+            .await
+            .map_err(MediaServiceError::FileSystem)?;
+        let mut hasher = Sha256::new();
+        let mut size_bytes = 0_u64;
+
+        while let Some(chunk) = object_stream.next().await {
+            let chunk = chunk?;
+            size_bytes = size_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or(MediaServiceError::PayloadTooLarge)?;
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(MediaServiceError::FileSystem)?;
+        }
+        file.flush().await.map_err(MediaServiceError::FileSystem)?;
+        drop(file);
+
+        // If Garage rejects deletion, metadata remains and TempPath removes the backup on drop.
         store
             .delete_object(DeleteMediaObjectInput {
-                bucket: metadata.bucket,
-                object_key: metadata.object_key,
+                bucket: bucket.clone(),
+                object_key: object_key.clone(),
             })
             .await?;
 
-        // Garage deletion is complete. Remove the lookup row so future GET
-        // requests cannot resolve the deleted object.
-        let deleted = MediaRepository::delete_by_id(db, media_id).await?;
+        match MediaRepository::delete_by_id(db, media_id).await {
+            Ok(deleted) => Ok(DeleteMediaOutput { deleted }),
+            Err(database_error) => {
+                // Restore the exact bytes under the original key before returning
+                // the database error. A failed restore is more severe and is reported
+                // as an object-store failure while metadata remains for reconciliation.
+                store
+                    .put_object(PutMediaObjectInput {
+                        bucket,
+                        object_key,
+                        content_type,
+                        file_path: temporary_path.to_path_buf(),
+                        size_bytes,
+                        payload_sha256: hex::encode(hasher.finalize()),
+                    })
+                    .await
+                    .map_err(|_| MediaServiceError::ObjectStoreFailed)?;
 
-        Ok(DeleteMediaOutput { deleted })
+                Err(MediaServiceError::Database(database_error))
+            }
+        }
     }
 
     pub async fn upload_media<S>(
@@ -544,7 +595,9 @@ mod tests {
             &self,
             _input: GetMediaObjectInput,
         ) -> Result<MediaObjectByteStream, MediaServiceError> {
-            Err(MediaServiceError::ObjectStoreFailed)
+            Ok(Box::pin(futures_util::stream::once(async {
+                Ok(Bytes::from_static(TEST_JPEG_BYTES))
+            })))
         }
 
         async fn delete_object(
@@ -592,6 +645,55 @@ mod tests {
             &self,
             _input: DeleteMediaObjectInput,
         ) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+    }
+
+    struct RestorableMediaObjectStore {
+        bytes: Arc<Vec<u8>>,
+        deleted_objects: std::sync::Mutex<Vec<RecordedObjectDelete>>,
+        restored_objects: std::sync::Mutex<Vec<RecordedObjectWrite>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for RestorableMediaObjectStore {
+        async fn put_object(&self, input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            let bytes = tokio::fs::read(&input.file_path)
+                .await
+                .map_err(|_| MediaServiceError::ObjectStoreFailed)?;
+            self.restored_objects
+                .lock()
+                .expect("restored object writes lock should not be poisoned")
+                .push(RecordedObjectWrite {
+                    bucket: input.bucket,
+                    object_key: input.object_key,
+                    content_type: input.content_type,
+                    bytes,
+                });
+            Ok(())
+        }
+
+        async fn get_object(
+            &self,
+            _input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            let bytes = self.bytes.clone();
+            Ok(Box::pin(futures_util::stream::once(async move {
+                Ok(Bytes::copy_from_slice(bytes.as_slice()))
+            })))
+        }
+
+        async fn delete_object(
+            &self,
+            input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            self.deleted_objects
+                .lock()
+                .expect("recorded object deletes lock should not be poisoned")
+                .push(RecordedObjectDelete {
+                    bucket: input.bucket,
+                    object_key: input.object_key,
+                });
             Ok(())
         }
     }
@@ -1111,5 +1213,148 @@ mod tests {
             .execute(&db)
             .await
             .expect("media delete test user should be removed after test");
+    }
+    #[tokio::test]
+    async fn delete_media_restores_garage_object_when_postgresql_delete_fails() {
+        dotenvy::dotenv().ok();
+
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
+        let db = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("PostgreSQL should be available for media tests");
+        let email = format!("media-delete-rollback-{}@example.com", Uuid::new_v4());
+        let uploaded_by = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users (email, user_name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(email)
+        .bind("media-delete-rollback-user")
+        .bind("not-used-by-this-test")
+        .fetch_one(&db)
+        .await
+        .expect("media rollback test user should be inserted");
+        let media_id = Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("rollback-delete.jpg")
+        .bind(uploaded_by)
+        .bind(hex::encode(Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+
+        // Fail only this row's metadata DELETE after the object-store DELETE succeeds.
+        // Cleanup from a previously interrupted run first because the trigger is test-only DB state.
+        sqlx::query("DROP TRIGGER IF EXISTS media_delete_failure_test_trigger ON media_objects")
+            .execute(&db)
+            .await
+            .expect("stale delete failure trigger should be removed");
+        sqlx::query("DROP FUNCTION IF EXISTS media_delete_failure_test()")
+            .execute(&db)
+            .await
+            .expect("stale delete failure function should be removed");
+        sqlx::query(
+            r#"
+            CREATE FUNCTION media_delete_failure_test()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced media metadata delete failure';
+            END;
+            $$
+            "#,
+        )
+        .execute(&db)
+        .await
+        .expect("delete failure function should be created");
+        let create_trigger = format!(
+            r#"
+            CREATE TRIGGER media_delete_failure_test_trigger
+            BEFORE DELETE ON media_objects
+            FOR EACH ROW
+            WHEN (OLD.id = '{}')
+            EXECUTE FUNCTION media_delete_failure_test()
+            "#,
+            media_id
+        );
+        sqlx::query(&create_trigger)
+            .execute(&db)
+            .await
+            .expect("delete failure trigger should be created");
+
+        let store = RestorableMediaObjectStore {
+            bytes: Arc::new(TEST_JPEG_BYTES.to_vec()),
+            deleted_objects: std::sync::Mutex::new(Vec::new()),
+            restored_objects: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let result = MediaService::delete_media(media_id, &store, &db).await;
+
+        // Remove failure injection before assertions and ordinary fixture cleanup.
+        sqlx::query("DROP TRIGGER media_delete_failure_test_trigger ON media_objects")
+            .execute(&db)
+            .await
+            .expect("delete failure trigger should be removed");
+        sqlx::query("DROP FUNCTION media_delete_failure_test()")
+            .execute(&db)
+            .await
+            .expect("delete failure function should be removed");
+
+        assert!(matches!(result, Err(MediaServiceError::Database(_))));
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded object deletes lock should not be poisoned");
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].bucket, "occurrence-media");
+        assert_eq!(deletes[0].object_key, object_key);
+        drop(deletes);
+
+        let restores = store
+            .restored_objects
+            .lock()
+            .expect("restored object writes lock should not be poisoned");
+        assert_eq!(restores.len(), 1, "Garage object must be restored");
+        assert_eq!(restores[0].bucket, "occurrence-media");
+        assert_eq!(restores[0].object_key, object_key);
+        assert_eq!(restores[0].content_type, "image/jpeg");
+        assert_eq!(restores[0].bytes, TEST_JPEG_BYTES);
+        drop(restores);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(metadata_count, 1, "failed DB delete must preserve metadata");
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(uploaded_by)
+            .execute(&db)
+            .await
+            .expect("media rollback test user should be removed");
     }
 }

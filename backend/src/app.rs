@@ -1188,7 +1188,9 @@ mod tests {
             &self,
             _input: GetMediaObjectInput,
         ) -> Result<MediaObjectByteStream, MediaServiceError> {
-            Err(MediaServiceError::ObjectStoreFailed)
+            Ok(Box::pin(futures_util::stream::once(async {
+                Ok(Bytes::from_static(TEST_JPEG_BYTES))
+            })))
         }
 
         async fn delete_object(
@@ -2521,6 +2523,112 @@ mod tests {
             .execute(&db)
             .await
             .expect("media owner should be removed after test");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running Garage server, backend/.env S3_* credentials, and PostgreSQL"]
+    async fn delete_media_route_removes_object_from_real_garage_and_metadata_from_postgresql() {
+        dotenvy::dotenv().ok();
+
+        let garage_store = Arc::new(
+            GarageMediaObjectStore::from_env()
+                .expect("Garage object store should be created from backend/.env S3 settings"),
+        );
+        let state = test_state_with_media_object_store(garage_store.clone());
+        let db = state.posgre.clone();
+        let (owner_id, session_token) =
+            create_media_test_session(&db, "real-garage-media-delete").await;
+        let app = build_app(state);
+        let boundary = "----occurrence-real-garage-delete-boundary";
+        let upload_body = multipart_file_body(
+            boundary,
+            "real-garage-delete.jpg",
+            "image/jpeg",
+            TEST_JPEG_BYTES,
+        );
+
+        let upload_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/media")
+                    .header(
+                        CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::from(upload_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upload_response.status(), StatusCode::CREATED);
+        let upload_body = to_bytes(upload_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        let media_id = upload_json["media_id"]
+            .as_str()
+            .expect("media_id should be returned")
+            .to_string();
+        let object_key = upload_json["object_key"]
+            .as_str()
+            .expect("object_key should be returned")
+            .to_string();
+        let bucket = upload_json["bucket"]
+            .as_str()
+            .expect("bucket should be returned")
+            .to_string();
+
+        let delete_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        let delete_body = to_bytes(delete_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let delete_json: serde_json::Value = serde_json::from_slice(&delete_body).unwrap();
+        assert_eq!(delete_json["deleted"], true);
+
+        // Query the real adapter after DELETE. A successful GET here would prove
+        // that only PostgreSQL changed while the Garage object remained.
+        let garage_get = garage_store
+            .get_object(GetMediaObjectInput { bucket, object_key })
+            .await;
+        assert!(
+            matches!(garage_get, Err(MediaServiceError::ObjectStoreFailed)),
+            "deleted Garage object must no longer be readable"
+        );
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(uuid::Uuid::parse_str(&media_id).expect("media_id should be a UUID"))
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(metadata_count, 0, "deleted media metadata must not remain");
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner should be removed after test");
     }
 
     #[tokio::test]

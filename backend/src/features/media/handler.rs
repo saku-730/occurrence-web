@@ -59,6 +59,7 @@ impl From<MediaServiceError> for MediaHandlerError {
             MediaServiceError::InvalidInput => Self::InvalidInput,
             MediaServiceError::PayloadTooLarge => Self::PayloadTooLarge,
             MediaServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
+            MediaServiceError::FileSystem(error) => Self::FileSystem(error),
             MediaServiceError::Database(error) => Self::Database(error),
         }
     }

@@ -132,6 +132,7 @@
 - [x] Garageへのobject保存成功後にPostgreSQL `media_objects` のINSERTが失敗すると、同じGarage objectを削除して補償し、`MediaServiceError::Database`を返す。`upload_media_deletes_garage_object_when_postgresql_metadata_save_fails`
 - [x] `MediaService::get_media` に存在する `media_id` を渡すと、PostgreSQLのmetadataとobject storageのファイルstreamを取得できる。`get_media_returns_metadata_and_object_stream_for_existing_media`
 - [x] `MediaService::delete_media` に存在する `media_id` を渡すと、PostgreSQL metadataに記録されたGarage objectを削除し、`media_objects`の行も削除して `deleted=true` を返す。`delete_media_removes_object_and_metadata_by_id`
+- [x] `MediaService::delete_media` でGarage object削除後にPostgreSQL metadata削除が失敗すると、同じGarage objectを元のbytes・MIMEで再保存して巻き戻し、metadataを保持したまま `MediaServiceError::Database` を返す。`delete_media_restores_garage_object_when_postgresql_delete_fails`
 
 ### config
 
@@ -303,6 +304,7 @@
 - [x] `backend/.env` の S3設定を使って実Garageの `occurrence-media` bucket に一時objectをupload/list/deleteできる（ignored）`garage_client_puts_lists_and_deletes_object_from_real_garage`
 - [x] appの`build_app`に本番Garage object storeを入れると、`POST /media`で実Garageに添付データを保存できる（ignored）`upload_media_route_writes_object_to_real_garage`
 - [x] appの`build_app`に本番Garage object storeを入れ、`POST /media`で保存した添付データを所有者の`GET /media/{media_id}`で取得すると、同一bytesとMIME typeが返る（ignored）`get_media_route_reads_object_from_real_garage`
+- [x] appの`build_app`に本番Garage object storeを入れ、`POST /media`で保存した添付データを所有者の`DELETE /media/{media_id}`で削除すると、実Garage objectが取得不能になりPostgreSQL metadataも削除される（ignored）`delete_media_route_removes_object_from_real_garage_and_metadata_from_postgresql`
 
 - [x] appの`build_app`に実Fusekiと実Garageを同時に入れ、所有者がmedia uploadとpublic occurrence登録を行った後、未ログインの`GET /media/{media_id}`で同一bytesを取得できる（ignored）`get_public_occurrence_media_from_real_fuseki_and_real_garage`
 ## Real fuseki test 統合テスト
