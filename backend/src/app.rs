@@ -2052,6 +2052,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_media_route_rejects_non_owner_and_preserves_object_and_metadata() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (owner_id, _) = create_media_test_session(&db, "delete-media-owner").await;
+        let (other_user_id, other_session_token) =
+            create_media_test_session(&db, "delete-media-non-owner").await;
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("non-owner-delete-target.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={other_session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert!(
+            deletes.is_empty(),
+            "non-owner request must not reach Garage deletion"
+        );
+        drop(deletes);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(
+            metadata_count, 1,
+            "non-owner request must preserve metadata"
+        );
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(other_user_id)
+            .execute(&db)
+            .await
+            .expect("media test sessions should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+            .bind(owner_id)
+            .bind(other_user_id)
+            .execute(&db)
+            .await
+            .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
     async fn upload_media_route_without_session_returns_unauthorized_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
         let state = test_state_with_media_object_store(Arc::new(store.clone()));
