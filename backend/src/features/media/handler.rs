@@ -244,6 +244,55 @@ pub async fn get_media(
     Ok(response)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/media/{media_id}",
+    params(
+        (
+            "media_id" = uuid::Uuid,
+            Path,
+            description = "Media UUID"
+        )
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Garage object and PostgreSQL metadata deleted",
+            body = DeleteMediaResponse
+        ),
+        (
+            status = 400,
+            description = "Invalid media UUID",
+            body = ErrorResponse
+        ),
+        (
+            status = 401,
+            description = "Authentication required",
+            body = ErrorResponse
+        ),
+        (
+            status = 404,
+            description = "Media not found or not owned by the authenticated user",
+            body = ErrorResponse
+        ),
+        (
+            status = 409,
+            description = "Media is still referenced by one or more occurrences",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "PostgreSQL or temporary backup operation failed",
+            body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Fuseki lookup, Garage backup, deletion, or restoration failed",
+            body = ErrorResponse
+        )
+    ),
+    tag = "media"
+)]
 pub async fn delete_media(
     Path(media_id): Path<uuid::Uuid>,
     State(state): State<AppState>,

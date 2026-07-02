@@ -7,7 +7,7 @@ use crate::features::auth::dto::{
     RegisterResponse,
 };
 
-use crate::features::media::dto::{UploadMediaRequest, UploadMediaResponse};
+use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
 
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrenceFilter,
@@ -33,6 +33,7 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::update_occurrence,
         crate::features::media::handler::upload_media,
         crate::features::media::handler::get_media,
+        crate::features::media::handler::delete_media,
     ),
     components(
         schemas(
@@ -59,6 +60,7 @@ use crate::features::occurrences::dto::{
             SearchOccurrencesRequestPage,
             UploadMediaRequest,
             UploadMediaResponse,
+            DeleteMediaResponse,
         )
     ),
     tags(
