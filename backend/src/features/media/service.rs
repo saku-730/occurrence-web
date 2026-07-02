@@ -264,6 +264,16 @@ impl MediaService {
         Ok(Some(get_media_from_metadata(metadata, store).await?))
     }
 
+    pub async fn is_media_owned_by(
+        media_id: Uuid,
+        owner_user_id: Uuid,
+        db: &PgPool,
+    ) -> Result<bool, MediaServiceError> {
+        Ok(MediaRepository::find_by_id(db, media_id)
+            .await?
+            .is_some_and(|metadata| metadata.uploaded_by == owner_user_id))
+    }
+
     pub async fn delete_media<S>(
         media_id: Uuid,
         store: &S,

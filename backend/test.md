@@ -119,7 +119,8 @@
 - [x] media所有者とは異なるユーザーの有効sessionで `DELETE /media/{media_id}` を呼ぶと `404 Not Found` となり、Garage objectもPostgreSQL metadataも削除されない。`delete_media_route_rejects_non_owner_and_preserves_object_and_metadata`
 - [x] 未ログインで `DELETE /media/{media_id}` を呼ぶと `401 Unauthorized` となり、Garage objectもPostgreSQL metadataも削除されない。`delete_media_route_requires_login_and_preserves_object_and_metadata`
 - [x] ログイン済みユーザーが存在しない `media_id` を指定して `DELETE /media/{media_id}` を呼ぶと `404 Not Found` となり、Garage削除は呼ばれない。`delete_media_route_returns_not_found_for_missing_media`
-- [ ] ログイン済みユーザーが不正なUUIDを指定して `DELETE /media/{media_id}` を呼ぶと `400 Bad Request` となり、Garage削除は呼ばれない。`delete_media_route_returns_bad_request_for_invalid_media_id`
+- [x] ログイン済みユーザーが不正なUUIDを指定して `DELETE /media/{media_id}` を呼ぶと `400 Bad Request` となり、Garage削除は呼ばれない。`delete_media_route_returns_bad_request_for_invalid_media_id`
+- [x] media所有者が `DELETE /media/{media_id}` を呼んでも、OccurrenceRdfStoreにmedia URIへの参照が1件以上残っていれば `409 Conflict` となり、Garage objectとPostgreSQL metadataは削除されない。`delete_media_route_returns_conflict_when_occurrence_reference_remains`
 - [x] media所有者が `DELETE /media/{media_id}` を呼んだ際にGarage object削除が失敗すると `502 Bad Gateway` となり、PostgreSQL metadataは削除されない。`delete_media_route_returns_bad_gateway_when_garage_delete_fails`
 
 ### service

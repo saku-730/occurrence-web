@@ -39,6 +39,7 @@ pub enum MediaHandlerError {
     Database(sqlx::Error),
     FileSystem(std::io::Error),
     NotFound,
+    Conflict,
     RdfStoreFailed,
     Internal,
 }
@@ -97,6 +98,14 @@ impl IntoResponse for MediaHandlerError {
                 Json(ErrorResponse {
                     error: "media_not_found".to_string(),
                     message: "Media not found".to_string(),
+                }),
+            )
+                .into_response(),
+            MediaHandlerError::Conflict => (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: "media_in_use".to_string(),
+                    message: "Media is still referenced by an occurrence".to_string(),
                 }),
             )
                 .into_response(),
@@ -242,6 +251,24 @@ pub async fn delete_media(
 ) -> Result<(StatusCode, Json<DeleteMediaResponse>), MediaHandlerError> {
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+
+    // Check ownership before querying Fuseki so non-owners cannot infer whether
+    // a known media UUID is currently referenced.
+    if !MediaService::is_media_owned_by(media_id, current_user.user_id, &state.posgre).await? {
+        return Err(MediaHandlerError::NotFound);
+    }
+
+    let app_base_url = state.config.app.app_base_url.trim().trim_end_matches('/');
+    let media_uri = format!("{app_base_url}/media/{media_id}");
+    let is_referenced = state
+        .occurrence_rdf_store
+        .is_media_referenced_by_occurrence(&media_uri)
+        .await
+        .map_err(|_| MediaHandlerError::RdfStoreFailed)?;
+    if is_referenced {
+        return Err(MediaHandlerError::Conflict);
+    }
+
     let output = MediaService::delete_media_for_owner(
         media_id,
         current_user.user_id,

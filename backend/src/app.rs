@@ -351,6 +351,20 @@ mod tests {
                 }))
         }
 
+        async fn is_media_referenced_by_occurrence(
+            &self,
+            media_uri: &str,
+        ) -> Result<bool, OccurrenceServiceError> {
+            let media_object = format!("<{media_uri}>");
+
+            Ok(self
+                .occurrence_nquads_by_uri
+                .lock()
+                .expect("mutex should not be poisoned")
+                .values()
+                .any(|nquads| String::from_utf8_lossy(nquads).contains(&media_object)))
+        }
+
         async fn replace_occurrence_nquads(
             &self,
             occurrence_uri: &str,
@@ -2424,6 +2438,99 @@ mod tests {
             .execute(&db)
             .await
             .expect("test user should be removed");
+    }
+
+    #[tokio::test]
+    async fn delete_media_route_returns_conflict_when_occurrence_reference_remains() {
+        let media_store = RecordingMediaObjectStore::default();
+        let occurrence_store = FakeOccurrenceRdfStore::default();
+        let media_id = uuid::Uuid::new_v4();
+        let media_uri = format!("http://127.0.0.1:3000/media/{media_id}");
+        let occurrence_uri = format!(
+            "https://bio-database.net/occurrences/{}",
+            uuid::Uuid::new_v4()
+        );
+        let occurrence_nquads = format!(
+            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+"
+        );
+        occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
+
+        let mut state = test_state_with_media_object_store(Arc::new(media_store.clone()));
+        state.occurrence_rdf_store = Arc::new(occurrence_store);
+        let db = state.posgre.clone();
+        let (owner_id, session_token) =
+            create_media_test_session(&db, "referenced-media-delete-owner").await;
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("referenced-delete-target.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let deletes = media_store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert!(
+            deletes.is_empty(),
+            "referenced media must not reach Garage deletion"
+        );
+        drop(deletes);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(metadata_count, 1, "referenced media metadata must remain");
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner should be removed after test");
     }
 
     #[tokio::test]

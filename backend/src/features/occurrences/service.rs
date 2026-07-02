@@ -129,6 +129,15 @@ pub trait OccurrenceRdfStore: Send + Sync {
         Ok(false)
     }
 
+    // Physical media deletion is allowed only when no occurrence references
+    // the media URI, regardless of predicate or occurrence access rights.
+    async fn is_media_referenced_by_occurrence(
+        &self,
+        _media_uri: &str,
+    ) -> Result<bool, OccurrenceServiceError> {
+        Ok(false)
+    }
+
     async fn replace_occurrence_nquads(
         &self,
         _occurrence_uri: &str,
