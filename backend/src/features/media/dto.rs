@@ -19,3 +19,8 @@ pub struct UploadMediaResponse {
     pub size_bytes: i64,
     pub original_filename: Option<String>,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeleteMediaResponse {
+    pub deleted: bool,
+}

@@ -115,6 +115,7 @@
 - [x] public occurrence RDFからmedia URIが参照されている場合、media所有者とは異なるログイン済みユーザーが `GET /media/{media_id}` を呼んでも `200 OK` でファイルを取得できる。`get_media_route_allows_logged_in_non_owner_when_linked_from_public_occurrence`
 - [x] private occurrence RDFからmedia URIが参照されている場合、未ログインで `GET /media/{media_id}` を呼ぶとファイルを返さず `404 Not Found` になる。`get_media_route_hides_private_occurrence_media_from_anonymous_user`
 - [x] private occurrence RDFからmedia URIが参照されている場合、media所有者とは異なるログイン済みユーザーが `GET /media/{media_id}` を呼ぶとファイルを返さず `404 Not Found` になる。`get_media_route_hides_private_occurrence_media_from_logged_in_non_owner`
+- [x] media所有者の有効sessionで `DELETE /media/{media_id}` を呼ぶと、app経由で `MediaService::delete_media` が使われ、Garage objectとPostgreSQL metadataが削除され `200 OK` と `{"deleted":true}` が返る。`delete_media_route_deletes_owned_media_object_and_metadata`
 
 ### service
 

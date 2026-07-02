@@ -13,7 +13,7 @@ use crate::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
             reset_password,
         },
-        media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, get_media, upload_media},
+        media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, delete_media, get_media, upload_media},
         occurrences::handler::{
             create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
             update_occurrence,
@@ -42,7 +42,7 @@ pub fn build_app(state: AppState) -> Router {
             "/media",
             post(upload_media).layer(DefaultBodyLimit::max(MEDIA_REQUEST_BODY_LIMIT_BYTES)),
         )
-        .route("/media/{media_id}", get(get_media))
+        .route("/media/{media_id}", get(get_media).delete(delete_media))
         // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
@@ -1152,6 +1152,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingMediaObjectStore {
         written_objects: Arc<Mutex<Vec<RecordedMediaObjectWrite>>>,
+        deleted_objects: Arc<Mutex<Vec<DeleteMediaObjectInput>>>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1192,8 +1193,12 @@ mod tests {
 
         async fn delete_object(
             &self,
-            _input: DeleteMediaObjectInput,
+            input: DeleteMediaObjectInput,
         ) -> Result<(), MediaServiceError> {
+            self.deleted_objects
+                .lock()
+                .expect("recorded media object deletes lock should not be poisoned")
+                .push(input);
             Ok(())
         }
     }
@@ -1966,6 +1971,84 @@ mod tests {
             .execute(&db)
             .await
             .expect("media test users should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn delete_media_route_deletes_owned_media_object_and_metadata() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (owner_id, session_token) =
+            create_media_test_session(&db, "delete-media-route-owner").await;
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("delete-through-app.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_json["deleted"], true);
+
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].bucket, "occurrence-media");
+        assert_eq!(deletes[0].object_key, object_key);
+        drop(deletes);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(metadata_count, 0);
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("media owner should be removed after test");
     }
 
     #[tokio::test]

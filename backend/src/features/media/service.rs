@@ -273,6 +273,41 @@ impl MediaService {
             return Ok(DeleteMediaOutput { deleted: false });
         };
 
+        Self::delete_media_from_metadata(metadata, store, db).await
+    }
+
+    pub async fn delete_media_for_owner<S>(
+        media_id: Uuid,
+        owner_user_id: Uuid,
+        store: &S,
+        db: &PgPool,
+    ) -> Result<DeleteMediaOutput, MediaServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+    {
+        let Some(metadata) = MediaRepository::find_by_id(db, media_id).await? else {
+            return Ok(DeleteMediaOutput { deleted: false });
+        };
+
+        // Return the same result for missing and non-owned media so the HTTP
+        // boundary can hide object existence from other authenticated users.
+        if metadata.uploaded_by != owner_user_id {
+            return Ok(DeleteMediaOutput { deleted: false });
+        }
+
+        Self::delete_media_from_metadata(metadata, store, db).await
+    }
+
+    async fn delete_media_from_metadata<S>(
+        metadata: MediaMetadata,
+        store: &S,
+        db: &PgPool,
+    ) -> Result<DeleteMediaOutput, MediaServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+    {
+        let media_id = metadata.id;
+
         // Delete the physical object first. If Garage rejects the operation,
         // metadata remains available so the deletion can be retried safely.
         store

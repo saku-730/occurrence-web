@@ -21,7 +21,7 @@ use crate::{
             service::{AuthService, AuthServiceError},
         },
         media::{
-            dto::{UploadMediaRequest, UploadMediaResponse},
+            dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse},
             service::{
                 MEDIA_FILE_SIZE_LIMIT_BYTES, MediaService, MediaServiceError, UploadMediaInput,
             },
@@ -232,6 +232,33 @@ pub async fn get_media(
         .insert(CONTENT_LENGTH, content_length);
 
     Ok(response)
+}
+
+pub async fn delete_media(
+    Path(media_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<DeleteMediaResponse>), MediaHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    let output = MediaService::delete_media_for_owner(
+        media_id,
+        current_user.user_id,
+        state.media_object_store.as_ref(),
+        &state.posgre,
+    )
+    .await?;
+
+    if !output.deleted {
+        return Err(MediaHandlerError::NotFound);
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(DeleteMediaResponse {
+            deleted: output.deleted,
+        }),
+    ))
 }
 
 #[utoipa::path(
