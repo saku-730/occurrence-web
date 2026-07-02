@@ -1079,6 +1079,38 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct DeleteFailingMediaObjectStore {
+        delete_attempts: Arc<Mutex<Vec<DeleteMediaObjectInput>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaObjectStore for DeleteFailingMediaObjectStore {
+        async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+            Ok(())
+        }
+
+        async fn get_object(
+            &self,
+            _input: GetMediaObjectInput,
+        ) -> Result<MediaObjectByteStream, MediaServiceError> {
+            Ok(Box::pin(futures_util::stream::once(async {
+                Ok(Bytes::from_static(TEST_JPEG_BYTES))
+            })))
+        }
+
+        async fn delete_object(
+            &self,
+            input: DeleteMediaObjectInput,
+        ) -> Result<(), MediaServiceError> {
+            self.delete_attempts
+                .lock()
+                .expect("delete attempts lock should not be poisoned")
+                .push(input);
+            Err(MediaServiceError::ObjectStoreFailed)
+        }
+    }
+
+    #[derive(Clone, Default)]
     struct FailingMediaObjectStore {
         attempted_paths: Arc<Mutex<Vec<PathBuf>>>,
     }
@@ -2253,6 +2285,132 @@ mod tests {
         assert!(
             deletes.is_empty(),
             "missing media must not issue a Garage delete"
+        );
+        drop(deletes);
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("test session should be removed");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("test user should be removed");
+    }
+
+    #[tokio::test]
+    async fn delete_media_route_returns_bad_gateway_when_garage_delete_fails() {
+        let store = DeleteFailingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (owner_id, session_token) =
+            create_media_test_session(&db, "delete-media-garage-failure-owner").await;
+        let media_id = uuid::Uuid::new_v4();
+        let object_key = format!("media/{media_id}");
+
+        sqlx::query(
+            r#"
+            INSERT INTO media_objects (
+                id, bucket, object_key, content_type, size_bytes,
+                original_filename, uploaded_by, sha256
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(media_id)
+        .bind("occurrence-media")
+        .bind(&object_key)
+        .bind("image/jpeg")
+        .bind(TEST_JPEG_BYTES.len() as i64)
+        .bind("garage-delete-failure.jpg")
+        .bind(owner_id)
+        .bind(hex::encode(sha2::Sha256::digest(TEST_JPEG_BYTES)))
+        .execute(&db)
+        .await
+        .expect("media metadata should be inserted");
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempts = store
+            .delete_attempts
+            .lock()
+            .expect("delete attempts lock should not be poisoned");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].bucket, "occurrence-media");
+        assert_eq!(attempts[0].object_key, object_key);
+        drop(attempts);
+
+        let metadata_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_objects WHERE id = $1")
+                .bind(media_id)
+                .fetch_one(&db)
+                .await
+                .expect("media metadata count should be queryable");
+        assert_eq!(
+            metadata_count, 1,
+            "Garage delete failure must preserve metadata"
+        );
+
+        sqlx::query("DELETE FROM media_objects WHERE id = $1")
+            .bind(media_id)
+            .execute(&db)
+            .await
+            .expect("media metadata should be removed after test");
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner session should be removed after test");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(owner_id)
+            .execute(&db)
+            .await
+            .expect("owner should be removed after test");
+    }
+
+    #[tokio::test]
+    async fn delete_media_route_returns_bad_request_for_invalid_media_id() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (user_id, session_token) =
+            create_media_test_session(&db, "delete-invalid-media-id-user").await;
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/media/not-a-valid-uuid")
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert!(
+            deletes.is_empty(),
+            "invalid media UUID must be rejected before Garage deletion"
         );
         drop(deletes);
 
