@@ -118,6 +118,7 @@
 - [x] media所有者の有効sessionで `DELETE /media/{media_id}` を呼ぶと、app経由で `MediaService::delete_media` が使われ、Garage objectとPostgreSQL metadataが削除され `200 OK` と `{"deleted":true}` が返る。`delete_media_route_deletes_owned_media_object_and_metadata`
 - [x] media所有者とは異なるユーザーの有効sessionで `DELETE /media/{media_id}` を呼ぶと `404 Not Found` となり、Garage objectもPostgreSQL metadataも削除されない。`delete_media_route_rejects_non_owner_and_preserves_object_and_metadata`
 - [x] 未ログインで `DELETE /media/{media_id}` を呼ぶと `401 Unauthorized` となり、Garage objectもPostgreSQL metadataも削除されない。`delete_media_route_requires_login_and_preserves_object_and_metadata`
+- [x] ログイン済みユーザーが存在しない `media_id` を指定して `DELETE /media/{media_id}` を呼ぶと `404 Not Found` となり、Garage削除は呼ばれない。`delete_media_route_returns_not_found_for_missing_media`
 
 ### service
 

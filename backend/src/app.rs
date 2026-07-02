@@ -2222,6 +2222,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_media_route_returns_not_found_for_missing_media() {
+        let store = RecordingMediaObjectStore::default();
+        let state = test_state_with_media_object_store(Arc::new(store.clone()));
+        let db = state.posgre.clone();
+        let (user_id, session_token) =
+            create_media_test_session(&db, "delete-missing-media-user").await;
+        let missing_media_id = uuid::Uuid::new_v4();
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/media/{missing_media_id}"))
+                    .header(COOKIE, format!("session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let deletes = store
+            .deleted_objects
+            .lock()
+            .expect("recorded media object deletes lock should not be poisoned");
+        assert!(
+            deletes.is_empty(),
+            "missing media must not issue a Garage delete"
+        );
+        drop(deletes);
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("test session should be removed");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .expect("test user should be removed");
+    }
+
+    #[tokio::test]
     async fn upload_media_route_without_session_returns_unauthorized_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
         let state = test_state_with_media_object_store(Arc::new(store.clone()));
