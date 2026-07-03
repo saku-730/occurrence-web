@@ -4,10 +4,26 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 const SCIENTIFIC_NAME_PREDICATE =
   "http://rs.tdwg.org/dwc/terms/scientificName";
+const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
+const USER_URI_BASE = "https://bio-database.net/users/";
+
+interface CurrentUser {
+  user_id: string;
+  email: string;
+  user_name: string;
+  role: string;
+}
+
+interface SearchFilter {
+  predicate: string;
+  value: string;
+  value_type: "literal" | "uri";
+  match: "exact";
+}
 
 interface OccurrenceItem {
   occurrence_id: string;
@@ -29,17 +45,21 @@ interface SearchResponse {
   };
 }
 
+type SearchStatus = "loading" | "ready" | "unauthenticated" | "error";
+
 export default function OccurrenceSearchPage() {
   const [query, setQuery] = useState("");
+  const [ownOnly, setOwnOnly] = useState(false);
   const [appliedQuery, setAppliedQuery] = useState("");
+  const [appliedOwnOnly, setAppliedOwnOnly] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [status, setStatus] = useState<SearchStatus>("loading");
 
   useEffect(() => {
     let active = true;
 
-    // The initial empty filter request doubles as the normal occurrence list.
-    searchOccurrences("", null)
+    // An empty initial request provides the standard visible occurrence list.
+    searchOccurrences("", null, false)
       .then((response) => {
         if (!active) return;
         setResult(response);
@@ -54,21 +74,36 @@ export default function OccurrenceSearchPage() {
     };
   }, []);
 
-  async function runSearch(searchQuery: string, cursor: string | null) {
+  async function runSearch(
+    searchQuery: string,
+    cursor: string | null,
+    searchOwnOnly: boolean,
+  ) {
     setStatus("loading");
+
     try {
-      const response = await searchOccurrences(searchQuery, cursor);
+      const response = await searchOccurrences(
+        searchQuery,
+        cursor,
+        searchOwnOnly,
+      );
       setResult(response);
       setAppliedQuery(searchQuery);
+      setAppliedOwnOnly(searchOwnOnly);
       setStatus("ready");
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setStatus("unauthenticated");
+        return;
+      }
+
       setStatus("error");
     }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void runSearch(query.trim(), null);
+    void runSearch(query.trim(), null, ownOnly);
   }
 
   return (
@@ -80,27 +115,36 @@ export default function OccurrenceSearchPage() {
           <h1 className="text-2xl font-semibold">データ検索</h1>
         </div>
 
-        <form
-          className="mb-6 flex max-w-2xl items-end gap-3"
-          onSubmit={handleSubmit}
-        >
-          <label className="min-w-0 flex-1">
-            <span className="mb-2 block text-sm font-medium">学名</span>
+        <form className="mb-6 max-w-2xl" onSubmit={handleSubmit}>
+          <div className="flex items-end gap-3">
+            <label className="min-w-0 flex-1">
+              <span className="mb-2 block text-sm font-medium">学名</span>
+              <input
+                className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="例: Quercus serrata"
+                type="search"
+                value={query}
+              />
+            </label>
+            <button
+              className="h-10 shrink-0 rounded-md bg-[#176b57] px-5 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
+              disabled={status === "loading"}
+              type="submit"
+            >
+              検索
+            </button>
+          </div>
+
+          <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-sm">
             <input
-              className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="例: Quercus serrata"
-              type="search"
-              value={query}
+              checked={ownOnly}
+              className="size-4 accent-[#176b57]"
+              onChange={(event) => { const checked = event.target.checked; setOwnOnly(checked); void runSearch(query.trim(), null, checked); }}
+              type="checkbox"
             />
+            自分のデータのみ表示
           </label>
-          <button
-            className="h-10 shrink-0 rounded-md bg-[#176b57] px-5 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
-            disabled={status === "loading"}
-            type="submit"
-          >
-            検索
-          </button>
         </form>
 
         <SearchResults result={result} status={status} />
@@ -110,7 +154,11 @@ export default function OccurrenceSearchPage() {
             <button
               className="rounded-md border border-[#b8c3c8] bg-white px-5 py-2 text-sm font-medium hover:bg-[#eef2f3]"
               onClick={() =>
-                void runSearch(appliedQuery, result.page.next_cursor)
+                void runSearch(
+                  appliedQuery,
+                  result.page.next_cursor,
+                  appliedOwnOnly,
+                )
               }
               type="button"
             >
@@ -128,10 +176,14 @@ function SearchResults({
   status,
 }: {
   result: SearchResponse | null;
-  status: "loading" | "ready" | "error";
+  status: SearchStatus;
 }) {
   if (status === "loading") {
     return <StatusPanel message="検索しています" />;
+  }
+
+  if (status === "unauthenticated") {
+    return <StatusPanel message="自分のデータを検索するにはログインが必要です" />;
   }
 
   if (status === "error") {
@@ -203,24 +255,39 @@ function StatusPanel({ message }: { message: string }) {
   );
 }
 
-function searchOccurrences(
+async function searchOccurrences(
   query: string,
   cursor: string | null,
+  ownOnly: boolean,
 ): Promise<SearchResponse> {
+  const filters: SearchFilter[] = [];
+
+  if (query) {
+    filters.push({
+      predicate: SCIENTIFIC_NAME_PREDICATE,
+      value: query,
+      value_type: "literal",
+      match: "exact",
+    });
+  }
+
+  if (ownOnly) {
+    // The creator URI must come from the authenticated session, never from a
+    // user-editable field, otherwise another user's ownership could be queried.
+    const currentUser = await apiFetch<CurrentUser>("/auth/me");
+    filters.push({
+      predicate: CREATOR_PREDICATE,
+      value: `${USER_URI_BASE}${currentUser.user_id}`,
+      value_type: "uri",
+      match: "exact",
+    });
+  }
+
   return apiFetch<SearchResponse>("/occurrences/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      filters: query
-        ? [
-            {
-              predicate: SCIENTIFIC_NAME_PREDICATE,
-              value: query,
-              value_type: "literal",
-              match: "exact",
-            },
-          ]
-        : [],
+      filters,
       page: {
         limit: 50,
         cursor,

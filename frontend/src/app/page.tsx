@@ -98,14 +98,24 @@ export default function Home() {
       <SiteHeader />
 
       <main className="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold">最近追加したデータ</h1>
-          <p className="mt-1 text-sm text-[#65737a]">
-            あなたが登録した最新10件
-          </p>
-        </div>
+        {loadState.status === "unauthenticated" ? (
+          <section className="grid min-h-56 place-items-center rounded-md border border-[#d8dfe2] bg-white px-6 py-12 text-center">
+            <h1 className="text-xl font-semibold">
+              未ログインはデータ閲覧だけできます
+            </h1>
+          </section>
+        ) : (
+          <>
+            <div className="mb-6">
+              <h1 className="text-2xl font-semibold">最近追加したデータ</h1>
+              <p className="mt-1 text-sm text-[#65737a]">
+                あなたが登録した最新10件
+              </p>
+            </div>
 
-        <RecentOccurrences state={loadState} />
+            <RecentOccurrences state={loadState} />
+          </>
+        )}
       </main>
     </div>
   );
