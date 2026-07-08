@@ -112,6 +112,15 @@
 - object blank node rejected
 - backend replaces blank node with occurrence URI
 - backend preserves occurrence graph
+- Identification predicates are moved to `/identifications/1`
+- Event predicates are moved to `/events/1`
+- Location predicates are moved to `/locations/1`
+- unknown predicates remain directly under the occurrence URI
+- each generated intermediate node has the specified `rdf:type`
+- empty intermediate nodes are not generated
+- multiple predicates for the same target node are stored in the same `/1` node
+- frontend-sent `hasIdentification`, `hasEvent`, and `hasLocation` are rejected
+- frontend-sent `rdf:type` remains directly under the occurrence URI
 - frontend-sent `dcterms:creator` rejected
 - frontend-sent `dcterms:created` rejected
 - frontend-sent `dcterms:modified` rejected
@@ -126,7 +135,9 @@
 - created and modified same on create
 - update preserves creator and created
 - update changes modified
-- delete removes quads whose subject is occurrence URI
+- detail retrieval returns the normalized intermediate-node structure without flattening
+- update rebuilds and replaces intermediate nodes using the same routing rules
+- delete removes occurrence quads and generated intermediate-node quads
 
 ---
 
@@ -156,7 +167,10 @@
 - empty search returns list
 - limit default is 50
 - limit max is 100
-- literal `dwc:scientificName` exact match
+- literal `dwc:scientificName` exact match through `hasIdentification`
+- Event predicates are searched through `hasEvent`
+- Location predicates are searched through `hasLocation`
+- unknown predicates are searched directly under the occurrence URI
 - literal search is case-insensitive
 - literal search trims whitespace
 - URI taxon exact match

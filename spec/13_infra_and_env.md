@@ -105,7 +105,11 @@ COOKIE_SECURE=false
 - accessRights RDF
 - license RDF
 - media URI reference
-- taxonomy ontology graph
+- GBIF Backbone Taxonomy graph
+  - graph URI: `https://bio-database.net/graphs/taxonomy/gbif-backbone`
+  - taxon URI: `https://bio-database.net/taxa/gbif/{id}`
+  - `{id}` はGBIF taxon key
+  - 取り込み元バージョンと取得日時を記録する
 - master ontology graph
 
 ---
@@ -194,3 +198,22 @@ MVP段階では詳細な自動化は必須ではないが、以下をバック�
 - リストア手順
 - バックアップ検証
 - オフサイトバックアップ
+
+
+---
+
+## セットアップ
+
+### 各種インストール
+
+- RUST
+
+- PostgreSQL
+
+- Apache jena
+
+- Garage
+
+- Next.js
+
+### データベース マスターデータセットアップ

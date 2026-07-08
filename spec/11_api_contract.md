@@ -117,6 +117,9 @@ RDF本文は N-Quads とする。
 - graph name必須
 - graph name は occurrence graph のみ可
 - occurrence graph は `https://{APP_PUBLIC_BASE_URL}/graphs/occurrences`
+- frontendは従来どおり、1つのblank node subjectに述語・目的語セットを送る
+- backendは述語をOccurrence、Identification、Event、Locationへ振り分けて保存する
+- frontendから `hasIdentification`、`hasEvent`、`hasLocation` が送られた場合は400
 
 成功レスポンス例。
 
@@ -192,6 +195,13 @@ Response。
 `items` は一覧表示用の代表フィールドのみ返す。
 該当する RDF predicate が存在しないフィールドは `null` を返す。
 RDF全文が必要な場合は `GET /occurrences/{occurrence_id}` を使う。
+
+---
+
+## occurrence 詳細取得のRDF構造
+
+`GET /occurrences/{occurrence_id}` は保存済みN-Quadsを平坦化せず返す。
+Identification、Event、LocationのNamed Node、`rdf:type`、Occurrenceからの接続RDFを含む正規化済み構造をそのまま返す。
 
 ---
 

@@ -53,6 +53,20 @@ https://{APP_PUBLIC_BASE_URL}/occurrences/{uuid}
 - frontend は仮主語として blank node を使う
 - backend は保存前に blank node を occurrence URI に置換する
 
+### intermediate node URI
+
+```text
+https://bio-database.net/occurrences/{occurrence_id}/identifications/{number}
+https://bio-database.net/occurrences/{occurrence_id}/events/{number}
+https://bio-database.net/occurrences/{occurrence_id}/locations/{number}
+```
+
+- `{number}` は各中間ノード種別の1始まりの連番とする
+- MVPでは各種別を最大1ノードとし、常に `1` を使う
+- 将来は1つのoccurrenceに複数のIdentification、Event、Locationを許可する
+- 対象となる述語が1つもない種別の中間ノードは作成しない
+- 中間ノードはblank nodeではなく上記の永続URIを持つNamed Nodeとする
+
 ### user URI
 
 ```text
@@ -71,6 +85,17 @@ https://{APP_PUBLIC_BASE_URL}/media/{media_uuid}
 
 - `{media_uuid}` は PostgreSQL `media_objects.id` と同じ
 
+### GBIF taxon URI
+
+```text
+https://bio-database.net/taxa/gbif/{id}
+```
+
+- `{id}` は GBIF Backbone Taxonomy の taxon key とする
+- URIはGBIF由来の分類群をこのシステム内で安定して参照するためのURIとする
+- 元データとの対応を保持するため、`dcterms:source` で `https://www.gbif.org/species/{id}` を記録する
+- 将来別の分類体系を追加する場合は `taxa/{source}/{id}` とし、GBIFの名前空間と混在させない
+
 ---
 
 ## Named graph
@@ -84,8 +109,12 @@ https://{APP_PUBLIC_BASE_URL}/graphs/occurrences
 ### taxonomy graph
 
 ```text
-https://{APP_PUBLIC_BASE_URL}/graphs/taxonomy
+https://bio-database.net/graphs/taxonomy/gbif-backbone
 ```
+
+- GBIF Backbone Taxonomyから生成した分類RDFだけを格納する
+- graph URIはバージョンを含めず、更新時は同一graphを新しいスナップショットで置換する
+- 再現性のため、取り込みに使ったGBIF Backbone Taxonomyのバージョンと取得日時を記録する
 
 ### master graph
 
@@ -152,15 +181,100 @@ _:occurrence <https://example.org/predicate> _:object <https://bio-database.net/
 
 ---
 
+## 保存時の中間ノード正規化
+
+frontendの入力形式は従来どおり、1つのblank node subjectに対する述語と目的語の組とする。
+frontendはIdentification、Event、Locationの中間ノードや接続述語を組み立てない。
+
+backendはoccurrence URI発行後、述語ごとに保存先ノードを判定してRDFを正規化する。
+目的語のURI、リテラル、datatype、language tagは変更せず、そのまま対象ノードへ移す。
+
+### Occurrence直下
+
+- `dwc:basisOfRecord`
+- `dwc:occurrenceRemarks`
+- `dcterms:accessRights`
+- `dcterms:creator`。backend管理
+- `dcterms:created`。backend管理
+- `dcterms:modified`。backend管理
+- 振り分け一覧にない任意の述語
+
+`dcterms:license`、media参照、自前語彙など、一覧にない述語もOccurrence直下に保存する。
+
+### Identification
+
+対象述語。
+
+- `dwc:scientificName`
+- `dwc:identifiedBy`
+- `dwc:dateIdentified`
+- `dwc:identificationQualifier`
+- `dwc:identificationRemarks`
+- `dwc:nameAccordingTo`
+- `dwciri:toTaxon`
+
+```nq
+<https://bio-database.net/occurrences/{occurrence_id}> <https://bio-database.net/terms/hasIdentification> <https://bio-database.net/occurrences/{occurrence_id}/identifications/1> <https://bio-database.net/graphs/occurrences> .
+<https://bio-database.net/occurrences/{occurrence_id}/identifications/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://rs.tdwg.org/dwc/terms/Identification> <https://bio-database.net/graphs/occurrences> .
+```
+
+### Event
+
+対象述語。
+
+- `dwc:eventDate`
+- `dwc:samplingProtocol`
+- `dwc:samplingEffort`
+- `dwc:fieldNumber`
+- `dwc:habitat`
+- `dwc:recordedBy`
+
+```nq
+<https://bio-database.net/occurrences/{occurrence_id}> <https://bio-database.net/terms/hasEvent> <https://bio-database.net/occurrences/{occurrence_id}/events/1> <https://bio-database.net/graphs/occurrences> .
+<https://bio-database.net/occurrences/{occurrence_id}/events/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://rs.tdwg.org/dwc/terms/Event> <https://bio-database.net/graphs/occurrences> .
+```
+
+### Location
+
+対象述語。
+
+- `dwc:decimalLatitude`
+- `dwc:decimalLongitude`
+- `dwc:geodeticDatum`
+- `dwc:coordinateUncertaintyInMeters`
+- `dwc:locality`
+- `dwc:country`
+- `dwc:municipality`
+
+```nq
+<https://bio-database.net/occurrences/{occurrence_id}> <https://bio-database.net/terms/hasLocation> <https://bio-database.net/occurrences/{occurrence_id}/locations/1> <https://bio-database.net/graphs/occurrences> .
+<https://bio-database.net/occurrences/{occurrence_id}/locations/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/dc/terms/Location> <https://bio-database.net/graphs/occurrences> .
+```
+
+### 正規化規則
+
+- 同じtarget nodeに分類された全述語・全値は、MVPでは同じ `/1` ノードへ保存する
+- 対象述語が存在するときだけ中間ノード、`rdf:type`、Occurrenceからの接続RDFを作成する
+- 対象述語が存在しなければ空の中間ノードや接続RDFは作成しない
+- unknown predicateは拒否せずOccurrence直下へ保存する
+- `dwciri:toTaxon` の完全URIは `http://rs.tdwg.org/dwc/iri/toTaxon` とする
+- backend生成接続述語は `hasIdentification`、`hasEvent`、`hasLocation` の3つとする
+- 3つの完全URIは `https://bio-database.net/terms/hasIdentification`、`https://bio-database.net/terms/hasEvent`、`https://bio-database.net/terms/hasLocation` とする
+- 上記3述語はbackend管理とし、frontendから送られた場合は400で拒否する
+- `rdf:type` はfrontend送信禁止述語にしない。frontendから送られた場合はOccurrence直下へ保存する
+
+---
+
 ## 述語方針
 
 - Darwin Core または Dublin Core Terms を基本とする
 - 公開語彙を優先する
 - 自前語彙はなるべく避ける
 - 必要な場合のみ `https://{APP_PUBLIC_BASE_URL}/terms` 以下に定義する
+- 述語はIRIのみとし、リテラル述語は許可しない
 - URI値を優先する
-- リテラルは必要な場合に許可する
-- リテラルには可能な限り明示的な datatype を付ける
+- リテラルは目的語として必要な場合に許可する
+- 目的語リテラルには可能な限り明示的な datatype を付ける
 
 ---
 
@@ -186,6 +300,11 @@ _:occurrence <https://example.org/predicate> _:object <https://bio-database.net/
 - `dcterms:creator`
 - `dcterms:created`
 - `dcterms:modified`
+- `https://bio-database.net/terms/hasIdentification`
+- `https://bio-database.net/terms/hasEvent`
+- `https://bio-database.net/terms/hasLocation`
+
+`rdf:type` はfrontend送信禁止述語に含めない。
 
 ---
 
@@ -249,14 +368,16 @@ MVPでは、以下のような項目をデフォルト必須・デフォルト�
 7. object blank node がないことを検証
 8. backend管理述語の不正送信を検証
 9. occurrence UUID / URI を発行
-10. blank node subject を occurrence URI に置換
-11. occurrence graph が維持されていることを確認
-12. backend RDFメタデータを追加
-13. 最終N-Quadsに対して検証
-14. SHACL/保存前検証
-15. Jenaに保存
-16. 監査ログを success に更新
-17. JSONレスポンスを返す
+10. 入力述語をOccurrence、Identification、Event、Locationへ振り分ける
+11. 必要な中間ノードURI、`rdf:type`、接続RDFを生成する
+12. unknown predicateをOccurrence直下へ配置する
+13. occurrence graph が維持されていることを確認
+14. backend RDFメタデータをOccurrence直下へ追加する
+15. 最終N-Quadsに対して検証
+16. SHACL/保存前検証
+17. Jenaに保存
+18. 監査ログを success に更新
+19. JSONレスポンスを返す
 
 ---
 
@@ -283,16 +404,30 @@ MVPでは部分更新ではなく、対象 occurrence の RDF を丸ごと置換
 - 新しい RDF に含まれていればその値を採用する
 - 含まれていなければ未指定に戻る
 
+### 更新時の中間ノード
+
+- frontendからは作成時と同じ星型の述語・目的語セットを受け取る
+- backendは更新入力を同じ振り分けルールで再正規化する
+- 既存のIdentification、Event、Locationと接続RDFを削除してから丸ごと置換する
+- MVPでは再生成後の中間ノード番号も各種別 `1` とする
+- 対象述語がなくなった種別の中間ノードは保存しない
+
 ---
 
 ## 削除処理
 
-MVPでは、対象 occurrence URI を subject に持つ quad のみ削除する。
+MVPでは、対象occurrenceとbackendが生成した中間ノード構造を物理削除する。
 
-- linked blank node は辿らない
-- media metadata は自動削除しない
-- 孤立データの自動掃除は MVP 対象外
-- 削除成功時は JSON で返す
+削除対象。
+
+- 対象 occurrence URI をsubjectに持つ全quad
+- `/identifications/{number}` をsubjectに持つ全quad
+- `/events/{number}` をsubjectに持つ全quad
+- `/locations/{number}` をsubjectに持つ全quad
+- Occurrenceから中間ノードへの接続RDF
+
+外部URIの目的語やmedia metadataは自動削除しない。
+削除成功時はJSONで返す。
 
 ```json
 {

@@ -1,0 +1,9 @@
+[package]
+name = "gbif-backbone-to-rdf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+csv = "1"
+flate2 = "1"

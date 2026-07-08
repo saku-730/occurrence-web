@@ -5,6 +5,11 @@ use crate::features::occurrences::service::{
     SearchVisibility,
 };
 
+// GBIF Backbone由来の分類階層は専用Named Graphに固定し、
+// occurrence graphや将来追加する別taxonomy sourceと混在させない。
+const GBIF_BACKBONE_TAXONOMY_GRAPH_URI: &str =
+    "https://bio-database.net/graphs/taxonomy/gbif-backbone";
+
 // Apache Jena Fusekiとの通信を担当する。service層からSPARQL/HTTP詳細を隠す。
 #[derive(Clone)]
 pub struct FusekiClient {
@@ -486,7 +491,6 @@ fn build_search_filter_patterns(
             "uri" => {
                 let object_var = format!("?filterObject{}", index);
                 let object = format!("<{}>", escape_sparql_iri(&filter.value)?);
-                let taxonomy_graph_uri = "https://bio-database.net/graphs/taxonomy";
                 let subclass_of_predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 
                 // URI filterは完全一致に加えて、外部taxonomy graphのsubClassOf階層も辿る。
@@ -504,7 +508,7 @@ fn build_search_filter_patterns(
                     object_var,
                     object_var,
                     object,
-                    taxonomy_graph_uri,
+                    GBIF_BACKBONE_TAXONOMY_GRAPH_URI,
                     object_var,
                     subclass_of_predicate,
                     object
@@ -958,7 +962,7 @@ mod tests {
         );
 
         let occurrence_graph_uri = "https://bio-database.net/graphs/occurrences";
-        let taxonomy_graph_uri = "https://bio-database.net/graphs/taxonomy";
+        let taxonomy_graph_uri = GBIF_BACKBONE_TAXONOMY_GRAPH_URI;
         let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
         let created_predicate = "http://purl.org/dc/terms/created";
         let modified_predicate = "http://purl.org/dc/terms/modified";

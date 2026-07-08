@@ -5053,7 +5053,7 @@ mod tests {
         let app = build_app(state);
 
         let frontend_nquads = br#"
-    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/taxonomy> .
+    _:occurrence <https://example.org/vocab/scientificName> "Lumbricus terrestris" <https://bio-database.net/graphs/taxonomy/gbif-backbone> .
     "#;
 
         let response = app

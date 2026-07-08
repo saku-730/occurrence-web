@@ -28,6 +28,7 @@ MVPでは SHACL は厳格な必須項目制約ではなく、構造・型・形�
 - `dcterms:creator` が frontend から送られていない
 - `dcterms:created` が frontend から送られていない
 - `dcterms:modified` が frontend から送られていない
+- `hasIdentification`、`hasEvent`、`hasLocation` がfrontendから送られていない
 - `dcterms:accessRights` が許可URIである
 - `dcterms:accessRights` が複数指定されていない
 - `dcterms:accessRights` がリテラルではない
@@ -36,6 +37,11 @@ MVPでは SHACL は厳格な必須項目制約ではなく、構造・型・形�
 - `dcterms:license` が `https://creativecommons.org/` で始まる
 - `dcterms:created` が `xsd:dateTime`
 - `dcterms:modified` が `xsd:dateTime`
+- 中間ノードは対象述語がある場合だけ生成されている
+- 中間ノードURIが対象occurrence配下の規定URIである
+- 中間ノードが規定の `rdf:type` を持つ
+- Occurrenceと中間ノードが規定の接続述語でつながっている
+- 振り分け対象述語が正しいtarget nodeへ保存されている
 
 ---
 

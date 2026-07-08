@@ -1,3 +1,4 @@
 .env*
 /fuseki/
 /garage/
+gbif-backbone.nq

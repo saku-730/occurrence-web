@@ -22,6 +22,8 @@ ARG JAVA_VERSION=21
 ARG ALPINE_VERSION=3.21.2
 ARG JENA_VERSION=""
 
+
+
 # Internal, passed between stages.
 ARG FUSEKI_DIR=/fuseki
 ARG FUSEKI_JAR=jena-fuseki-server-${JENA_VERSION}.jar
@@ -32,6 +34,8 @@ FROM eclipse-temurin:${JAVA_VERSION}-alpine AS base
 
 ARG JAVA_MINIMAL
 ARG JENA_VERSION
+
+
 ARG FUSEKI_DIR
 ARG FUSEKI_JAR
 ARG REPO=https://repo1.maven.org/maven2
@@ -77,6 +81,20 @@ FROM alpine:${ALPINE_VERSION}
 
 ## Import ARGs
 ARG JENA_VERSION
+##------
+ARG JENA_VERSION=6.1.0
+
+ENV JENA_HOME=/opt/jena
+ENV PATH="${JENA_HOME}/bin:${PATH}"
+
+RUN apk add --no-cache curl ca-certificates tar gzip \
+    && update-ca-certificates \
+    && curl -fSL "https://archive.apache.org/dist/jena/binaries/apache-jena-${JENA_VERSION}.tar.gz" -o /tmp/apache-jena.tar.gz \
+    && tar -xzf /tmp/apache-jena.tar.gz -C /opt \
+    && ln -s "/opt/apache-jena-${JENA_VERSION}" "${JENA_HOME}" \
+    && rm /tmp/apache-jena.tar.gz
+##------
+
 ARG JAVA_MINIMAL
 ARG FUSEKI_DIR
 ARG FUSEKI_JAR

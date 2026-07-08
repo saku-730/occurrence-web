@@ -21,6 +21,27 @@ MVP UIでは `dwc:scientificName` のみを選択肢として出すが、API con
 
 ---
 
+## 中間ノードを含む検索
+
+検索APIのpredicate指定方法は変更しない。
+backendはpredicateの振り分け規則に応じて保存先ノードを透過的に辿る。
+
+- Identification対象述語は `hasIdentification` の先を検索する
+- Event対象述語は `hasEvent` の先を検索する
+- Location対象述語は `hasLocation` の先を検索する
+- Occurrence対象述語とunknown predicateはOccurrence直下を検索する
+
+`dwc:scientificName` の検索例。
+
+```sparql
+?occurrence <https://bio-database.net/terms/hasIdentification> ?identification .
+?identification <http://rs.tdwg.org/dwc/terms/scientificName> ?value .
+```
+
+URI完全一致、リテラルのcase-insensitive比較、trim、taxonomy階層探索など既存動作は維持する。
+
+---
+
 ## 値の形式
 
 `dwc:scientificName` の値は以下の両方を許可する。
@@ -67,10 +88,21 @@ URIの場合。
 taxonomy graph URI。
 
 ```text
-https://{APP_PUBLIC_BASE_URL}/graphs/taxonomy
+https://bio-database.net/graphs/taxonomy/gbif-backbone
 ```
 
-taxonomy ontology は外部提供されたものを使う。
+taxonomy ontology は GBIF Backbone Taxonomy から生成する。
+
+分類群URI。
+
+```text
+https://bio-database.net/taxa/gbif/{id}
+```
+
+- `{id}` は GBIF Backbone Taxonomy の taxon key とする
+- occurrenceが分類群をURIで保持する場合も、このURIを目的語として使う
+- 各分類群には `dcterms:source` として `https://www.gbif.org/species/{id}` を記録する
+- 学名、分類階級、表示ラベルなど検索候補に必要な値もtaxonomy graphへ格納する
 
 ---
 
@@ -83,6 +115,14 @@ http://www.w3.org/2000/01/rdf-schema#subClassOf
 ```
 
 SKOS の `skos:broader` / `skos:narrower` は MVP 対象外。
+
+GBIFの親子関係は、子分類群から親分類群への `rdfs:subClassOf` として生成する。
+
+```text
+<https://bio-database.net/taxa/gbif/{child_id}>
+  rdfs:subClassOf
+<https://bio-database.net/taxa/gbif/{parent_id}> .
+```
 
 ---
 
