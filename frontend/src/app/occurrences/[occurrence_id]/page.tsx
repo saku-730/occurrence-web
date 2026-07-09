@@ -5,18 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
+import { apiFetch } from "@/lib/api";
 
-const OCCURRENCE_GRAPH_URI =
-  "https://bio-database.net/graphs/occurrences";
 const API_PREFIX = "/api/backend";
 const USER_URI_PREFIX = "https://bio-database.net/users/";
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
-const CREATED_PREDICATE = "http://purl.org/dc/terms/created";
-const MODIFIED_PREDICATE = "http://purl.org/dc/terms/modified";
-const ACCESS_RIGHTS_PREDICATE = "http://purl.org/dc/terms/accessRights";
-const SCIENTIFIC_NAME_PREDICATE = "http://rs.tdwg.org/dwc/terms/scientificName";
-const BASIS_OF_RECORD_PREDICATE = "http://rs.tdwg.org/dwc/terms/basisOfRecord";
-const RECORDED_BY_PREDICATE = "http://rs.tdwg.org/dwc/terms/recordedBy";
 
 interface OccurrenceDetailState {
   status: "loading" | "ready" | "not_found" | "error";
@@ -28,6 +21,23 @@ interface UserSummary {
   user_name: string;
 }
 
+interface CurrentUser {
+  user_id: string;
+}
+
+interface ParsedQuad {
+  subject: string;
+  predicate: string;
+  object: string;
+  graph: string;
+}
+
+interface IntermediateSection {
+  subject: string;
+  title: string;
+  quads: ParsedQuad[];
+}
+
 export default function OccurrenceDetailPage() {
   const router = useRouter();
   const params = useParams<{ occurrence_id?: string }>();
@@ -37,6 +47,8 @@ export default function OccurrenceDetailPage() {
     status: "loading",
     nquads: "",
   });
+  const [creatorSummary, setCreatorSummary] = useState<UserSummary | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!occurrenceId) {
@@ -83,17 +95,24 @@ export default function OccurrenceDetailPage() {
     };
   }, [occurrenceId]);
 
-  const summary = useMemo(() => summarizeOccurrence(state.nquads, occurrenceId), [
-    occurrenceId,
-    state.nquads,
-  ]);
   const quads = useMemo(() => parseNQuads(state.nquads), [state.nquads]);
-
-  const [creatorSummary, setCreatorSummary] = useState<UserSummary | null>(null);
+  const creatorUserUri = useMemo(() => findQuadObject(state.nquads, CREATOR_PREDICATE), [state.nquads]);
+  const creatorUserId = useMemo(() => extractUserIdFromUserUri(creatorUserUri), [creatorUserUri]);
+  const occurrenceUri = `https://bio-database.net/occurrences/${occurrenceId}`;
+  const rootQuads = useMemo(
+    () =>
+      quads.filter(
+        (quad) =>
+          quad.subject === occurrenceUri &&
+          quad.predicate !== CREATOR_PREDICATE &&
+          !isIntermediateRelationPredicate(quad.predicate),
+      ),
+    [occurrenceUri, quads],
+  );
+  const intermediateSections = useMemo(() => buildIntermediateSections(quads, occurrenceUri), [occurrenceUri, quads]);
+  const canEditOccurrence = creatorUserId !== null && currentUserId === creatorUserId;
 
   useEffect(() => {
-    const creatorUserId = summary.creatorUserId;
-
     if (!creatorUserId) {
       setCreatorSummary(null);
       return;
@@ -129,7 +148,27 @@ export default function OccurrenceDetailPage() {
     return () => {
       active = false;
     };
-  }, [summary.creatorUserId]);
+  }, [creatorUserId]);
+
+  useEffect(() => {
+    let active = true;
+
+    apiFetch<CurrentUser>("/auth/me")
+      .then((user) => {
+        if (active) {
+          setCurrentUserId(user.user_id);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setCurrentUserId(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
@@ -139,9 +178,7 @@ export default function OccurrenceDetailPage() {
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">データ詳細</h1>
-            <p className="mt-2 text-sm text-[#65737a]">
-              occurrence に登録された内容を確認できます。
-            </p>
+            <p className="mt-2 text-sm text-[#65737a]">occurrence に登録された内容を確認できます。</p>
           </div>
           <div className="flex gap-3">
             <button
@@ -151,6 +188,14 @@ export default function OccurrenceDetailPage() {
             >
               戻る
             </button>
+            {canEditOccurrence ? (
+              <Link
+                className="inline-flex h-10 items-center rounded-md border border-[#176b57] bg-white px-4 text-sm font-medium text-[#176b57] hover:bg-[#eef7f4]"
+                href={`/occurrences/${occurrenceId}/edit`}
+              >
+                編集
+              </Link>
+            ) : null}
             <Link
               className="inline-flex h-10 items-center rounded-md bg-[#176b57] px-4 text-sm font-medium text-white hover:bg-[#125746]"
               href="/occurrences/search"
@@ -160,72 +205,52 @@ export default function OccurrenceDetailPage() {
           </div>
         </div>
 
-        {state.status === "loading" ? (
-          <StatusPanel message="データを読み込んでいます" />
-        ) : null}
+        {state.status === "loading" ? <StatusPanel message="データを読み込んでいます" /> : null}
 
-        {state.status === "not_found" ? (
-          <StatusPanel message="データが見つかりませんでした" />
-        ) : null}
+        {state.status === "not_found" ? <StatusPanel message="データが見つかりませんでした" /> : null}
 
-        {state.status === "error" ? (
-          <StatusPanel message="詳細データを取得できませんでした" />
-        ) : null}
+        {state.status === "error" ? <StatusPanel message="詳細データを取得できませんでした" /> : null}
 
         {state.status === "ready" ? (
           <div className="space-y-6">
             <section className="rounded-md border border-[#d8dfe2] bg-white px-5 py-5">
               <div className="grid gap-4 md:grid-cols-2">
-                <DetailField label="Occurrence ID" value={summary.occurrenceId ?? occurrenceId} />
-                <DetailField label="Occurrence URI" value={summary.occurrenceUri ?? `https://bio-database.net/occurrences/${occurrenceId}`} />
-                <DetailField label="学名" value={summary.scientificName} />
-                <DetailField label="記録種別" value={summary.basisOfRecord} />
-                <DetailField label="記録者" value={summary.recordedBy} />
-                <DetailField label="作成日時" value={summary.created} />
-                <DetailField label="更新日時" value={summary.modified} />
-                <DetailField label="公開範囲" value={summary.accessRights} />
+                <DetailField label="Occurrence ID" value={occurrenceId} />
                 <CreatorField
                   userName={creatorSummary?.user_name ?? null}
-                  userId={creatorSummary?.user_id ?? summary.creatorUserId}
+                  userId={creatorSummary?.user_id ?? creatorUserId}
                 />
               </div>
+
+              {rootQuads.length > 0 ? (
+                <div className="mt-6 border-t border-[#eef2f3] pt-6">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {rootQuads.map((quad, index) => (
+                      <DetailField
+                        key={`${quad.subject}-${quad.predicate}-${quad.object}-${index}`}
+                        label={predicateLabel(quad.predicate)}
+                        value={formatQuadValue(quad.predicate, quad.object)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </section>
 
-            <section className="rounded-md border border-[#d8dfe2] bg-white px-5 py-5">
-              <h2 className="text-sm font-medium text-[#526168]">登録内容</h2>
-              {quads.length === 0 ? (
-                <p className="mt-2 text-sm text-[#65737a]">
-                  項目がありません。
-                </p>
-              ) : (
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-[#d8dfe2] text-xs uppercase tracking-wide text-[#65737a]">
-                        <th className="py-2 pr-4 font-medium">主語</th>
-                        <th className="py-2 pr-4 font-medium">項目名</th>
-                        <th className="py-2 pr-4 font-medium">値</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {quads.map((quad, index) => (
-                        <tr key={`${quad.subject}-${quad.predicate}-${index}`} className="border-b border-[#eef2f3] align-top last:border-b-0">
-                          <td className="py-3 pr-4 text-[#65737a]">
-                            {formatNode(quad.subject)}
-                          </td>
-                          <td className="py-3 pr-4 font-medium text-[#182126]">
-                            {predicateLabel(quad.predicate)}
-                          </td>
-                          <td className="py-3 pr-4 break-all text-[#182126]">
-                            {formatNode(quad.object)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            {intermediateSections.map((section) => (
+              <section key={section.subject} className="rounded-md border border-[#d8dfe2] bg-white px-5 py-5">
+                <h2 className="text-sm font-medium text-[#526168]">{section.title}</h2>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {section.quads.map((quad, index) => (
+                    <DetailField
+                      key={`${quad.subject}-${quad.predicate}-${quad.object}-${index}`}
+                      label={predicateLabel(quad.predicate)}
+                      value={formatQuadValue(quad.predicate, quad.object)}
+                    />
+                  ))}
                 </div>
-              )}
-            </section>
+              </section>
+            ))}
           </div>
         ) : null}
       </main>
@@ -233,9 +258,15 @@ export default function OccurrenceDetailPage() {
   );
 }
 
-function DetailField({ label, value }: { label: string; value: string | null }) {
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null;
+}) {
   return (
-    <div className="min-w-0">
+    <div className="rounded-md border border-[#eef2f3] bg-[#fafcfc] px-4 py-3">
       <p className="text-xs font-medium uppercase tracking-wide text-[#65737a]">
         {label}
       </p>
@@ -254,7 +285,7 @@ function CreatorField({
   const primary = userName ?? userId ?? "-";
 
   return (
-    <div className="min-w-0">
+    <div className="rounded-md border border-[#eef2f3] bg-[#fafcfc] px-4 py-3">
       <p className="text-xs font-medium uppercase tracking-wide text-[#65737a]">
         作成者
       </p>
@@ -274,35 +305,11 @@ function StatusPanel({ message }: { message: string }) {
   );
 }
 
-function summarizeOccurrence(nquads: string, occurrenceId: string) {
-  const lines = nquads
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const occurrenceUri = `https://bio-database.net/occurrences/${occurrenceId}`;
-  const creatorUserUri = findPredicateValue(lines, CREATOR_PREDICATE);
-
-  return {
-    occurrenceId,
-    occurrenceUri: occurrenceUri,
-    scientificName: findPredicateValue(lines, SCIENTIFIC_NAME_PREDICATE),
-    basisOfRecord: findPredicateValue(lines, BASIS_OF_RECORD_PREDICATE),
-    recordedBy: findPredicateValue(lines, RECORDED_BY_PREDICATE),
-    created: findPredicateValue(lines, CREATED_PREDICATE),
-    modified: findPredicateValue(lines, MODIFIED_PREDICATE),
-    accessRights: findPredicateValue(lines, ACCESS_RIGHTS_PREDICATE),
-    creatorUserUri,
-    creatorUserId: extractUserIdFromUserUri(creatorUserUri),
-  };
-}
-
-function findPredicateValue(lines: string[], predicateUri: string): string | null {
-  for (const line of lines) {
-    if (!line.includes(`<${predicateUri}>`)) continue;
-    const match = line.match(/^<([^>]+)> <([^>]+)> (.+) <([^>]+)> \.$/u);
-    if (!match) continue;
-    return normalizeObject(match[3]);
+function findQuadObject(nquads: string, predicateUri: string): string | null {
+  for (const quad of parseNQuads(nquads)) {
+    if (quad.predicate === predicateUri) {
+      return normalizeObject(quad.object);
+    }
   }
 
   return null;
@@ -329,30 +336,8 @@ function extractUserIdFromUserUri(userUri: string | null): string | null {
     const userId = parsed.pathname.split("/").filter(Boolean).at(-1) ?? "";
     return userId.length > 0 ? decodeURIComponent(userId) : null;
   } catch {
-    // URLとして解釈できない場合でも、最後の保険としてそのまま返さない。
     return null;
   }
-}
-
-function parseNQuads(nquads: string) {
-  return nquads
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^<([^>]+)> <([^>]+)> (.+) <([^>]+)> \.$/u);
-      if (!match) {
-        return null;
-      }
-
-      return {
-        subject: match[1],
-        predicate: match[2],
-        object: match[3],
-        graph: match[4],
-      };
-    })
-    .filter((quad): quad is { subject: string; predicate: string; object: string; graph: string } => quad !== null);
 }
 
 function predicateLabel(predicateUri: string): string {
@@ -374,17 +359,107 @@ function predicateLabel(predicateUri: string): string {
   return fragment ?? predicateUri;
 }
 
-function formatNode(node: string): string {
-  const normalized = normalizeObject(node);
-  if (normalized.startsWith(USER_URI_PREFIX)) {
-    return normalized.slice(USER_URI_PREFIX.length);
+function parseNQuads(nquads: string): ParsedQuad[] {
+  return nquads
+    .split(String.fromCharCode(10))
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^<([^>]+)> <([^>]+)> (.+) <([^>]+)> \.$/u);
+      if (!match) {
+        return null;
+      }
+
+      return {
+        subject: match[1],
+        predicate: match[2],
+        object: match[3],
+        graph: match[4],
+      };
+    })
+    .filter((quad): quad is ParsedQuad => quad !== null);
+}
+
+function buildIntermediateSections(quads: ParsedQuad[], occurrenceUri: string): IntermediateSection[] {
+  const sections = new Map<string, IntermediateSection>();
+
+  for (const quad of quads) {
+    if (quad.subject !== occurrenceUri) continue;
+
+    const title = intermediateRelationLabel(quad.predicate);
+    if (!title) continue;
+
+    const subjectKey = normalizeObject(quad.object);
+    if (!sections.has(subjectKey)) {
+      sections.set(subjectKey, {
+        subject: subjectKey,
+        title,
+        quads: [],
+      });
+    }
   }
 
-  if (normalized === OCCURRENCE_GRAPH_URI) {
-    return "occurrence graph";
+  for (const quad of quads) {
+    if (isIntermediateRelationPredicate(quad.predicate) || quad.predicate === "http://www.w3.org/1999/02/22-rdf-syntax-ns#type") {
+      continue;
+    }
+
+    const section = sections.get(quad.subject);
+    if (!section) continue;
+
+    section.quads.push(quad);
+  }
+
+  return Array.from(sections.values()).filter((section) => section.quads.length > 0);
+}
+
+function isIntermediateRelationPredicate(predicateUri: string): boolean {
+  return intermediateRelationLabel(predicateUri) !== null;
+}
+
+function intermediateRelationLabel(predicateUri: string): string | null {
+  const labels: Record<string, string> = {
+    "https://bio-database.net/terms/hasIdentification": "Identification",
+    "https://bio-database.net/terms/hasEvent": "Event",
+    "https://bio-database.net/terms/hasLocation": "Location",
+  };
+
+  return labels[predicateUri] ?? null;
+}
+
+const XSD_DATE_TIME_URI = "http://www.w3.org/2001/XMLSchema#dateTime";
+
+function formatQuadValue(predicate: string, object: string): string {
+  const normalized = normalizeObject(object);
+
+  if (predicate === "http://purl.org/dc/terms/created" || predicate === "http://purl.org/dc/terms/modified") {
+    return stripTimestampFormatting(stripDatatype(normalized, XSD_DATE_TIME_URI));
   }
 
   return normalized;
+}
+
+function stripDatatype(value: string, datatypeUri: string): string {
+  const suffix = `^^<${datatypeUri}>`;
+  if (value.endsWith(suffix)) {
+    return value.slice(0, -suffix.length);
+  }
+
+  return value;
+}
+
+function stripTimestampFormatting(value: string): string {
+  let formatted = value.trim();
+
+  if (formatted.startsWith("\"") && formatted.endsWith("\"")) {
+    formatted = formatted.slice(1, -1);
+  }
+
+  if (formatted.endsWith("Z")) {
+    formatted = formatted.slice(0, -1);
+  }
+
+  return formatted;
 }
 
 function normalizeObject(object: string): string {
