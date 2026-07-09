@@ -122,6 +122,29 @@ https://bio-database.net/graphs/taxonomy/gbif-backbone
 https://{APP_PUBLIC_BASE_URL}/graphs/master
 ```
 
+### Darwin Core vocabulary graph
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+```
+
+- Darwin Core Termsとdwciriの語彙情報を格納する
+- 項目名候補、表示ラベル、定義、namespace、値形式などの入力補助に使う
+- occurrence RDFは格納しない
+- frontendから書き込ませず、管理されたマスターデータ投入処理だけが更新する
+
+### occurrence profile graph
+
+```text
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+- occurrence登録時の正規化に使うアプリケーション固有メタ情報を格納する
+- dwc述語と、IRI目的語で使う対応dwciri述語の変換関係を保持する
+- Identification、Event、Locationへの振り分け情報を将来格納してよい
+- occurrence RDFは格納しない
+- frontendから書き込ませず、backendがread-onlyのマスターとして参照する
+
 ### user graph
 
 ```text
@@ -275,6 +298,35 @@ backendはoccurrence URI発行後、述語ごとに保存先ノードを判定�
 - URI値を優先する
 - リテラルは目的語として必要な場合に許可する
 - 目的語リテラルには可能な限り明示的な datatype を付ける
+
+---
+
+## dwcからdwciriへの述語変換。将来実装
+
+この変換はMVPでは実装しない。
+frontendの入力形式は変更せず、項目としてdwc述語と目的語を送る。
+
+将来のbackend正規化ルール。
+
+1. frontendから受け取った述語がdwc namespaceか確認する
+2. 目的語がIRIかリテラルか判定する
+3. 目的語がIRIの場合、`https://bio-database.net/graphs/app/occurrence-profile`から対応するdwciri述語を検索する
+4. 対応関係があれば、目的語を維持したまま述語だけをdwciriへ置換する
+5. 目的語がリテラルの場合はdwc述語を維持する
+6. 対応するdwciri述語がない場合も入力述語を維持する
+7. dwc/dwciri変換後の述語を使ってOccurrence、Identification、Event、Locationへの振り分けを行う
+
+変換例。
+
+```nq
+# frontend入力
+_:occurrence <http://rs.tdwg.org/dwc/terms/exampleTerm> <https://example.org/resource> <https://bio-database.net/graphs/occurrences> .
+
+# profileに対応関係がある場合の保存述語
+<occurrence-uri> <http://rs.tdwg.org/dwc/iri/exampleTerm> <https://example.org/resource> <https://bio-database.net/graphs/occurrences> .
+```
+
+変換表を表現するRDF述語とマスターデータ更新方法は、実装開始前に別途確定する。
 
 ---
 

@@ -84,3 +84,10 @@ pub struct CurrentUserResponse {
     pub user_name: String,
     pub role: String,
 }
+
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UserSummaryResponse {
+    pub user_id: uuid::Uuid,
+    pub user_name: String,
+}

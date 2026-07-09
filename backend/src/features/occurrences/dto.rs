@@ -77,3 +77,10 @@ pub struct SearchOccurrencesRequestPage {
     pub limit: Option<u32>,
     pub cursor: Option<String>,
 }
+
+// Darwin Core候補は表示名(local_name)と実際に保存するpredicate URIを分けて返す。
+#[derive(Debug, Clone, Serialize, PartialEq, ToSchema)]
+pub struct DarwinCoreTermResponse {
+    pub uri: String,
+    pub local_name: String,
+}

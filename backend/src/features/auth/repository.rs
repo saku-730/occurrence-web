@@ -25,6 +25,12 @@ pub struct UserForSession {
 }
 
 #[derive(Debug)]
+pub struct UserForSummary {
+    pub user_id: Uuid,
+    pub user_name: String,
+}
+
+#[derive(Debug)]
 pub struct PasswordResetTokenForUpdate {
     pub user_id: Uuid,
 }
@@ -241,6 +247,26 @@ impl AuthRepository {
             WHERE email = $1
             "#,
             email
+        )
+        .fetch_optional(db)
+        .await?;
+
+        Ok(row)
+    }
+
+    pub async fn find_user_by_id(
+        db: &PgPool,
+        user_id: Uuid,
+    ) -> Result<Option<UserForSummary>, sqlx::Error> {
+        // 詳細画面では作成者の表示名だけが必要なので、認証情報は返さない。
+        let row = sqlx::query_as!(
+            UserForSummary,
+            r#"
+            SELECT id AS user_id, user_name
+            FROM users
+            WHERE id = $1
+            "#,
+            user_id
         )
         .fetch_optional(db)
         .await?;

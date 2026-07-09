@@ -25,8 +25,8 @@ use crate::{
 
 use super::{
     dto::{
-        CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrencesRequest,
-        SearchOccurrencesResponse,
+        CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
+        SearchOccurrencesRequest, SearchOccurrencesResponse,
     },
     service::{
         CreateOccurrenceInput, DeleteOccurrenceInput, GetOccurrenceInput, OccurrenceService,
@@ -326,6 +326,35 @@ pub async fn create_occurrence(
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+#[utoipa::path(
+    get,
+    path = "/vocabularies/darwin-core",
+    responses(
+        (status = 200, description = "Darwin Core terms sorted by localName", body = [DarwinCoreTermResponse]),
+        (status = 502, description = "Vocabulary store failed", body = ErrorResponse)
+    ),
+    tag = "vocabularies"
+)]
+pub async fn list_darwin_core_terms(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<DarwinCoreTermResponse>>, OccurrenceHandlerError> {
+    let mut terms = state.occurrence_rdf_store.list_darwin_core_terms().await?;
+    terms.sort_by(|left, right| {
+        left.local_name
+            .to_lowercase()
+            .cmp(&right.local_name.to_lowercase())
+            .then(left.uri.cmp(&right.uri))
+    });
+    Ok(Json(
+        terms
+            .into_iter()
+            .map(|term| DarwinCoreTermResponse {
+                uri: term.uri,
+                local_name: term.local_name,
+            })
+            .collect(),
+    ))
 }
 
 #[utoipa::path(

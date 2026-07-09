@@ -11,12 +11,12 @@ use crate::{
     features::{
         auth::handler::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
-            reset_password,
+            reset_password, user_summary,
         },
         media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, delete_media, get_media, upload_media},
         occurrences::handler::{
-            create_occurrence, delete_occurrence, get_occurrence, search_occurrences,
-            update_occurrence,
+            create_occurrence, delete_occurrence, get_occurrence, list_darwin_core_terms,
+            search_occurrences, update_occurrence,
         },
     },
     openapi::ApiDoc,
@@ -37,12 +37,15 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
+        .route("/users/{user_id}", get(user_summary))
         // media: 添付ファイルのupload/download/deleteを扱う。まずはuploadを接続する。
         .route(
             "/media",
             post(upload_media).layer(DefaultBodyLimit::max(MEDIA_REQUEST_BODY_LIMIT_BYTES)),
         )
         .route("/media/{media_id}", get(get_media).delete(delete_media))
+        // Read-only vocabulary candidates used by the occurrence editor.
+        .route("/vocabularies/darwin-core", get(list_darwin_core_terms))
         // occurrence: RDF本体の作成・検索・詳細・更新・削除を扱う。
         .route("/occurrences", post(create_occurrence))
         .route("/occurrences/search", post(search_occurrences))
@@ -170,6 +173,15 @@ mod tests {
             _occurrence_uri: &str,
         ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
             Ok(None)
+        }
+
+        async fn list_darwin_core_terms(
+            &self,
+        ) -> Result<
+            Vec<crate::features::occurrences::service::DarwinCoreTerm>,
+            OccurrenceServiceError,
+        > {
+            Ok(Vec::new())
         }
     }
 
@@ -4063,6 +4075,53 @@ mod tests {
         assert_eq!(body["message"], "Invalid session");
     }
 
+    #[tokio::test]
+    async fn user_summary_route_returns_user_name_for_existing_user() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+
+        let email = format!("route-user-summary-{}@example.com", uuid::Uuid::new_v4());
+        let user_name = "route-user-summary-user";
+        let password_hash = hash_password("password123").expect("password hash should be created");
+
+        AuthRepository::create_user(&db, &email, user_name, &password_hash)
+            .await
+            .expect("user should be created");
+
+        let user = sqlx::query!(
+            r#"
+            SELECT id
+            FROM users
+            WHERE email = $1
+            "#,
+            email
+        )
+        .fetch_one(&db)
+        .await
+        .expect("user should exist");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/users/{}", user.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        assert_eq!(body["user_id"], user.id.to_string());
+        assert_eq!(body["user_name"], user_name);
+    }
+
     //occurrence
     #[tokio::test]
     async fn create_occurrence_route_requires_login() {
@@ -6729,13 +6788,15 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             .collect::<Result<Vec<_>, _>>()
             .expect("updated N-Quads should parse");
 
-        assert!(
-            parsed_quads
-                .iter()
-                .all(|quad| { quad.subject.to_string() == format!("<{}>", occurrence_uri) })
-        );
+        let identification_uri = format!("{}/identifications/1", occurrence_uri);
+        assert!(parsed_quads.iter().all(|quad| {
+            let subject = quad.subject.to_string();
+            subject == format!("<{}>", occurrence_uri)
+                || subject == format!("<{}>", identification_uri)
+        }));
         assert!(parsed_quads.iter().any(|quad| {
-            quad.predicate.to_string() == "<http://rs.tdwg.org/dwc/terms/scientificName>"
+            quad.subject.to_string() == format!("<{}>", identification_uri)
+                && quad.predicate.to_string() == "<http://rs.tdwg.org/dwc/terms/scientificName>"
                 && quad.object.to_string() == "\"Updated name\""
         }));
         assert!(parsed_quads.iter().any(|quad| {
@@ -8436,5 +8497,70 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
 
         assert_eq!(body_json["error"], "rdf_store_error");
         assert_eq!(body_json["message"], "Failed to save occurrence RDF");
+    }
+
+    #[tokio::test]
+    async fn list_darwin_core_terms_route_returns_sorted_terms() {
+        use crate::features::occurrences::service::{DarwinCoreTerm, OccurrenceRdfStore};
+
+        #[derive(Clone, Default)]
+        struct VocabularyStore;
+
+        #[async_trait::async_trait]
+        impl OccurrenceRdfStore for VocabularyStore {
+            async fn save_nquads(&self, _nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+                Ok(())
+            }
+
+            async fn get_occurrence_nquads(
+                &self,
+                _occurrence_uri: &str,
+            ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+                Ok(None)
+            }
+
+            async fn list_darwin_core_terms(
+                &self,
+            ) -> Result<Vec<DarwinCoreTerm>, OccurrenceServiceError> {
+                Ok(vec![
+                    DarwinCoreTerm {
+                        uri: "https://bio-database.net/terms/zulu".to_string(),
+                        local_name: "Zulu".to_string(),
+                    },
+                    DarwinCoreTerm {
+                        uri: "https://bio-database.net/terms/alpha".to_string(),
+                        local_name: "Alpha".to_string(),
+                    },
+                ])
+            }
+        }
+
+        let state = test_state_with_occurrence_rdf_store(Arc::new(VocabularyStore));
+        let app = build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/vocabularies/darwin-core")
+                    .method(Method::GET)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let terms: Vec<serde_json::Value> =
+            serde_json::from_slice(&body).expect("response should be valid JSON array");
+
+        assert_eq!(terms.len(), 2);
+        assert_eq!(terms[0]["local_name"], "Alpha");
+        assert_eq!(terms[1]["local_name"], "Zulu");
+        assert_eq!(terms[0]["uri"], "https://bio-database.net/terms/alpha");
+        assert_eq!(terms[1]["uri"], "https://bio-database.net/terms/zulu");
     }
 }

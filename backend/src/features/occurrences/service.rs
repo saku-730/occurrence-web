@@ -99,6 +99,12 @@ pub struct SearchOccurrenceStoreRow {
     pub access_rights: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DarwinCoreTerm {
+    pub uri: String,
+    pub local_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOccurrencesStorePage {
     pub rows: Vec<SearchOccurrenceStoreRow>,
@@ -153,6 +159,10 @@ pub trait OccurrenceRdfStore: Send + Sync {
         Err(OccurrenceServiceError::NotImplemented)
     }
 
+    async fn list_darwin_core_terms(&self) -> Result<Vec<DarwinCoreTerm>, OccurrenceServiceError> {
+        Err(OccurrenceServiceError::NotImplemented)
+    }
+
     async fn search_occurrences(
         &self,
         _input: SearchOccurrencesStoreInput,
@@ -191,6 +201,84 @@ const PUBLIC_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-ri
 const PRIVATE_ACCESS_RIGHTS_URI: &str = "https://bio-database.net/terms/access-rights/private";
 const USER_URI_BASE: &str = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
+
+pub(crate) const HAS_IDENTIFICATION_PREDICATE_URI: &str =
+    "https://bio-database.net/terms/hasIdentification";
+pub(crate) const HAS_EVENT_PREDICATE_URI: &str = "https://bio-database.net/terms/hasEvent";
+pub(crate) const HAS_LOCATION_PREDICATE_URI: &str = "https://bio-database.net/terms/hasLocation";
+const RDF_TYPE_PREDICATE_URI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const IDENTIFICATION_CLASS_URI: &str = "http://rs.tdwg.org/dwc/terms/Identification";
+const EVENT_CLASS_URI: &str = "http://rs.tdwg.org/dwc/terms/Event";
+const LOCATION_CLASS_URI: &str = "http://purl.org/dc/terms/Location";
+
+const IDENTIFICATION_PREDICATE_URIS: &[&str] = &[
+    "http://rs.tdwg.org/dwc/terms/scientificName",
+    "http://rs.tdwg.org/dwc/terms/identifiedBy",
+    "http://rs.tdwg.org/dwc/terms/dateIdentified",
+    "http://rs.tdwg.org/dwc/terms/identificationQualifier",
+    "http://rs.tdwg.org/dwc/terms/identificationRemarks",
+    "http://rs.tdwg.org/dwc/terms/nameAccordingTo",
+    "http://rs.tdwg.org/dwc/iri/toTaxon",
+];
+const EVENT_PREDICATE_URIS: &[&str] = &[
+    "http://rs.tdwg.org/dwc/terms/eventDate",
+    "http://rs.tdwg.org/dwc/terms/samplingProtocol",
+    "http://rs.tdwg.org/dwc/terms/samplingEffort",
+    "http://rs.tdwg.org/dwc/terms/fieldNumber",
+    "http://rs.tdwg.org/dwc/terms/habitat",
+    "http://rs.tdwg.org/dwc/terms/recordedBy",
+];
+const LOCATION_PREDICATE_URIS: &[&str] = &[
+    "http://rs.tdwg.org/dwc/terms/decimalLatitude",
+    "http://rs.tdwg.org/dwc/terms/decimalLongitude",
+    "http://rs.tdwg.org/dwc/terms/geodeticDatum",
+    "http://rs.tdwg.org/dwc/terms/coordinateUncertaintyInMeters",
+    "http://rs.tdwg.org/dwc/terms/locality",
+    "http://rs.tdwg.org/dwc/terms/country",
+    "http://rs.tdwg.org/dwc/terms/municipality",
+];
+
+#[derive(Clone, Copy)]
+pub(crate) enum OccurrenceTarget {
+    Occurrence,
+    Identification,
+    Event,
+    Location,
+}
+
+impl OccurrenceTarget {
+    pub(crate) fn for_predicate(predicate_uri: &str) -> Self {
+        if IDENTIFICATION_PREDICATE_URIS.contains(&predicate_uri) {
+            Self::Identification
+        } else if EVENT_PREDICATE_URIS.contains(&predicate_uri) {
+            Self::Event
+        } else if LOCATION_PREDICATE_URIS.contains(&predicate_uri) {
+            Self::Location
+        } else {
+            // Unknown predicates remain extensible and stay on the occurrence itself.
+            Self::Occurrence
+        }
+    }
+
+    pub(crate) fn intermediate_definition(
+        self,
+    ) -> Option<(&'static str, &'static str, &'static str)> {
+        match self {
+            Self::Occurrence => None,
+            Self::Identification => Some((
+                "identifications/1",
+                HAS_IDENTIFICATION_PREDICATE_URI,
+                IDENTIFICATION_CLASS_URI,
+            )),
+            Self::Event => Some(("events/1", HAS_EVENT_PREDICATE_URI, EVENT_CLASS_URI)),
+            Self::Location => Some((
+                "locations/1",
+                HAS_LOCATION_PREDICATE_URI,
+                LOCATION_CLASS_URI,
+            )),
+        }
+    }
+}
 
 pub struct OccurrenceService;
 
@@ -330,6 +418,88 @@ impl OccurrenceService {
     }
 }
 
+fn normalize_frontend_quads(
+    quads: Vec<Quad>,
+    occurrence_uri: &str,
+) -> Result<Vec<Quad>, OccurrenceServiceError> {
+    let occurrence_subject =
+        NamedNode::new(occurrence_uri).map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
+    let occurrence_graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
+        .map_err(|_| OccurrenceServiceError::InvalidGraphUri)?;
+
+    let mut normalized = Vec::new();
+    let mut has_identification = false;
+    let mut has_event = false;
+    let mut has_location = false;
+
+    for quad in quads {
+        let target = OccurrenceTarget::for_predicate(quad.predicate.as_str());
+        let subject = match target.intermediate_definition() {
+            None => occurrence_subject.clone(),
+            Some((path, _, _)) => {
+                // MVP groups every predicate for a target into its single number-one node.
+                let node_uri = format!("{occurrence_uri}/{path}");
+                NamedNode::new(node_uri)
+                    .map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?
+            }
+        };
+
+        match target {
+            OccurrenceTarget::Occurrence => {}
+            OccurrenceTarget::Identification => has_identification = true,
+            OccurrenceTarget::Event => has_event = true,
+            OccurrenceTarget::Location => has_location = true,
+        }
+
+        normalized.push(Quad::new(
+            subject,
+            quad.predicate,
+            quad.object,
+            quad.graph_name,
+        ));
+    }
+
+    // Empty intermediate nodes are forbidden. Links and types are emitted only
+    // for targets that received at least one routed frontend predicate.
+    for (target, is_used) in [
+        (OccurrenceTarget::Identification, has_identification),
+        (OccurrenceTarget::Event, has_event),
+        (OccurrenceTarget::Location, has_location),
+    ] {
+        if !is_used {
+            continue;
+        }
+
+        let (path, link_predicate_uri, class_uri) = target
+            .intermediate_definition()
+            .expect("non-occurrence target must define its intermediate node");
+        let intermediate_node = NamedNode::new(format!("{occurrence_uri}/{path}"))
+            .map_err(|_| OccurrenceServiceError::InvalidOccurrenceUri)?;
+        let link_predicate = NamedNode::new(link_predicate_uri)
+            .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+        let rdf_type_predicate = NamedNode::new(RDF_TYPE_PREDICATE_URI)
+            .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+        let class =
+            NamedNode::new(class_uri).map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+
+        normalized.push(Quad::new(
+            occurrence_subject.clone(),
+            link_predicate,
+            intermediate_node.clone(),
+            GraphName::NamedNode(occurrence_graph.clone()),
+        ));
+        normalized.push(Quad::new(
+            intermediate_node,
+            rdf_type_predicate,
+            class,
+            GraphName::NamedNode(occurrence_graph.clone()),
+        ));
+    }
+
+    Ok(normalized)
+}
+
+#[cfg(test)]
 fn replace_all_subjects_with_occurrence_uri(
     // フロントは一時的なblank nodeで送る。永続URIはbackendだけが発行し、なりすましURIを防ぐ。
     //主語にoccurrence uuidを追加
@@ -592,7 +762,7 @@ fn build_occurrence_nquads(
 
     ensure_license_is_creative_commons_resource(&quads)?;
 
-    let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)?;
+    let mut quads = normalize_frontend_quads(quads, occurrence_uri)?;
 
     add_create_user_id_quad(&mut quads, occurrence_uri, create_user_id)?;
 
@@ -634,7 +804,7 @@ fn build_updated_occurrence_nquads(
     ensure_access_rights_is_resource(&quads)?;
     ensure_license_is_creative_commons_resource(&quads)?;
 
-    let mut quads = replace_all_subjects_with_occurrence_uri(quads, occurrence_uri)?;
+    let mut quads = normalize_frontend_quads(quads, occurrence_uri)?;
 
     add_backend_managed_object_quad(
         &mut quads,
@@ -752,6 +922,9 @@ fn ensure_no_backend_managed_predicates(
         predicate == CREATOR_PREDICATE_URI
             || predicate == CREATED_PREDICATE_URI
             || predicate == MODIFIED_PREDICATE_URI
+            || predicate == HAS_IDENTIFICATION_PREDICATE_URI
+            || predicate == HAS_EVENT_PREDICATE_URI
+            || predicate == HAS_LOCATION_PREDICATE_URI
     });
 
     if has_backend_managed_predicate {
@@ -1391,6 +1564,267 @@ mod tests {
     }
 
     #[test]
+    fn build_occurrence_nquads_creates_intermediate_nodes_for_routed_predicates() {
+        use oxrdf::{NamedOrBlankNode, Term};
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let frontend_nquads = br#"
+    _:occurrence <http://rs.tdwg.org/dwc/terms/scientificName> "Quercus serrata" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://rs.tdwg.org/dwc/terms/eventDate> "2026-07-08" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://rs.tdwg.org/dwc/terms/locality> "Tokyo" <https://bio-database.net/graphs/occurrences> .
+    "#;
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let identification_uri = format!("{occurrence_uri}/identifications/1");
+        let event_uri = format!("{occurrence_uri}/events/1");
+        let location_uri = format!("{occurrence_uri}/locations/1");
+        let create_user_id =
+            Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let built = build_occurrence_nquads(frontend_nquads, occurrence_uri, create_user_id)
+            .expect("valid routed predicates should build occurrence n-quads");
+
+        let quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&built)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("built output should be valid n-quads");
+
+        let has_resource_quad = |subject_uri: &str, predicate_uri: &str, object_uri: &str| {
+            quads.iter().any(|quad| {
+                matches!(
+                    &quad.subject,
+                    NamedOrBlankNode::NamedNode(subject) if subject.as_str() == subject_uri
+                ) && quad.predicate.as_str() == predicate_uri
+                    && matches!(
+                        &quad.object,
+                        Term::NamedNode(object) if object.as_str() == object_uri
+                    )
+            })
+        };
+        let has_literal_quad = |subject_uri: &str, predicate_uri: &str, value: &str| {
+            quads.iter().any(|quad| {
+                matches!(
+                    &quad.subject,
+                    NamedOrBlankNode::NamedNode(subject) if subject.as_str() == subject_uri
+                ) && quad.predicate.as_str() == predicate_uri
+                    && matches!(
+                        &quad.object,
+                        Term::Literal(object) if object.value() == value
+                    )
+            })
+        };
+
+        assert!(has_resource_quad(
+            occurrence_uri,
+            "https://bio-database.net/terms/hasIdentification",
+            &identification_uri,
+        ));
+        assert!(has_resource_quad(
+            &identification_uri,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            "http://rs.tdwg.org/dwc/terms/Identification",
+        ));
+        assert!(has_literal_quad(
+            &identification_uri,
+            "http://rs.tdwg.org/dwc/terms/scientificName",
+            "Quercus serrata",
+        ));
+
+        assert!(has_resource_quad(
+            occurrence_uri,
+            "https://bio-database.net/terms/hasEvent",
+            &event_uri,
+        ));
+        assert!(has_resource_quad(
+            &event_uri,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            "http://rs.tdwg.org/dwc/terms/Event",
+        ));
+        assert!(has_literal_quad(
+            &event_uri,
+            "http://rs.tdwg.org/dwc/terms/eventDate",
+            "2026-07-08",
+        ));
+
+        assert!(has_resource_quad(
+            occurrence_uri,
+            "https://bio-database.net/terms/hasLocation",
+            &location_uri,
+        ));
+        assert!(has_resource_quad(
+            &location_uri,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            "http://purl.org/dc/terms/Location",
+        ));
+        assert!(has_literal_quad(
+            &location_uri,
+            "http://rs.tdwg.org/dwc/terms/locality",
+            "Tokyo",
+        ));
+    }
+
+    #[test]
+    fn occurrence_target_routes_all_configured_predicates() {
+        for predicate in IDENTIFICATION_PREDICATE_URIS {
+            assert!(matches!(
+                OccurrenceTarget::for_predicate(predicate),
+                OccurrenceTarget::Identification
+            ));
+        }
+        for predicate in EVENT_PREDICATE_URIS {
+            assert!(matches!(
+                OccurrenceTarget::for_predicate(predicate),
+                OccurrenceTarget::Event
+            ));
+        }
+        for predicate in LOCATION_PREDICATE_URIS {
+            assert!(matches!(
+                OccurrenceTarget::for_predicate(predicate),
+                OccurrenceTarget::Location
+            ));
+        }
+
+        for predicate in [
+            "http://rs.tdwg.org/dwc/terms/basisOfRecord",
+            "http://rs.tdwg.org/dwc/terms/occurrenceRemarks",
+            "http://purl.org/dc/terms/accessRights",
+            "https://example.org/vocab/unknown",
+        ] {
+            assert!(matches!(
+                OccurrenceTarget::for_predicate(predicate),
+                OccurrenceTarget::Occurrence
+            ));
+        }
+    }
+
+    #[test]
+    fn build_occurrence_nquads_omits_unused_nodes_and_keeps_unrouted_predicates_on_occurrence() {
+        use oxrdf::{NamedOrBlankNode, Term};
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let frontend_nquads = br#"
+    _:occurrence <https://example.org/vocab/custom> "custom value" <https://bio-database.net/graphs/occurrences> .
+    _:occurrence <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/types/Observation> <https://bio-database.net/graphs/occurrences> .
+    "#;
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        let built = build_occurrence_nquads(frontend_nquads, occurrence_uri, user_id)
+            .expect("unrouted predicates should remain valid");
+        let quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&built)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("built output should parse");
+
+        for predicate in [
+            HAS_IDENTIFICATION_PREDICATE_URI,
+            HAS_EVENT_PREDICATE_URI,
+            HAS_LOCATION_PREDICATE_URI,
+        ] {
+            assert!(
+                !quads
+                    .iter()
+                    .any(|quad| quad.predicate.as_str() == predicate),
+                "unused intermediate node link must not be generated"
+            );
+        }
+
+        assert!(quads.iter().any(|quad| {
+            matches!(
+                &quad.subject,
+                NamedOrBlankNode::NamedNode(subject) if subject.as_str() == occurrence_uri
+            ) && quad.predicate.as_str() == "https://example.org/vocab/custom"
+                && matches!(&quad.object, Term::Literal(value) if value.value() == "custom value")
+        }));
+        assert!(quads.iter().any(|quad| {
+            matches!(
+                &quad.subject,
+                NamedOrBlankNode::NamedNode(subject) if subject.as_str() == occurrence_uri
+            ) && quad.predicate.as_str() == RDF_TYPE_PREDICATE_URI
+                && matches!(
+                    &quad.object,
+                    Term::NamedNode(value) if value.as_str() == "https://example.org/types/Observation"
+                )
+        }));
+    }
+
+    #[test]
+    fn build_occurrence_nquads_rejects_frontend_intermediate_link_predicates() {
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let user_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").expect("valid uuid");
+
+        for predicate in [
+            HAS_IDENTIFICATION_PREDICATE_URI,
+            HAS_EVENT_PREDICATE_URI,
+            HAS_LOCATION_PREDICATE_URI,
+        ] {
+            let frontend_nquads = format!(
+                "_:occurrence <{predicate}> <https://example.org/injected-node> <{OCCURRENCE_GRAPH_URI}> ."
+            );
+            let result =
+                build_occurrence_nquads(frontend_nquads.as_bytes(), occurrence_uri, user_id);
+
+            assert!(
+                matches!(
+                    result,
+                    Err(OccurrenceServiceError::FrontendManagedPredicateProvided)
+                ),
+                "frontend-managed intermediate link must be rejected: {predicate}"
+            );
+        }
+    }
+
+    #[test]
+    fn update_occurrence_rebuilds_intermediate_nodes_for_routed_predicates() {
+        use oxrdf::{NamedOrBlankNode, Term};
+        use oxrdfio::{RdfFormat, RdfParser};
+
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let existing_nquads = format!(
+            r#"<{occurrence_uri}> <{CREATOR_PREDICATE_URI}> <https://bio-database.net/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa> <{OCCURRENCE_GRAPH_URI}> .
+<{occurrence_uri}> <{CREATED_PREDICATE_URI}> "2026-07-08T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{OCCURRENCE_GRAPH_URI}> .
+<{occurrence_uri}> <{MODIFIED_PREDICATE_URI}> "2026-07-08T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{OCCURRENCE_GRAPH_URI}> .
+<{occurrence_uri}> <{ACCESS_RIGHTS_PREDICATE_URI}> <{PUBLIC_ACCESS_RIGHTS_URI}> <{OCCURRENCE_GRAPH_URI}> ."#
+        );
+        let frontend_nquads = format!(
+            r#"_:occurrence <http://rs.tdwg.org/dwc/terms/scientificName> "Quercus serrata" <{OCCURRENCE_GRAPH_URI}> .
+_:occurrence <http://rs.tdwg.org/dwc/terms/recordedBy> "Yamada" <{OCCURRENCE_GRAPH_URI}> ."#
+        );
+
+        let built = build_updated_occurrence_nquads(
+            frontend_nquads.as_bytes(),
+            existing_nquads.as_bytes(),
+            occurrence_uri,
+        )
+        .expect("update should rebuild routed structure");
+        let quads = RdfParser::from_format(RdfFormat::NQuads)
+            .for_slice(&built)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("updated output should parse");
+
+        let identification_uri = format!("{occurrence_uri}/identifications/1");
+        let event_uri = format!("{occurrence_uri}/events/1");
+        assert!(quads.iter().any(|quad| {
+            matches!(
+                &quad.subject,
+                NamedOrBlankNode::NamedNode(subject) if subject.as_str() == identification_uri
+            ) && quad.predicate.as_str() == "http://rs.tdwg.org/dwc/terms/scientificName"
+                && matches!(&quad.object, Term::Literal(value) if value.value() == "Quercus serrata")
+        }));
+        assert!(quads.iter().any(|quad| {
+            matches!(
+                &quad.subject,
+                NamedOrBlankNode::NamedNode(subject) if subject.as_str() == event_uri
+            ) && quad.predicate.as_str() == "http://rs.tdwg.org/dwc/terms/recordedBy"
+                && matches!(&quad.object, Term::Literal(value) if value.value() == "Yamada")
+        }));
+    }
+
+    #[test]
     fn prepare_occurrence_for_storage_generates_id_and_builds_nquads() {
         use oxrdfio::{RdfFormat, RdfParser};
 
@@ -1743,13 +2177,16 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             .collect::<Result<Vec<_>, _>>()
             .expect("updated N-Quads should parse");
 
-        assert!(
-            quads
-                .iter()
-                .all(|quad| quad.subject.to_string() == format!("<{}>", occurrence_uri))
-        );
+        let identification_uri = format!("{}/identifications/1", occurrence_uri);
+        assert!(quads.iter().all(|quad| {
+            let subject = quad.subject.to_string();
+            subject == format!("<{}>", occurrence_uri)
+                || subject == format!("<{}>", identification_uri)
+        }));
         assert!(quads.iter().any(|quad| {
-            quad.predicate.as_str() == "http://rs.tdwg.org/dwc/terms/scientificName"
+            quad.subject.to_string() == format!("<{}>", identification_uri)
+                && quad.predicate.as_str()
+                    == "http://rs.tdwg.org/dwc/terms/scientificName"
                 && matches!(&quad.object, Term::Literal(literal) if literal.value() == "Updated name")
         }));
         assert!(quads.iter().any(|quad| {

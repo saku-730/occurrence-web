@@ -1,14 +1,142 @@
 use crate::config::FusekiConfig;
 use crate::features::occurrences::service::{
-    OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceFilterInput,
-    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
-    SearchVisibility,
+    DarwinCoreTerm, HAS_EVENT_PREDICATE_URI, HAS_IDENTIFICATION_PREDICATE_URI,
+    HAS_LOCATION_PREDICATE_URI, OccurrenceRdfStore, OccurrenceServiceError, OccurrenceTarget,
+    SearchOccurrenceFilterInput, SearchOccurrenceStoreRow, SearchOccurrencesStoreInput,
+    SearchOccurrencesStorePage, SearchVisibility,
 };
 
 // GBIF Backbone由来の分類階層は専用Named Graphに固定し、
 // occurrence graphや将来追加する別taxonomy sourceと混在させない。
 const GBIF_BACKBONE_TAXONOMY_GRAPH_URI: &str =
     "https://bio-database.net/graphs/taxonomy/gbif-backbone";
+
+const DARWIN_CORE_VOCABULARY_GRAPH_URI: &str =
+    "https://bio-database.net/graphs/vocabularies/darwin-core";
+const LOCAL_NAME_PREDICATE_URI: &str = "https://bio-database.net/terms/localName";
+
+const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
+const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
+
+fn intermediate_link_values() -> String {
+    format!(
+        "<{HAS_IDENTIFICATION_PREDICATE_URI}> <{HAS_EVENT_PREDICATE_URI}> <{HAS_LOCATION_PREDICATE_URI}>"
+    )
+}
+
+fn build_get_occurrence_query(occurrence_uri: &str) -> Result<String, OccurrenceServiceError> {
+    let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
+    let links = intermediate_link_values();
+
+    Ok(format!(
+        r#"
+        CONSTRUCT {{
+          <{occurrence_uri}> ?predicate ?object .
+          ?intermediate ?intermediatePredicate ?intermediateObject .
+        }}
+        WHERE {{
+          GRAPH <{OCCURRENCE_GRAPH_URI}> {{
+            <{occurrence_uri}> ?predicate ?object .
+            OPTIONAL {{
+              VALUES ?linkPredicate {{ {links} }}
+              <{occurrence_uri}> ?linkPredicate ?intermediate .
+              ?intermediate ?intermediatePredicate ?intermediateObject .
+            }}
+          }}
+        }}
+        "#
+    ))
+}
+
+fn build_occurrence_removal_update(occurrence_uri: &str) -> Result<String, OccurrenceServiceError> {
+    let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
+    let links = intermediate_link_values();
+
+    // Both replacement and deletion remove the complete owned RDF subgraph.
+    // Objects outside the three backend-managed links are never traversed.
+    Ok(format!(
+        r#"
+        DELETE {{
+          GRAPH <{OCCURRENCE_GRAPH_URI}> {{
+            <{occurrence_uri}> ?predicate ?object .
+            ?intermediate ?intermediatePredicate ?intermediateObject .
+          }}
+        }}
+        WHERE {{
+          GRAPH <{OCCURRENCE_GRAPH_URI}> {{
+            OPTIONAL {{ <{occurrence_uri}> ?predicate ?object . }}
+            OPTIONAL {{
+              VALUES ?linkPredicate {{ {links} }}
+              <{occurrence_uri}> ?linkPredicate ?intermediate .
+              ?intermediate ?intermediatePredicate ?intermediateObject .
+            }}
+          }}
+        }}
+        "#
+    ))
+}
+
+fn build_delete_occurrence_update(occurrence_uri: &str) -> Result<String, OccurrenceServiceError> {
+    build_occurrence_removal_update(occurrence_uri)
+}
+
+fn build_replace_occurrence_update(occurrence_uri: &str) -> Result<String, OccurrenceServiceError> {
+    build_occurrence_removal_update(occurrence_uri)
+}
+
+fn build_search_occurrences_query(
+    filters: &[SearchOccurrenceFilterInput],
+    visibility: &SearchVisibility,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<String, OccurrenceServiceError> {
+    let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+    let basis_of_record_predicate = "http://rs.tdwg.org/dwc/terms/basisOfRecord";
+    let recorded_by_predicate = "http://rs.tdwg.org/dwc/terms/recordedBy";
+    let created_predicate = "http://purl.org/dc/terms/created";
+    let modified_predicate = "http://purl.org/dc/terms/modified";
+    let filter_patterns = build_search_filter_patterns(filters)?;
+    let visibility_patterns = build_search_visibility_patterns(visibility)?;
+    let cursor_filter = build_search_cursor_filter(cursor)?;
+    let query_limit = limit.max(1) + 1;
+
+    // Requiring backend-managed created identifies the occurrence root and
+    // prevents child URIs, which share the URI prefix, from becoming list rows.
+    Ok(format!(
+        r#"
+        SELECT DISTINCT ?occurrence ?scientificName ?basisOfRecord ?recordedBy ?created ?modified ?accessRights ?creator
+        WHERE {{
+          GRAPH <{OCCURRENCE_GRAPH_URI}> {{
+            ?occurrence <{created_predicate}> ?created .
+            FILTER(STRSTARTS(STR(?occurrence), "{OCCURRENCE_URI_BASE}"))
+            {filter_patterns}
+            {visibility_patterns}
+            {cursor_filter}
+            OPTIONAL {{
+              {{ ?occurrence <{scientific_name_predicate}> ?scientificName . }}
+              UNION
+              {{
+                ?occurrence <{HAS_IDENTIFICATION_PREDICATE_URI}> ?identification .
+                ?identification <{scientific_name_predicate}> ?scientificName .
+              }}
+            }}
+            OPTIONAL {{ ?occurrence <{basis_of_record_predicate}> ?basisOfRecord . }}
+            OPTIONAL {{
+              {{ ?occurrence <{recorded_by_predicate}> ?recordedBy . }}
+              UNION
+              {{
+                ?occurrence <{HAS_EVENT_PREDICATE_URI}> ?event .
+                ?event <{recorded_by_predicate}> ?recordedBy .
+              }}
+            }}
+            OPTIONAL {{ ?occurrence <{modified_predicate}> ?modified . }}
+          }}
+        }}
+        ORDER BY DESC(?created) DESC(?occurrence)
+        LIMIT {query_limit}
+        "#
+    ))
+}
 
 // Apache Jena Fusekiとの通信を担当する。service層からSPARQL/HTTP詳細を隠す。
 #[derive(Clone)]
@@ -56,6 +184,50 @@ impl FusekiClient {
 
 #[async_trait::async_trait]
 impl OccurrenceRdfStore for FusekiClient {
+    async fn list_darwin_core_terms(&self) -> Result<Vec<DarwinCoreTerm>, OccurrenceServiceError> {
+        let query = format!(
+            r#"
+            SELECT DISTINCT ?term ?localName
+            WHERE {{ GRAPH <{DARWIN_CORE_VOCABULARY_GRAPH_URI}> {{
+                ?term <{LOCAL_NAME_PREDICATE_URI}> ?localName .
+                FILTER(isIRI(?term))
+            }} }}
+            ORDER BY LCASE(STR(?localName)) STR(?term)
+        "#
+        );
+        let response = self
+            .http
+            .post(self.config.sparql_url())
+            .basic_auth(&self.config.user, Some(&self.config.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/sparql-results+json")
+            .body(query)
+            .send()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        if !response.status().is_success() {
+            return Err(OccurrenceServiceError::StoreFailed);
+        }
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        let bindings = body["results"]["bindings"]
+            .as_array()
+            .ok_or(OccurrenceServiceError::StoreFailed)?;
+        bindings
+            .iter()
+            .map(|binding| {
+                Ok(DarwinCoreTerm {
+                    uri: binding_value(binding, "term")
+                        .ok_or(OccurrenceServiceError::StoreFailed)?,
+                    local_name: binding_value(binding, "localName")
+                        .ok_or(OccurrenceServiceError::StoreFailed)?,
+                })
+            })
+            .collect()
+    }
+
     async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
         self.post_nquads(nquads)
             .await
@@ -67,7 +239,7 @@ impl OccurrenceRdfStore for FusekiClient {
         media_uri: &str,
     ) -> Result<bool, OccurrenceServiceError> {
         let graph_uri = "https://bio-database.net/graphs/occurrences";
-        let occurrence_uri_base = "https://bio-database.net/occurrences/";
+        let occurrence_uri_base = OCCURRENCE_URI_BASE;
         let access_rights_predicate = "http://purl.org/dc/terms/accessRights";
         let public_access_rights_uri = "https://bio-database.net/terms/access-rights/public";
         let media_uri = escape_sparql_iri(media_uri)?;
@@ -155,43 +327,13 @@ impl OccurrenceRdfStore for FusekiClient {
         &self,
         input: SearchOccurrencesStoreInput,
     ) -> Result<SearchOccurrencesStorePage, OccurrenceServiceError> {
-        let graph_uri = "https://bio-database.net/graphs/occurrences";
-        let occurrence_uri_base = "https://bio-database.net/occurrences/";
-        let scientific_name_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
-        let basis_of_record_predicate = "http://rs.tdwg.org/dwc/terms/basisOfRecord";
-        let recorded_by_predicate = "http://rs.tdwg.org/dwc/terms/recordedBy";
-        let created_predicate = "http://purl.org/dc/terms/created";
-        let modified_predicate = "http://purl.org/dc/terms/modified";
-
-        // 検索条件・閲覧権限・cursorをSPARQL文字列に分解してから組み立てる。
-        let filter_patterns = build_search_filter_patterns(&input.filters)?;
-        let visibility_patterns = build_search_visibility_patterns(&input.visibility)?;
-        let cursor_filter = build_search_cursor_filter(input.cursor.as_deref())?;
         let limit = input.limit.max(1);
-        // limit+1件取得し、余分な1件の有無でhas_nextを判定する。
-        let query_limit = limit + 1;
-
-        let query = format!(
-            r#"
-            SELECT DISTINCT ?occurrence ?scientificName ?basisOfRecord ?recordedBy ?created ?modified ?accessRights ?creator
-            WHERE {{
-              GRAPH <{graph_uri}> {{
-                ?occurrence ?p ?o .
-                FILTER(STRSTARTS(STR(?occurrence), "{occurrence_uri_base}"))
-                {filter_patterns}
-                {visibility_patterns}
-                {cursor_filter}
-                OPTIONAL {{ ?occurrence <{scientific_name_predicate}> ?scientificName . }}
-                OPTIONAL {{ ?occurrence <{basis_of_record_predicate}> ?basisOfRecord . }}
-                OPTIONAL {{ ?occurrence <{recorded_by_predicate}> ?recordedBy . }}
-                OPTIONAL {{ ?occurrence <{created_predicate}> ?created . }}
-                OPTIONAL {{ ?occurrence <{modified_predicate}> ?modified . }}
-              }}
-            }}
-            ORDER BY DESC(?created) DESC(?occurrence)
-            LIMIT {query_limit}
-            "#
-        );
+        let query = build_search_occurrences_query(
+            &input.filters,
+            &input.visibility,
+            input.cursor.as_deref(),
+            limit,
+        )?;
 
         let sparql_url = format!("{}/sparql", self.config.base_url.trim_end_matches('/'));
 
@@ -226,7 +368,7 @@ impl OccurrenceRdfStore for FusekiClient {
             let occurrence_uri =
                 binding_value(binding, "occurrence").ok_or(OccurrenceServiceError::StoreFailed)?;
             let occurrence_id = occurrence_uri
-                .strip_prefix(occurrence_uri_base)
+                .strip_prefix(OCCURRENCE_URI_BASE)
                 .and_then(|id| uuid::Uuid::parse_str(id).ok())
                 .ok_or(OccurrenceServiceError::StoreFailed)?;
 
@@ -272,19 +414,7 @@ impl OccurrenceRdfStore for FusekiClient {
         occurrence_uri: &str,
         nquads: Vec<u8>,
     ) -> Result<(), OccurrenceServiceError> {
-        let graph_uri = "https://bio-database.net/graphs/occurrences";
-        let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
-
-        // Fusekiには主語単位の置換APIがないため、先に対象subjectのquadだけを消してから再insertする。
-        let update = format!(
-            r#"
-            DELETE WHERE {{
-              GRAPH <{graph_uri}> {{
-                <{occurrence_uri}> ?p ?o .
-              }}
-            }}
-            "#
-        );
+        let update = build_replace_occurrence_update(occurrence_uri)?;
 
         let response = self
             .http
@@ -309,19 +439,7 @@ impl OccurrenceRdfStore for FusekiClient {
         &self,
         occurrence_uri: &str,
     ) -> Result<(), OccurrenceServiceError> {
-        let graph_uri = "https://bio-database.net/graphs/occurrences";
-        let occurrence_uri = escape_sparql_iri(occurrence_uri)?;
-
-        // MVPの削除仕様は、対象occurrence URIをsubjectに持つquadだけを物理削除する。
-        let update = format!(
-            r#"
-            DELETE WHERE {{
-              GRAPH <{graph_uri}> {{
-                <{occurrence_uri}> ?p ?o .
-              }}
-            }}
-            "#
-        );
+        let update = build_delete_occurrence_update(occurrence_uri)?;
 
         let response = self
             .http
@@ -347,21 +465,7 @@ impl OccurrenceRdfStore for FusekiClient {
         use oxrdf::{GraphName, NamedNode, Quad};
         use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 
-        let graph_uri = "https://bio-database.net/graphs/occurrences";
-
-        // 詳細取得では一覧用DTOではなくRDF全文を返すため、CONSTRUCTで対象subjectのtriplesを取る。
-        let query = format!(
-            r#"
-            CONSTRUCT {{
-              <{occurrence_uri}> ?p ?o .
-            }}
-            WHERE {{
-              GRAPH <{graph_uri}> {{
-                <{occurrence_uri}> ?p ?o .
-              }}
-            }}
-            "#
-        );
+        let query = build_get_occurrence_query(occurrence_uri)?;
 
         let sparql_url = format!("{}/sparql", self.config.base_url.trim_end_matches('/'));
 
@@ -398,8 +502,8 @@ impl OccurrenceRdfStore for FusekiClient {
             return Ok(None);
         }
 
-        let graph_name =
-            NamedNode::new(graph_uri).map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        let graph_name = NamedNode::new(OCCURRENCE_GRAPH_URI)
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
 
         // FusekiからはN-Triplesで受けるため、API仕様のN-Quadsへoccurrence graphを付け直す。
         let quads = triples
@@ -477,48 +581,51 @@ fn build_search_filter_patterns(
         }
 
         let predicate = escape_sparql_iri(&filter.predicate)?;
+        let object_var = format!("?filterObject{index}");
+        let predicate_pattern = match OccurrenceTarget::for_predicate(&filter.predicate)
+            .intermediate_definition()
+        {
+            None => format!("?occurrence <{predicate}> {object_var} ."),
+            Some((_, link_predicate_uri, _)) => {
+                let target_var = format!("?filterTarget{index}");
+                // Keep legacy star-shaped records searchable during migration.
+                format!(
+                    "{{ ?occurrence <{predicate}> {object_var} . }} UNION {{ ?occurrence <{link_predicate_uri}> {target_var} . {target_var} <{predicate}> {object_var} . }}"
+                )
+            }
+        };
 
         match filter.value_type.as_str() {
             "literal" => {
-                let object_var = format!("?filterObject{}", index);
                 let value = escape_sparql_literal(&filter.value.trim().to_lowercase());
-
                 patterns.push(format!(
-                    "?occurrence <{}> {} . FILTER(isLiteral({}) && LCASE(STR({})) = \"{}\")",
-                    predicate, object_var, object_var, object_var, value
+                    "{predicate_pattern} FILTER(isLiteral({object_var}) && LCASE(STR({object_var})) = \"{value}\")"
                 ));
             }
             "uri" => {
-                let object_var = format!("?filterObject{}", index);
                 let object = format!("<{}>", escape_sparql_iri(&filter.value)?);
                 let subclass_of_predicate = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 
-                // URI filterは完全一致に加えて、外部taxonomy graphのsubClassOf階層も辿る。
                 patterns.push(format!(
-                    r#"?occurrence <{}> {} .
+                    r#"{predicate_pattern}
                     FILTER(
-                        {} = {}
+                        {object_var} = {object}
                         || EXISTS {{
-                            GRAPH <{}> {{
-                                {} <{}>+ {} .
+                            GRAPH <{GBIF_BACKBONE_TAXONOMY_GRAPH_URI}> {{
+                                {object_var} <{subclass_of_predicate}>+ {object} .
                             }}
                         }}
-                    )"#,
-                    predicate,
-                    object_var,
-                    object_var,
-                    object,
-                    GBIF_BACKBONE_TAXONOMY_GRAPH_URI,
-                    object_var,
-                    subclass_of_predicate,
-                    object
+                    )"#
                 ));
             }
             _ => return Err(OccurrenceServiceError::StoreFailed),
         }
     }
 
-    Ok(patterns.join("\n"))
+    Ok(patterns.join(
+        "
+",
+    ))
 }
 
 // SPARQL文字列へ埋め込むIRIは、構文を壊す文字を拒否して簡易的な注入対策にする。
@@ -600,6 +707,220 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use uuid::Uuid;
+
+    #[test]
+    fn build_search_filter_patterns_routes_predicates_through_intermediate_nodes() {
+        let cases = [
+            (
+                "http://rs.tdwg.org/dwc/terms/scientificName",
+                HAS_IDENTIFICATION_PREDICATE_URI,
+            ),
+            (
+                "http://rs.tdwg.org/dwc/terms/eventDate",
+                HAS_EVENT_PREDICATE_URI,
+            ),
+            (
+                "http://rs.tdwg.org/dwc/terms/locality",
+                HAS_LOCATION_PREDICATE_URI,
+            ),
+        ];
+
+        for (predicate, link_predicate) in cases {
+            let patterns = build_search_filter_patterns(&[SearchOccurrenceFilterInput {
+                predicate: predicate.to_string(),
+                value: "value".to_string(),
+                value_type: "literal".to_string(),
+                match_type: "exact".to_string(),
+            }])
+            .expect("routed filter should build");
+
+            assert!(patterns.contains(link_predicate));
+            assert!(patterns.contains(predicate));
+        }
+
+        let unknown_predicate = "https://example.org/vocab/custom";
+        let patterns = build_search_filter_patterns(&[SearchOccurrenceFilterInput {
+            predicate: unknown_predicate.to_string(),
+            value: "value".to_string(),
+            value_type: "literal".to_string(),
+            match_type: "exact".to_string(),
+        }])
+        .expect("unknown filter should build");
+        assert!(patterns.contains(&format!("?occurrence <{unknown_predicate}>")));
+        assert!(!patterns.contains("hasIdentification"));
+        assert!(!patterns.contains("hasEvent"));
+        assert!(!patterns.contains("hasLocation"));
+    }
+
+    #[test]
+    fn build_get_occurrence_query_includes_intermediate_nodes() {
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let query = build_get_occurrence_query(occurrence_uri).expect("detail query should build");
+
+        assert!(query.contains("<https://bio-database.net/terms/hasIdentification>"));
+        assert!(query.contains("<https://bio-database.net/terms/hasEvent>"));
+        assert!(query.contains("<https://bio-database.net/terms/hasLocation>"));
+        assert!(query.contains("?intermediate ?intermediatePredicate ?intermediateObject"));
+    }
+
+    #[test]
+    fn build_delete_occurrence_update_includes_intermediate_nodes() {
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let update =
+            build_delete_occurrence_update(occurrence_uri).expect("delete update should build");
+
+        assert!(update.contains("<https://bio-database.net/terms/hasIdentification>"));
+        assert!(update.contains("<https://bio-database.net/terms/hasEvent>"));
+        assert!(update.contains("<https://bio-database.net/terms/hasLocation>"));
+        assert!(update.contains("?intermediate ?intermediatePredicate ?intermediateObject"));
+    }
+
+    #[test]
+    fn build_replace_occurrence_update_includes_intermediate_nodes() {
+        let occurrence_uri =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let update =
+            build_replace_occurrence_update(occurrence_uri).expect("replace update should build");
+
+        assert!(update.contains("<https://bio-database.net/terms/hasIdentification>"));
+        assert!(update.contains("<https://bio-database.net/terms/hasEvent>"));
+        assert!(update.contains("<https://bio-database.net/terms/hasLocation>"));
+        assert!(update.contains("?intermediate ?intermediatePredicate ?intermediateObject"));
+    }
+
+    #[test]
+    fn build_search_occurrences_query_reads_intermediate_representative_fields() {
+        let query = build_search_occurrences_query(&[], &SearchVisibility::PublicOnly, None, 50)
+            .expect("search query should build");
+
+        assert!(query.contains(HAS_IDENTIFICATION_PREDICATE_URI));
+        assert!(query.contains(HAS_EVENT_PREDICATE_URI));
+        assert!(query.contains("?identification"));
+        assert!(query.contains("?event"));
+        assert!(query.contains("?occurrence <http://purl.org/dc/terms/created> ?created"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_occurrence_lifecycle_supports_intermediate_node_structure() {
+        use crate::features::occurrences::service::{
+            CreateOccurrenceInput, DeleteOccurrenceInput, GetOccurrenceInput, OccurrenceService,
+            SearchOccurrencesInput, UpdateOccurrenceInput,
+        };
+
+        dotenvy::dotenv().ok();
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+        let client = FusekiClient::new(config);
+        let user_id = Uuid::new_v4();
+        let scientific_name = format!("Intermediate lifecycle {}", Uuid::new_v4());
+        let frontend_nquads = format!(
+            r#"_:occurrence <http://rs.tdwg.org/dwc/terms/scientificName> "{scientific_name}" <{OCCURRENCE_GRAPH_URI}> .
+_:occurrence <http://rs.tdwg.org/dwc/terms/recordedBy> "Yamada" <{OCCURRENCE_GRAPH_URI}> .
+_:occurrence <http://rs.tdwg.org/dwc/terms/locality> "Tokyo" <{OCCURRENCE_GRAPH_URI}> ."#
+        );
+
+        let created = OccurrenceService::create_occurrence(
+            CreateOccurrenceInput {
+                content_type: "application/n-quads".to_string(),
+                rdf_body: frontend_nquads.into_bytes(),
+                create_user_id: user_id,
+            },
+            &client,
+        )
+        .await
+        .expect("normalized occurrence should be saved to real Fuseki");
+
+        let fetched = OccurrenceService::get_occurrence(
+            GetOccurrenceInput {
+                occurrence_id: created.occurrence_id,
+            },
+            &client,
+        )
+        .await
+        .expect("normalized occurrence should be fetched")
+        .expect("saved occurrence should exist");
+        let fetched_text = String::from_utf8(fetched.nquads).expect("N-Quads should be UTF-8");
+        assert!(fetched_text.contains(&format!("{}/identifications/1", created.occurrence_uri)));
+        assert!(fetched_text.contains(&format!("{}/events/1", created.occurrence_uri)));
+        assert!(fetched_text.contains(&format!("{}/locations/1", created.occurrence_uri)));
+
+        let page = OccurrenceService::search_occurrences(
+            SearchOccurrencesInput {
+                filters: vec![SearchOccurrenceFilterInput {
+                    predicate: "http://rs.tdwg.org/dwc/terms/scientificName".to_string(),
+                    value: scientific_name,
+                    value_type: "literal".to_string(),
+                    match_type: "exact".to_string(),
+                }],
+                limit: 10,
+                cursor: None,
+                visibility: SearchVisibility::All,
+            },
+            &client,
+        )
+        .await
+        .expect("normalized scientificName should be searchable");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(
+            page.items[0].occurrence_id,
+            created.occurrence_id.to_string()
+        );
+
+        let update_nquads = format!(
+            r#"_:occurrence <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <{OCCURRENCE_GRAPH_URI}> ."#
+        );
+        OccurrenceService::update_occurrence(
+            UpdateOccurrenceInput {
+                occurrence_id: created.occurrence_id,
+                rdf_body: update_nquads.into_bytes(),
+            },
+            &client,
+        )
+        .await
+        .expect("real Fuseki replacement should rebuild intermediate nodes");
+
+        let updated = OccurrenceService::get_occurrence(
+            GetOccurrenceInput {
+                occurrence_id: created.occurrence_id,
+            },
+            &client,
+        )
+        .await
+        .expect("updated occurrence should be fetched")
+        .expect("updated occurrence should exist");
+        let updated_text = String::from_utf8(updated.nquads).expect("N-Quads should be UTF-8");
+        assert!(updated_text.contains(&format!("{}/locations/1", created.occurrence_uri)));
+        assert!(updated_text.contains("\"Kyoto\""));
+        assert!(!updated_text.contains("/identifications/1"));
+        assert!(!updated_text.contains("/events/1"));
+
+        OccurrenceService::delete_occurrence(
+            DeleteOccurrenceInput {
+                occurrence_id: created.occurrence_id,
+            },
+            &client,
+        )
+        .await
+        .expect("real Fuseki delete should remove the normalized subgraph");
+
+        let deleted = OccurrenceService::get_occurrence(
+            GetOccurrenceInput {
+                occurrence_id: created.occurrence_id,
+            },
+            &client,
+        )
+        .await
+        .expect("deleted occurrence lookup should succeed");
+        assert!(deleted.is_none());
+    }
 
     #[tokio::test]
     #[ignore]
@@ -1533,6 +1854,49 @@ mod tests {
         assert!(
             has_creator,
             "fetched N-Quads should contain the saved creator"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fuseki_client_lists_darwin_core_terms_from_real_fuseki() {
+        dotenvy::dotenv().ok();
+
+        let config = FusekiConfig {
+            base_url: std::env::var("FUSEKI_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3033/occurrence".to_string()),
+            user: std::env::var("FUSEKI_USER").unwrap_or_else(|_| "occurrence_backend".to_string()),
+            password: std::env::var("FUSEKI_PASSWORD")
+                .unwrap_or_else(|_| "change_me_backend_password".to_string()),
+        };
+
+        let client = FusekiClient::new(config);
+        let terms = client
+            .list_darwin_core_terms()
+            .await
+            .expect("Darwin Core terms should be loadable from real Fuseki");
+
+        assert!(
+            !terms.is_empty(),
+            "Darwin Core graph should provide at least one term"
+        );
+
+        let mut sorted_terms = terms.clone();
+        sorted_terms.sort_by(|left, right| {
+            left.local_name
+                .to_lowercase()
+                .cmp(&right.local_name.to_lowercase())
+                .then(left.uri.cmp(&right.uri))
+        });
+
+        assert_eq!(
+            terms, sorted_terms,
+            "terms should already be sorted by local_name"
+        );
+        assert!(
+            terms
+                .iter()
+                .all(|term| !term.uri.is_empty() && !term.local_name.is_empty())
         );
     }
 }

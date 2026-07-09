@@ -214,6 +214,35 @@ RDF、media、認証入力のvalidationは実装するが、エラーごとのst
 
 ---
 
+## IRI目的語に対するdwcからdwciriへの自動変換
+
+### MVPでの扱い
+
+frontendはdwc述語と目的語を送信する。
+backendは現時点では目的語がIRIでも述語をdwciriへ自動変換しない。
+
+利用するNamed Graph。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+### 将来実装する内容
+
+- Darwin Core / dwciri語彙情報をvocabulary graphへ投入する
+- dwcとdwciriの対応関係をoccurrence profile graphへ投入する
+- 目的語がIRIでprofileに対応関係がある場合だけ、述語をdwcからdwciriへ変換する
+- リテラル目的語ではdwc述語を維持する
+- 対応関係がない述語は変換しない
+- 変換後にOccurrence、Identification、Event、Locationへの振り分けを行う
+- profile graphはfrontendから更新できないようにする
+- literal、IRI、対応なし、不正profileのテストを追加する
+
+変換メタ情報を表現するRDF述語と、マスター更新・バージョン管理方式は実装前に確定する。
+
+---
+
 ## 管理方針
 
 このファイルに記載した項目を実装する場合は、先に該当テストを追加する。

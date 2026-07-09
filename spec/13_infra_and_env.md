@@ -110,6 +110,14 @@ COOKIE_SECURE=false
   - taxon URI: `https://bio-database.net/taxa/gbif/{id}`
   - `{id}` はGBIF taxon key
   - 取り込み元バージョンと取得日時を記録する
+- Darwin Core vocabulary graph
+  - graph URI: `https://bio-database.net/graphs/vocabularies/darwin-core`
+  - Darwin Core Termsとdwciriの語彙情報を格納する
+  - マスターデータ投入処理だけが更新する
+- occurrence profile graph
+  - graph URI: `https://bio-database.net/graphs/app/occurrence-profile`
+  - dwcからdwciriへの変換用メタ情報を格納する
+  - backendがread-onlyで参照する
 - master ontology graph
 
 ---

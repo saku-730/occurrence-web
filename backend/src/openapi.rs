@@ -10,8 +10,8 @@ use crate::features::auth::dto::{
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
 
 use crate::features::occurrences::dto::{
-    CreateOccurrenceResponse, DeleteOccurrenceResponse, SearchOccurrenceFilter,
-    SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesRequest,
+    CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
+    SearchOccurrenceFilter, SearchOccurrenceItem, SearchOccurrencesPage, SearchOccurrencesRequest,
     SearchOccurrencesRequestPage, SearchOccurrencesResponse,
 };
 
@@ -27,6 +27,7 @@ use crate::features::occurrences::dto::{
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
         crate::features::occurrences::handler::create_occurrence,
+        crate::features::occurrences::handler::list_darwin_core_terms,
         crate::features::occurrences::handler::search_occurrences,
         crate::features::occurrences::handler::get_occurrence,
         crate::features::occurrences::handler::delete_occurrence,
@@ -52,6 +53,7 @@ use crate::features::occurrences::dto::{
             CurrentUserResponse,
             CreateOccurrenceResponse,
             DeleteOccurrenceResponse,
+            DarwinCoreTermResponse,
             SearchOccurrenceItem,
             SearchOccurrencesPage,
             SearchOccurrencesResponse,
@@ -66,7 +68,8 @@ use crate::features::occurrences::dto::{
     tags(
         (name = "auth", description = "Authentication endpoints"),
         (name = "occurrences", description = "Occurrence RDF endpoints"),
-        (name = "media", description = "Media attachment endpoints")
+        (name = "media", description = "Media attachment endpoints"),
+        (name = "vocabularies", description = "Read-only RDF vocabulary endpoints")
     )
 )]
 pub struct ApiDoc;

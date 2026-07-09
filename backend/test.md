@@ -197,6 +197,10 @@
 - [x] フロントから送られた、N-Quadsにcreate_user_idを付加`add_create_user_id_quad_adds_creator_resource_in_occurrence_graph`
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
+- [x] Identification / Event / Location対象述語があると、各`/1`中間ノード・`has*`接続・規定`rdf:type`を生成する`build_occurrence_nquads_creates_intermediate_nodes_for_routed_predicates`
+- [x] 仕様に列挙された全Identification / Event / Location述語が正しいtargetへ分類される`occurrence_target_routes_all_configured_predicates`
+- [x] 対象述語がない種別の空中間ノードを生成せず、unknown predicateとfrontendの`rdf:type`をOccurrence直下に保持する`build_occurrence_nquads_omits_unused_nodes_and_keeps_unrouted_predicates_on_occurrence`
+- [x] frontendから`hasIdentification` / `hasEvent` / `hasLocation`が送られたら登録を拒否する`build_occurrence_nquads_rejects_frontend_intermediate_link_predicates`
 - [x] UUIDを発行してN-Quadsを組み立てできる。``
 - [x] 現在時刻をもとに、フロントからおくられたN-Quadsにcreatedを付加`add_created_quad_adds_created_datetime_in_occurrence_graph`
 - [x] 現在時刻をもとに、フロントからおくられたN-Quadsにmodifiedを付加`add_modified_quad_adds_modified_datetime_in_occurrence_graph`
@@ -231,6 +235,7 @@
 ### service
 
 - [x] `OccurrenceService::update_occurrence` は既存creator/createdを維持し、modifiedを更新して、同じoccurrence URIで置換保存する`update_occurrence_preserves_creator_and_created_updates_modified_and_replaces_same_occurrence_uri`
+- [x] `OccurrenceService::update_occurrence` は更新入力を再正規化し、対象述語を`/1`中間ノードへ保存する`update_occurrence_rebuilds_intermediate_nodes_for_routed_predicates`
 
 
 ## Occurrence data delete
@@ -247,6 +252,7 @@
 ### service
 
 - [x] `OccurrenceService::delete_occurrence` はoccurrence_idからoccurrence URIを組み立て、そのURIのRDFを削除する`delete_occurrence_deletes_existing_occurrence_nquads_by_occurrence_uri`
+- [x] Fuseki削除SPARQLはOccurrence本体と接続されたIdentification / Event / Locationのquadを削除する`build_delete_occurrence_update_includes_intermediate_nodes`
 
 ## Occurrence data detail
 
@@ -268,6 +274,7 @@
 - [x] `OccurrenceService::get_occurrence` は指定された occurrence_id から occurrence_uri を組み立て、OccurrenceRdfStore から該当 N-Quads を取得できる`get_occurrence_returns_nquads_for_requested_occurrence_uri`
 - [x] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがNoneを返したらOk(None)を返す`get_occurrence_returns_none_when_store_returns_none`
 - [x] `OccurrenceService::get_occurrence` はOccurrenceRdfStoreがStoreFailedを返したらそのエラーを伝播する`get_occurrence_propagates_store_failed_error`
+- [x] Fuseki詳細取得CONSTRUCTはOccurrence本体と接続されたIdentification / Event / Locationを平坦化せず取得する`build_get_occurrence_query_includes_intermediate_nodes`
 
 ### other
 
@@ -292,6 +299,9 @@
 
 - [x] `OccurrenceService::search_occurrences` はOccurrenceRdfStoreの検索結果を一覧レスポンスDTOへ変換する`search_occurrences_maps_store_rows_to_response_dto`
 - [x] `OccurrenceService::search_occurrences` はfiltersのpredicate/value/value_type/matchをOccurrenceRdfStoreへ渡す`search_occurrences_passes_filters_to_store`
+- [x] Fuseki検索filterはIdentification / Event / Location対象述語を各`has*`経由で検索し、unknown predicateはOccurrence直下を検索する`build_search_filter_patterns_routes_predicates_through_intermediate_nodes`
+- [x] Fuseki一覧取得はscientificNameをIdentification、recordedByをEventから取得し、子ノードをOccurrenceとして誤認しない`build_search_occurrences_query_reads_intermediate_representative_fields`
+- [x] Fuseki置換SPARQLは既存Occurrence本体と接続されたIdentification / Event / Locationを削除してから保存する`build_replace_occurrence_update_includes_intermediate_nodes`
 
 ### other
 
@@ -313,6 +323,15 @@
 ## Real fuseki test 統合テスト
 
 - [x] app経由で`POST /occurrences`に有効sessionと正しいN-Quadsを送ると、実Fusekiに保存されSPARQL ASKで確認できる（ignored）`create_occurrence_route_saves_data_to_real_fuseki`
+- [x] `OccurrenceService`と実Fusekiで中間ノード構造を作成・詳細取得・検索・更新置換・削除できる（ignored）`fuseki_occurrence_lifecycle_supports_intermediate_node_structure`
 - [x] appの`build_app`に実Fuseki storeを入れると、`POST /occurrences/search`で実Fusekiのoccurrenceを検索できる（ignored）`search_occurrences_route_returns_results_from_real_fuseki`
 - [x] appの`build_app`に実Fuseki storeを入れると、`PUT /occurrences/{occurrence_id}`で実Fusekiの既存occurrenceを置換更新できる（ignored）`update_occurrence_route_replaces_existing_occurrence_in_real_fuseki`
 
+- [x] `GET /vocabularies/darwin-core` はDarwin Core graphの述語URIと`localName`をA-Z順で返す`list_darwin_core_terms_route_returns_sorted_terms`
+- [x] `FusekiClient` はDarwin Core vocabulary graphから`localName`付き語彙をA-Z順で取得する（ignored）`fuseki_client_lists_darwin_core_terms_from_real_fuseki`
+
+## Auth user summary
+
+### app
+
+- [ ] `GET /users/{user_id}`で既存ユーザーのuser_nameを返す`user_summary_route_returns_user_name_for_existing_user`

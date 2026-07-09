@@ -4,7 +4,7 @@ use axum::http::{
 };
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     response::{IntoResponse, Response},
 };
 
@@ -13,8 +13,9 @@ use super::{
         CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
         ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
         PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse,
-        RegisterRequest, RegisterResponse,
+        RegisterRequest, RegisterResponse, UserSummaryResponse,
     },
+    repository::AuthRepository,
     mail::{MailError, send_mail},
     service::{AuthService, AuthServiceError},
 };
@@ -34,6 +35,7 @@ pub enum AuthHandlerError {
     InvalidCredentials,
     InvalidSessionCookie,
     InvalidSession,
+    UserNotFound,
 }
 
 impl From<AuthServiceError> for AuthHandlerError {
@@ -57,6 +59,12 @@ impl From<MailError> for AuthHandlerError {
     //.await?用
     fn from(error: MailError) -> Self {
         Self::Mail(error)
+    }
+}
+
+impl From<sqlx::Error> for AuthHandlerError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
     }
 }
 
@@ -160,6 +168,15 @@ impl IntoResponse for AuthHandlerError {
                 };
 
                 (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+            }
+
+            AuthHandlerError::UserNotFound => {
+                let body = ErrorResponse {
+                    error: "not_found".to_string(),
+                    message: "User not found".to_string(),
+                };
+
+                (StatusCode::NOT_FOUND, Json(body)).into_response()
             }
         }
     }
@@ -499,6 +516,44 @@ pub async fn me(
         email: output.email,
         user_name: output.user_name,
         role: output.role,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/users/{user_id}",
+    params(("user_id" = uuid::Uuid, Path, description = "User UUID")),
+    responses(
+        (
+            status = 200,
+            description = "Get a user summary",
+            body = UserSummaryResponse
+        ),
+        (
+            status = 404,
+            description = "User not found",
+            body = ErrorResponse
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ErrorResponse
+        )
+    ),
+    tag = "auth"
+)]
+pub async fn user_summary(
+    State(state): State<AppState>,
+    Path(user_id): Path<uuid::Uuid>,
+) -> Result<(StatusCode, Json<UserSummaryResponse>), AuthHandlerError> {
+    let user = AuthRepository::find_user_by_id(&state.posgre, user_id).await?;
+    let user = user.ok_or(AuthHandlerError::UserNotFound)?;
+
+    let response = UserSummaryResponse {
+        user_id: user.user_id,
+        user_name: user.user_name,
     };
 
     Ok((StatusCode::OK, Json(response)))
