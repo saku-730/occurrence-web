@@ -12,7 +12,6 @@ const USER_URI_PREFIX = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI = "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_MEDIA_PREDICATE_URI = "http://rs.tdwg.org/ac/terms/associatedMedia";
 const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
-const DWC_TERM_URI_PREFIX = "http://rs.tdwg.org/dwc/terms/";
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
@@ -224,8 +223,8 @@ export default function EditOccurrencePage() {
 
     try {
       const terms = await apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core");
-      // 編集でも候補は Darwin Core 系だけを出し、dwciri は direct input のみ許可する。
-      const visibleTerms = terms.filter((term) => term.uri.startsWith(DWC_TERM_URI_PREFIX));
+      // 編集でもbackendから返った語彙候補は制限せず表示し、toTaxonだけは「分類」候補へ一本化する。
+      const visibleTerms = terms.filter((term) => term.uri !== DWCIRI_TO_TAXON_URI);
       setDarwinCoreTerms([
         { uri: DWCIRI_TO_TAXON_URI, local_name: DWCIRI_TO_TAXON_LABEL },
         ...visibleTerms,

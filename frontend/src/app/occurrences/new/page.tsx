@@ -10,9 +10,12 @@ const OCCURRENCE_GRAPH_URI =
 const ASSOCIATED_MEDIA_PREDICATE_URI =
   "http://rs.tdwg.org/ac/terms/associatedMedia";
 const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
-const DWC_TERM_URI_PREFIX = "http://rs.tdwg.org/dwc/terms/";
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
+const DWC_SCIENTIFIC_NAME_URI = "http://rs.tdwg.org/dwc/terms/scientificName";
+const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
+const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
+const GBIF_SUGGEST_DEBOUNCE_MS = 300;
 
 interface DarwinCoreTerm {
   uri: string;
@@ -40,6 +43,13 @@ interface CreateOccurrenceResponse {
   occurrence_uri: string;
 }
 
+interface GbifSpeciesSuggestion {
+  key: number;
+  scientificName: string;
+  canonicalName?: string;
+  rank?: string;
+}
+
 type AuthStatus =
   | "loading"
   | "authenticated"
@@ -58,6 +68,7 @@ export default function NewOccurrencePage() {
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [taxonScientificNames, setTaxonScientificNames] = useState<Record<number, string>>({});
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(
@@ -98,6 +109,15 @@ export default function NewOccurrencePage() {
         row.id === id ? { ...row, [field]: value } : row,
       ),
     );
+
+    if (field === "predicate" && value.trim() !== DWCIRI_TO_TAXON_URI) {
+      setTaxonScientificNames((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    }
   }
 
   async function loadDarwinCoreTerms() {
@@ -105,9 +125,9 @@ export default function NewOccurrencePage() {
     setTermsStatus("loading");
     try {
       const terms = await apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core");
-      // 画面に出すのは Darwin Core の dwc 述語だけにし、dwciri は候補から外す。
+      // backendから返った語彙候補は制限せず表示し、toTaxonだけは「分類」候補へ一本化する。
       const visibleTerms = terms.filter((term) =>
-        term.uri.startsWith(DWC_TERM_URI_PREFIX),
+        term.uri !== DWCIRI_TO_TAXON_URI,
       );
       // 分類は UI 上の特別候補としてだけ追加し、保存値は dwciri:toTaxon に固定する。
       setDarwinCoreTerms([
@@ -129,6 +149,12 @@ export default function NewOccurrencePage() {
 
   function removeRow(id: number) {
     setRows((currentRows) => currentRows.filter((row) => row.id !== id));
+    setTaxonScientificNames((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
   }
 
   function addFiles(files: FileList | null) {
@@ -161,6 +187,7 @@ export default function NewOccurrencePage() {
     let statements: StatementRow[];
     try {
       statements = validateStatementRows(rows);
+      statements = addHiddenScientificNames(statements, taxonScientificNames);
       validateSelectedFiles(selectedFiles);
     } catch (error) {
       setErrorMessage(
@@ -204,6 +231,7 @@ export default function NewOccurrencePage() {
       setSubmissionMessage(null);
       setRows(initialRows.map((row) => ({ ...row })));
       setSelectedFiles([]);
+      setTaxonScientificNames({});
       nextId.current = 3;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -247,7 +275,7 @@ export default function NewOccurrencePage() {
           <h1 className="text-2xl font-semibold">データ登録</h1>
         </div>
 
-        <section className="overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
+        <section className="overflow-visible rounded-md border border-[#d8dfe2] bg-white">
           <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3 text-xs font-medium text-[#526168] md:grid">
             <span>項目名</span>
             <span>値</span>
@@ -274,19 +302,27 @@ export default function NewOccurrencePage() {
                   />
                 </div>
 
-                <label className="min-w-0">
-                  <span className="mb-2 block text-sm font-medium md:sr-only">
-                    値 {index + 1}
-                  </span>
-                  <input
-                    className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
-                    disabled={isSubmitting}
-                    onChange={(event) => updateRow(row.id, "object", event.target.value)}
-                    placeholder="値"
-                    type="text"
-                    value={row.object}
-                  />
-                </label>
+                <ObjectValueField
+                  disabled={isSubmitting}
+                  onChange={(value) => updateRow(row.id, "object", value)}
+                  onTaxonSelect={(scientificName) =>
+                    setTaxonScientificNames((current) => {
+                      if (!scientificName.trim()) {
+                        if (!(row.id in current)) return current;
+                        const next = { ...current };
+                        delete next[row.id];
+                        return next;
+                      }
+
+                      return {
+                        ...current,
+                        [row.id]: scientificName,
+                      };
+                    })
+                  }
+                  predicate={row.predicate}
+                  value={row.object}
+                />
 
                 <button
                   className="h-10 w-fit px-1 text-sm text-[#a23c32] hover:underline disabled:cursor-not-allowed disabled:text-[#9aa5aa] disabled:no-underline md:w-12"
@@ -406,6 +442,184 @@ type PredicateComboboxProps = {
   value: string;
 };
 
+function ObjectValueField({
+  disabled,
+  onChange,
+  onTaxonSelect,
+  predicate,
+  value,
+}: {
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onTaxonSelect: (scientificName: string) => void;
+  predicate: string;
+  value: string;
+}) {
+  if (predicate === DWCIRI_TO_TAXON_URI) {
+    return (
+      <TaxonValueCombobox
+        disabled={disabled}
+        onChange={onChange}
+        onSelectScientificName={onTaxonSelect}
+        value={value}
+      />
+    );
+  }
+
+  return (
+    <label className="min-w-0">
+      <span className="mb-2 block text-sm font-medium md:sr-only">値</span>
+      <input
+        className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="値"
+        type="text"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function TaxonValueCombobox({
+  disabled,
+  onChange,
+  onSelectScientificName,
+  value,
+}: {
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onSelectScientificName: (scientificName: string) => void;
+  value: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const [suggestions, setSuggestions] = useState<GbifSpeciesSuggestion[]>([]);
+  const [suggestStatus, setSuggestStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const lastSelectedLabel = useRef("");
+  const lastSelectedValue = useRef("");
+
+  useEffect(() => {
+    if (value === lastSelectedValue.current && lastSelectedLabel.current) {
+      setQuery(lastSelectedLabel.current);
+      return;
+    }
+
+    setQuery(value);
+  }, [value]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 3) {
+      setSuggestions([]);
+      setSuggestStatus("idle");
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSuggestStatus("loading");
+      void fetch(`${GBIF_SUGGEST_ENDPOINT}?q=${encodeURIComponent(trimmed)}`, {
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error("gbif suggest failed");
+          }
+
+          const items = (await response.json()) as GbifSpeciesSuggestion[];
+          setSuggestions(items.slice(0, 10));
+          setSuggestStatus("loaded");
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setSuggestions([]);
+          setSuggestStatus("error");
+        });
+    }, GBIF_SUGGEST_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredSuggestions = suggestions.filter((item) => {
+    if (!normalizedQuery) return true;
+    return (
+      item.scientificName.toLocaleLowerCase().includes(normalizedQuery) ||
+      (item.canonicalName ?? "").toLocaleLowerCase().includes(normalizedQuery)
+    );
+  });
+
+  return (
+    <div className="relative min-w-0">
+      <input
+        aria-autocomplete="list"
+        aria-expanded={isOpen}
+        className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
+        disabled={disabled}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        onChange={(event) => {
+          const next = event.target.value;
+          setQuery(next);
+          onSelectScientificName("");
+          onChange(next);
+          setIsOpen(true);
+        }}
+        onFocus={() => {
+          setIsOpen(true);
+        }}
+        placeholder="分類"
+        role="combobox"
+        type="text"
+        value={query}
+      />
+      {isOpen ? (
+        <div
+          className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg"
+          role="listbox"
+        >
+          {suggestStatus === "loading" ? (
+            <p className="px-3 py-2 text-sm text-[#65737a]">GBIF候補を読み込み中</p>
+          ) : null}
+          {suggestStatus === "error" ? (
+            <p className="px-3 py-2 text-sm text-[#a23c32]">GBIF候補を取得できませんでした</p>
+          ) : null}
+          {suggestStatus === "loaded" && filteredSuggestions.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-[#65737a]">一致する候補はありません</p>
+          ) : null}
+          {filteredSuggestions.map((item) => (
+            <button
+              className="block w-full px-3 py-2 text-left hover:bg-[#eef2f3] focus:bg-[#eef2f3] focus:outline-none"
+              key={item.key}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const label = item.scientificName || item.canonicalName || String(item.key);
+                const speciesUri = `${GBIF_SPECIES_URI_PREFIX}${item.key}`;
+                lastSelectedLabel.current = label;
+                lastSelectedValue.current = speciesUri;
+                onSelectScientificName(label);
+                onChange(speciesUri);
+                setQuery(label);
+                setIsOpen(false);
+              }}
+              role="option"
+              type="button"
+            >
+              <span className="block text-sm font-medium">{item.scientificName}</span>
+              <span className="block truncate text-xs text-[#65737a]">GBIF key: {item.key}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PredicateCombobox({
   disabled,
   onOpen,
@@ -479,7 +693,7 @@ function PredicateCombobox({
       />
       {isOpen ? (
         <div
-          className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg"
+          className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg"
           role="listbox"
         >
           {termsStatus === "loading" ? (
@@ -545,6 +759,29 @@ function validateStatementRows(rows: StatementRow[]): StatementRow[] {
   }
 
   return statements;
+}
+
+function addHiddenScientificNames(
+  statements: StatementRow[],
+  scientificNamesByRowId: Record<number, string>,
+): StatementRow[] {
+  const nextStatements = [...statements];
+
+  for (const row of statements) {
+    if (row.predicate.trim() !== DWCIRI_TO_TAXON_URI) continue;
+    if (!isAbsoluteHttpUri(row.object)) continue;
+
+    const scientificName = scientificNamesByRowId[row.id];
+    if (!scientificName || !scientificName.trim()) continue;
+
+    nextStatements.push({
+      id: nextStatements.length + 1,
+      predicate: DWC_SCIENTIFIC_NAME_URI,
+      object: scientificName.trim(),
+    });
+  }
+
+  return nextStatements;
 }
 
 function validateSelectedFiles(files: File[]) {

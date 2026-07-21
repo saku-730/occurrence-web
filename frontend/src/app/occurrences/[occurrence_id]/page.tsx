@@ -433,7 +433,7 @@ function formatQuadValue(predicate: string, object: string): string {
   const normalized = normalizeObject(object);
 
   if (predicate === "http://purl.org/dc/terms/created" || predicate === "http://purl.org/dc/terms/modified") {
-    return stripTimestampFormatting(stripDatatype(normalized, XSD_DATE_TIME_URI));
+    return formatLocalDateTime(stripDatatype(normalized, XSD_DATE_TIME_URI));
   }
 
   return normalized;
@@ -448,18 +448,20 @@ function stripDatatype(value: string, datatypeUri: string): string {
   return value;
 }
 
-function stripTimestampFormatting(value: string): string {
-  let formatted = value.trim();
-
-  if (formatted.startsWith("\"") && formatted.endsWith("\"")) {
-    formatted = formatted.slice(1, -1);
+function formatLocalDateTime(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed.startsWith("\"") && trimmed.endsWith("\"")
+    ? trimmed.slice(1, -1)
+    : trimmed;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return normalized.endsWith("Z") ? normalized.slice(0, -1) : normalized;
   }
 
-  if (formatted.endsWith("Z")) {
-    formatted = formatted.slice(0, -1);
-  }
-
-  return formatted;
+  return new Intl.DateTimeFormat("ja-JP", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 function normalizeObject(object: string): string {
@@ -473,3 +475,4 @@ function normalizeObject(object: string): string {
 
   return object;
 }
+
