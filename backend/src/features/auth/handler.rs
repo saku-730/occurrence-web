@@ -15,8 +15,8 @@ use super::{
         PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse,
         RegisterRequest, RegisterResponse, UserSummaryResponse,
     },
-    repository::AuthRepository,
     mail::{MailError, send_mail},
+    repository::AuthRepository,
     service::{AuthService, AuthServiceError},
 };
 

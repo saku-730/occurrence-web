@@ -105,6 +105,20 @@ pub struct DarwinCoreTerm {
     pub local_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PredicateObjectKind {
+    Iri,
+    Literal,
+    Mixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredicateObjectMapping {
+    pub object_kind: PredicateObjectKind,
+    pub iri_equivalent: Option<String>,
+    pub literal_equivalent: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOccurrencesStorePage {
     pub rows: Vec<SearchOccurrenceStoreRow>,
@@ -161,6 +175,13 @@ pub trait OccurrenceRdfStore: Send + Sync {
 
     async fn list_darwin_core_terms(&self) -> Result<Vec<DarwinCoreTerm>, OccurrenceServiceError> {
         Err(OccurrenceServiceError::NotImplemented)
+    }
+
+    async fn predicate_object_mapping(
+        &self,
+        _predicate_uri: &str,
+    ) -> Result<Option<PredicateObjectMapping>, OccurrenceServiceError> {
+        Ok(None)
     }
 
     async fn search_occurrences(
@@ -291,13 +312,25 @@ impl OccurrenceService {
         S: OccurrenceRdfStore + ?Sized,
     {
         // 保存前にbackend管理メタデータを付与し、保存してよい最終N-Quadsへ変換する。
-        let output = Self::prepare_occurrence_for_storage(input)?;
+        let built = build_occurrence_nquads_with_generated_id_and_store(
+            &input.rdf_body,
+            input.create_user_id,
+            store,
+        )
+        .await?;
+
+        let output = CreateOccurrenceOutput {
+            occurrence_id: built.occurrence_id,
+            occurrence_uri: built.occurrence_uri,
+            nquads: built.nquads,
+        };
 
         store.save_nquads(output.nquads.clone()).await?;
 
         Ok(output)
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_occurrence_for_storage(
         input: CreateOccurrenceInput,
     ) -> Result<CreateOccurrenceOutput, OccurrenceServiceError> {
@@ -340,8 +373,13 @@ impl OccurrenceService {
             .await?
             .ok_or(OccurrenceServiceError::StoreFailed)?;
 
-        let nquads =
-            build_updated_occurrence_nquads(&input.rdf_body, &existing_nquads, &occurrence_uri)?;
+        let nquads = build_updated_occurrence_nquads_with_store(
+            &input.rdf_body,
+            &existing_nquads,
+            &occurrence_uri,
+            store,
+        )
+        .await?;
 
         store
             .replace_occurrence_nquads(&occurrence_uri, nquads.clone())
@@ -497,6 +535,42 @@ fn normalize_frontend_quads(
     }
 
     Ok(normalized)
+}
+
+async fn convert_frontend_predicates_by_object_kind<S>(
+    quads: &mut [Quad],
+    store: &S,
+) -> Result<(), OccurrenceServiceError>
+where
+    S: OccurrenceRdfStore + ?Sized,
+{
+    for quad in quads.iter_mut() {
+        let Some(mapping) = store
+            .predicate_object_mapping(quad.predicate.as_str())
+            .await?
+        else {
+            continue;
+        };
+
+        // mixed はリテラル/IRIの両方を許す語彙なので、predicateは入力値のまま保存する。
+        if mapping.object_kind == PredicateObjectKind::Mixed {
+            continue;
+        }
+
+        // 目的語型はN-Quadsをoxrdfでparseした結果から判定する。文字列の見た目では判定しない。
+        let replacement = match (&mapping.object_kind, &quad.object) {
+            (PredicateObjectKind::Iri, Term::Literal(_)) => mapping.literal_equivalent.as_deref(),
+            (PredicateObjectKind::Literal, Term::NamedNode(_)) => mapping.iri_equivalent.as_deref(),
+            _ => None,
+        };
+
+        if let Some(replacement_uri) = replacement {
+            quad.predicate = NamedNode::new(replacement_uri)
+                .map_err(|_| OccurrenceServiceError::InvalidPredicateUri)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -736,6 +810,97 @@ fn serialize_quads_as_nquads(
         .map_err(|_| OccurrenceServiceError::RdfSerializationFailed)
 }
 
+async fn build_occurrence_nquads_with_store<S>(
+    frontend_nquads: &[u8],
+    occurrence_uri: &str,
+    create_user_id: Uuid,
+    store: &S,
+) -> Result<Vec<u8>, OccurrenceServiceError>
+where
+    S: OccurrenceRdfStore + ?Sized,
+{
+    let mut quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(frontend_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    ensure_rdf_contains_at_least_one_quad(&quads)?;
+    ensure_only_occurrence_graph(&quads)?;
+    ensure_single_blank_node_subject(&quads)?;
+    ensure_no_object_blank_node(&quads)?;
+    ensure_no_backend_managed_predicates(&quads)?;
+    ensure_access_rights_is_resource(&quads)?;
+    ensure_license_is_creative_commons_resource(&quads)?;
+
+    convert_frontend_predicates_by_object_kind(&mut quads, store).await?;
+
+    let mut quads = normalize_frontend_quads(quads, occurrence_uri)?;
+
+    add_create_user_id_quad(&mut quads, occurrence_uri, create_user_id)?;
+
+    let now = Utc::now();
+    add_created_quad(&mut quads, occurrence_uri, now)?;
+    add_modified_quad(&mut quads, occurrence_uri, now)?;
+    add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)?;
+
+    serialize_quads_as_nquads(&quads)
+}
+
+async fn build_updated_occurrence_nquads_with_store<S>(
+    frontend_nquads: &[u8],
+    existing_nquads: &[u8],
+    occurrence_uri: &str,
+    store: &S,
+) -> Result<Vec<u8>, OccurrenceServiceError>
+where
+    S: OccurrenceRdfStore + ?Sized,
+{
+    let existing_quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(existing_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    let preserved_creator =
+        required_backend_managed_object(&existing_quads, CREATOR_PREDICATE_URI)?;
+    let preserved_created =
+        required_backend_managed_object(&existing_quads, CREATED_PREDICATE_URI)?;
+
+    let mut quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(frontend_nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| OccurrenceServiceError::RdfParseFailed)?;
+
+    ensure_rdf_contains_at_least_one_quad(&quads)?;
+    ensure_only_occurrence_graph(&quads)?;
+    ensure_single_blank_node_subject(&quads)?;
+    ensure_no_object_blank_node(&quads)?;
+    ensure_no_backend_managed_predicates(&quads)?;
+    ensure_access_rights_is_resource(&quads)?;
+    ensure_license_is_creative_commons_resource(&quads)?;
+
+    convert_frontend_predicates_by_object_kind(&mut quads, store).await?;
+
+    let mut quads = normalize_frontend_quads(quads, occurrence_uri)?;
+
+    add_backend_managed_object_quad(
+        &mut quads,
+        occurrence_uri,
+        CREATOR_PREDICATE_URI,
+        preserved_creator,
+    )?;
+    add_backend_managed_object_quad(
+        &mut quads,
+        occurrence_uri,
+        CREATED_PREDICATE_URI,
+        preserved_created,
+    )?;
+    add_modified_quad(&mut quads, occurrence_uri, Utc::now())?;
+    add_default_access_rights_quad_if_missing(&mut quads, occurrence_uri)?;
+
+    serialize_quads_as_nquads(&quads)
+}
+
+#[cfg(test)]
 fn build_occurrence_nquads(
     //フロントから来たN-Quadsを組み立て
     frontend_nquads: &[u8],
@@ -775,6 +940,7 @@ fn build_occurrence_nquads(
     serialize_quads_as_nquads(&quads)
 }
 
+#[cfg(test)]
 fn build_updated_occurrence_nquads(
     frontend_nquads: &[u8],
     existing_nquads: &[u8],
@@ -859,6 +1025,29 @@ fn add_backend_managed_object_quad(
     Ok(())
 }
 
+async fn build_occurrence_nquads_with_generated_id_and_store<S>(
+    frontend_nquads: &[u8],
+    create_user_id: Uuid,
+    store: &S,
+) -> Result<BuiltOccurrenceNquads, OccurrenceServiceError>
+where
+    S: OccurrenceRdfStore + ?Sized,
+{
+    let occurrence_id = Uuid::new_v4();
+    let occurrence_uri = format!("{}{}", OCCURRENCE_URI_BASE, occurrence_id);
+
+    let nquads =
+        build_occurrence_nquads_with_store(frontend_nquads, &occurrence_uri, create_user_id, store)
+            .await?;
+
+    Ok(BuiltOccurrenceNquads {
+        occurrence_id,
+        occurrence_uri,
+        nquads,
+    })
+}
+
+#[cfg(test)]
 fn build_occurrence_nquads_with_generated_id(
     frontend_nquads: &[u8],
     create_user_id: Uuid,
@@ -970,6 +1159,135 @@ fn build_occurrence_uri(occurrence_id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct ObjectKindFakeStore {
+        mappings: Vec<(String, PredicateObjectMapping)>,
+        saved_nquads: Mutex<Option<Vec<u8>>>,
+    }
+
+    impl ObjectKindFakeStore {
+        fn new(mappings: Vec<(String, PredicateObjectMapping)>) -> Self {
+            Self {
+                mappings,
+                saved_nquads: Mutex::new(None),
+            }
+        }
+
+        fn saved_nquads_text(&self) -> String {
+            let saved = self
+                .saved_nquads
+                .lock()
+                .expect("saved n-quads lock should not be poisoned")
+                .clone()
+                .expect("n-quads should be saved");
+            String::from_utf8(saved).expect("saved n-quads should be UTF-8")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl OccurrenceRdfStore for ObjectKindFakeStore {
+        async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
+            *self
+                .saved_nquads
+                .lock()
+                .expect("saved n-quads lock should not be poisoned") = Some(nquads);
+            Ok(())
+        }
+
+        async fn get_occurrence_nquads(
+            &self,
+            _occurrence_uri: &str,
+        ) -> Result<Option<Vec<u8>>, OccurrenceServiceError> {
+            Ok(None)
+        }
+
+        async fn predicate_object_mapping(
+            &self,
+            predicate_uri: &str,
+        ) -> Result<Option<PredicateObjectMapping>, OccurrenceServiceError> {
+            Ok(self
+                .mappings
+                .iter()
+                .find(|(uri, _)| uri == predicate_uri)
+                .map(|(_, mapping)| mapping.clone()))
+        }
+    }
+    #[tokio::test]
+    async fn create_occurrence_converts_predicate_by_object_kind_equivalent() {
+        let literal_predicate = "http://rs.tdwg.org/dwc/terms/scientificName";
+        let iri_equivalent = "http://rs.tdwg.org/dwc/iri/toTaxon";
+        let iri_predicate = "https://example.org/vocab/iriOnlyName";
+        let literal_equivalent = "https://example.org/vocab/literalName";
+        let store = ObjectKindFakeStore::new(vec![
+            (
+                literal_predicate.to_string(),
+                PredicateObjectMapping {
+                    object_kind: PredicateObjectKind::Literal,
+                    iri_equivalent: Some(iri_equivalent.to_string()),
+                    literal_equivalent: None,
+                },
+            ),
+            (
+                iri_predicate.to_string(),
+                PredicateObjectMapping {
+                    object_kind: PredicateObjectKind::Iri,
+                    iri_equivalent: None,
+                    literal_equivalent: Some(literal_equivalent.to_string()),
+                },
+            ),
+        ]);
+        let input = CreateOccurrenceInput {
+            create_user_id: Uuid::new_v4(),
+            content_type: "application/n-quads".to_string(),
+            rdf_body: format!("_:occurrence <{literal_predicate}> <https://www.gbif.org/species/2878688> <{OCCURRENCE_GRAPH_URI}> .\n_:occurrence <{iri_predicate}> \"Quercus serrata\" <{OCCURRENCE_GRAPH_URI}> .\n").into_bytes(),
+        };
+
+        OccurrenceService::create_occurrence(input, &store)
+            .await
+            .expect("predicate should be converted");
+
+        let saved = store.saved_nquads_text();
+        assert!(saved.contains(&format!(
+            " <{iri_equivalent}> <https://www.gbif.org/species/2878688> "
+        )));
+        assert!(saved.contains(&format!(" <{literal_equivalent}> \"Quercus serrata\" ")));
+        assert!(!saved.contains(&format!(
+            " <{literal_predicate}> <https://www.gbif.org/species/2878688> "
+        )));
+        assert!(!saved.contains(&format!(" <{iri_predicate}> \"Quercus serrata\" ")));
+    }
+    #[tokio::test]
+    async fn create_occurrence_keeps_predicate_when_object_kind_is_mixed_or_missing() {
+        let mixed_predicate = "https://example.org/vocab/mixedValue";
+        let missing_predicate = "https://example.org/vocab/noMetadata";
+        let store = ObjectKindFakeStore::new(vec![(
+            mixed_predicate.to_string(),
+            PredicateObjectMapping {
+                object_kind: PredicateObjectKind::Mixed,
+                iri_equivalent: Some("https://example.org/vocab/iriEquivalent".to_string()),
+                literal_equivalent: Some("https://example.org/vocab/literalEquivalent".to_string()),
+            },
+        )]);
+        let input = CreateOccurrenceInput {
+            create_user_id: Uuid::new_v4(),
+            content_type: "application/n-quads".to_string(),
+            rdf_body: format!("_:occurrence <{mixed_predicate}> <https://example.org/resource> <{OCCURRENCE_GRAPH_URI}> .\n_:occurrence <{missing_predicate}> \"plain value\" <{OCCURRENCE_GRAPH_URI}> .\n").into_bytes(),
+        };
+
+        OccurrenceService::create_occurrence(input, &store)
+            .await
+            .expect("predicate should be kept");
+
+        let saved = store.saved_nquads_text();
+        assert!(saved.contains(&format!(
+            " <{mixed_predicate}> <https://example.org/resource> "
+        )));
+        assert!(saved.contains(&format!(" <{missing_predicate}> \"plain value\" ")));
+        assert!(!saved.contains("https://example.org/vocab/iriEquivalent"));
+        assert!(!saved.contains("https://example.org/vocab/literalEquivalent"));
+    }
+
     #[test]
     fn replace_all_subjects_with_occurrence_uri_replaces_blank_node_subjects() {
         use oxrdfio::{RdfFormat, RdfParser};
@@ -2208,6 +2526,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
     }
 
     #[tokio::test]
+
     async fn search_occurrences_maps_store_rows_to_response_dto() {
         struct FakeOccurrenceRdfStore {
             page: SearchOccurrencesStorePage,
@@ -2303,6 +2622,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
     }
 
     #[tokio::test]
+
     async fn search_occurrences_passes_filters_to_store() {
         struct FakeOccurrenceRdfStore;
 

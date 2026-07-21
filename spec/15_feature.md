@@ -214,32 +214,34 @@ RDF、media、認証入力のvalidationは実装するが、エラーごとのst
 
 ---
 
-## IRI目的語に対するdwcからdwciriへの自動変換
+## IRI目的語 / リテラル目的語に応じた述語変換
 
 ### MVPでの扱い
 
-frontendはdwc述語と目的語を送信する。
-backendは現時点では目的語がIRIでも述語をdwciriへ自動変換しない。
+backendは保存前にN-Quadsをoxrdfでparseし、目的語がIRIかリテラルかをRDF termとして判定する。
 
-利用するNamed Graph。
+利用する語彙メタデータ述語。
 
 ```text
-https://bio-database.net/graphs/vocabularies/darwin-core
-https://bio-database.net/graphs/app/occurrence-profile
+https://bio-database.net/terms/objectKind
+https://bio-database.net/terms/iriEquivalent
+https://bio-database.net/terms/literalEquivalent
 ```
 
-### 将来実装する内容
+変換ルール。
 
-- Darwin Core / dwciri語彙情報をvocabulary graphへ投入する
-- dwcとdwciriの対応関係をoccurrence profile graphへ投入する
-- 目的語がIRIでprofileに対応関係がある場合だけ、述語をdwcからdwciriへ変換する
-- リテラル目的語ではdwc述語を維持する
-- 対応関係がない述語は変換しない
+- `objectKind` が `mixed` の場合は変換しない
+- `objectKind` が見つからない場合は変換しない
+- `objectKind` が `literal` で目的語がIRIの場合、`iriEquivalent` があれば述語を置換する
+- `objectKind` が `IRI` で目的語がリテラルの場合、`literalEquivalent` があれば述語を置換する
+- equivalentが見つからない場合は変換しない
 - 変換後にOccurrence、Identification、Event、Locationへの振り分けを行う
-- profile graphはfrontendから更新できないようにする
-- literal、IRI、対応なし、不正profileのテストを追加する
 
-変換メタ情報を表現するRDF述語と、マスター更新・バージョン管理方式は実装前に確定する。
+### 後回し
+
+- 語彙メタデータのバージョン管理
+- 不正profileをより細かく診断するテスト
+- 複数graphに同じpredicateメタデータがある場合の優先順位定義
 
 ---
 

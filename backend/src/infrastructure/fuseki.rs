@@ -2,8 +2,9 @@ use crate::config::FusekiConfig;
 use crate::features::occurrences::service::{
     DarwinCoreTerm, HAS_EVENT_PREDICATE_URI, HAS_IDENTIFICATION_PREDICATE_URI,
     HAS_LOCATION_PREDICATE_URI, OccurrenceRdfStore, OccurrenceServiceError, OccurrenceTarget,
-    SearchOccurrenceFilterInput, SearchOccurrenceStoreRow, SearchOccurrencesStoreInput,
-    SearchOccurrencesStorePage, SearchVisibility,
+    PredicateObjectKind, PredicateObjectMapping, SearchOccurrenceFilterInput,
+    SearchOccurrenceStoreRow, SearchOccurrencesStoreInput, SearchOccurrencesStorePage,
+    SearchVisibility,
 };
 
 // GBIF Backbone由来の分類階層は専用Named Graphに固定し、
@@ -14,6 +15,9 @@ const GBIF_BACKBONE_TAXONOMY_GRAPH_URI: &str =
 const DARWIN_CORE_VOCABULARY_GRAPH_URI: &str =
     "https://bio-database.net/graphs/vocabularies/darwin-core";
 const LOCAL_NAME_PREDICATE_URI: &str = "https://bio-database.net/terms/localName";
+const OBJECT_KIND_PREDICATE_URI: &str = "https://bio-database.net/terms/objectKind";
+const IRI_EQUIVALENT_PREDICATE_URI: &str = "https://bio-database.net/terms/iriEquivalent";
+const LITERAL_EQUIVALENT_PREDICATE_URI: &str = "https://bio-database.net/terms/literalEquivalent";
 
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 const OCCURRENCE_URI_BASE: &str = "https://bio-database.net/occurrences/";
@@ -226,6 +230,61 @@ impl OccurrenceRdfStore for FusekiClient {
                 })
             })
             .collect()
+    }
+
+    async fn predicate_object_mapping(
+        &self,
+        predicate_uri: &str,
+    ) -> Result<Option<PredicateObjectMapping>, OccurrenceServiceError> {
+        let predicate_uri = escape_sparql_iri(predicate_uri)?;
+        let query = format!(
+            r#"
+            SELECT ?objectKind ?iriEquivalent ?literalEquivalent
+            WHERE {{
+                GRAPH ?graph {{
+                    <{predicate_uri}> <{OBJECT_KIND_PREDICATE_URI}> ?objectKind .
+                    OPTIONAL {{ <{predicate_uri}> <{IRI_EQUIVALENT_PREDICATE_URI}> ?iriEquivalent . }}
+                    OPTIONAL {{ <{predicate_uri}> <{LITERAL_EQUIVALENT_PREDICATE_URI}> ?literalEquivalent . }}
+                }}
+            }}
+            LIMIT 1
+        "#
+        );
+
+        let response = self
+            .http
+            .post(self.config.sparql_url())
+            .basic_auth(&self.config.user, Some(&self.config.password))
+            .header(reqwest::header::CONTENT_TYPE, "application/sparql-query")
+            .header(reqwest::header::ACCEPT, "application/sparql-results+json")
+            .body(query)
+            .send()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        if !response.status().is_success() {
+            return Err(OccurrenceServiceError::StoreFailed);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| OccurrenceServiceError::StoreFailed)?;
+        let bindings = body["results"]["bindings"]
+            .as_array()
+            .ok_or(OccurrenceServiceError::StoreFailed)?;
+        let Some(binding) = bindings.first() else {
+            return Ok(None);
+        };
+
+        let object_kind = binding_value(binding, "objectKind")
+            .and_then(|value| parse_predicate_object_kind(&value))
+            .ok_or(OccurrenceServiceError::StoreFailed)?;
+
+        Ok(Some(PredicateObjectMapping {
+            object_kind,
+            iri_equivalent: binding_value(binding, "iriEquivalent"),
+            literal_equivalent: binding_value(binding, "literalEquivalent"),
+        }))
     }
 
     async fn save_nquads(&self, nquads: Vec<u8>) -> Result<(), OccurrenceServiceError> {
@@ -685,6 +744,22 @@ fn build_search_cursor_filter(cursor: Option<&str>) -> Result<String, Occurrence
                   )
                 )"#
     ))
+}
+
+fn parse_predicate_object_kind(value: &str) -> Option<PredicateObjectKind> {
+    let normalized = value
+        .trim()
+        .trim_end_matches('/')
+        .rsplit(|character| character == '/' || character == '#')
+        .next()?
+        .to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "iri" => Some(PredicateObjectKind::Iri),
+        "literal" => Some(PredicateObjectKind::Literal),
+        "mixed" => Some(PredicateObjectKind::Mixed),
+        _ => None,
+    }
 }
 
 fn binding_value(binding: &serde_json::Value, name: &str) -> Option<String> {

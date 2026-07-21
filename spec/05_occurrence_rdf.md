@@ -157,6 +157,14 @@ https://{APP_PUBLIC_BASE_URL}/graphs/user
 https://{APP_PUBLIC_BASE_URL}/terms
 ```
 
+darwin-coreの各語彙の自前説明を以下で準備
+
+```text
+https://{APP_PUBLIC_BASE_URL}/terms/darwin-core
+
+ex https://{APP_PUBLIC_BASE_URL}/terms/darwin-core/modified
+```
+
 ---
 
 ## graph name の扱い
@@ -301,20 +309,25 @@ backendはoccurrence URI発行後、述語ごとに保存先ノードを判定�
 
 ---
 
-## dwcからdwciriへの述語変換。将来実装
+## 目的語型に応じた述語変換
 
-この変換はMVPでは実装しない。
-frontendの入力形式は変更せず、項目としてdwc述語と目的語を送る。
+backendは保存前に、frontendから受け取ったN-Quadsをoxrdfでparseし、目的語がIRIかリテラルかをRDF termとして判定する。文字列の見た目だけでは判定しない。
 
-将来のbackend正規化ルール。
+backendはFuseki上の語彙メタデータから、入力述語の以下を検索する。
 
-1. frontendから受け取った述語がdwc namespaceか確認する
-2. 目的語がIRIかリテラルか判定する
-3. 目的語がIRIの場合、`https://bio-database.net/graphs/app/occurrence-profile`から対応するdwciri述語を検索する
-4. 対応関係があれば、目的語を維持したまま述語だけをdwciriへ置換する
-5. 目的語がリテラルの場合はdwc述語を維持する
-6. 対応するdwciri述語がない場合も入力述語を維持する
-7. dwc/dwciri変換後の述語を使ってOccurrence、Identification、Event、Locationへの振り分けを行う
+- `https://bio-database.net/terms/objectKind`
+- `https://bio-database.net/terms/iriEquivalent`
+- `https://bio-database.net/terms/literalEquivalent`
+
+`objectKind` は `IRI`、`literal`、`mixed` のいずれかとする。
+
+- `objectKind` が `mixed` の場合は変換しない
+- `objectKind` が見つからない場合は変換しない
+- `objectKind` が `literal` で目的語がIRIの場合、`iriEquivalent` があれば述語を置換する
+- `objectKind` が `IRI` で目的語がリテラルの場合、`literalEquivalent` があれば述語を置換する
+- equivalentが見つからない場合は変換しない
+- 目的語そのものは変換せず、述語だけを置換する
+- 変換後の述語を使ってOccurrence、Identification、Event、Locationへの振り分けを行う
 
 変換例。
 
@@ -322,13 +335,11 @@ frontendの入力形式は変更せず、項目としてdwc述語と目的語を
 # frontend入力
 _:occurrence <http://rs.tdwg.org/dwc/terms/exampleTerm> <https://example.org/resource> <https://bio-database.net/graphs/occurrences> .
 
-# profileに対応関係がある場合の保存述語
+# objectKind/equivalentにより変換対象の場合の保存述語
 <occurrence-uri> <http://rs.tdwg.org/dwc/iri/exampleTerm> <https://example.org/resource> <https://bio-database.net/graphs/occurrences> .
 ```
 
-変換表を表現するRDF述語とマスターデータ更新方法は、実装開始前に別途確定する。
-
----
+変換メタデータはfrontendから更新できないread-only masterとして扱う。
 
 ## backend が作成時に必ず追加する RDF
 

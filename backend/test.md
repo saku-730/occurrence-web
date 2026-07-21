@@ -198,6 +198,8 @@
 - [x] フロントから送られたN-Quadsをパースしてuser_id追加して、再度シリアライズできるserialize_quads_as_nquads_outputs_named_graph_quads`
 - [x] フロントから送られた、N-Quadsを組み立てできる。`build_occurrence_nquads_replaces_subject_and_adds_creator`
 - [x] Identification / Event / Location対象述語があると、各`/1`中間ノード・`has*`接続・規定`rdf:type`を生成する`build_occurrence_nquads_creates_intermediate_nodes_for_routed_predicates`
+- [x] objectKindがliteralの述語にIRI目的語が来たら`iriEquivalent`へ、objectKindがIRIの述語にリテラル目的語が来たら`literalEquivalent`へ変換する`create_occurrence_converts_predicate_by_object_kind_equivalent`
+- [x] objectKindがmixedまたは未定義の述語は目的語型に関係なく変換しない`create_occurrence_keeps_predicate_when_object_kind_is_mixed_or_missing`
 - [x] 仕様に列挙された全Identification / Event / Location述語が正しいtargetへ分類される`occurrence_target_routes_all_configured_predicates`
 - [x] 対象述語がない種別の空中間ノードを生成せず、unknown predicateとfrontendの`rdf:type`をOccurrence直下に保持する`build_occurrence_nquads_omits_unused_nodes_and_keeps_unrouted_predicates_on_occurrence`
 - [x] frontendから`hasIdentification` / `hasEvent` / `hasLocation`が送られたら登録を拒否する`build_occurrence_nquads_rejects_frontend_intermediate_link_predicates`
