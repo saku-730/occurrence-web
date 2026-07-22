@@ -1,4 +1,4 @@
-# Occurrence Web Frontend
+# Bio Database Frontend
 
 生物のオカレンス情報を管理・登録・共有するWebアプリケーションのフロントエンドです。
 

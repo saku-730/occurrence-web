@@ -10,6 +10,7 @@ import { apiFetch } from "@/lib/api";
 const API_PREFIX = "/api/backend";
 const USER_URI_PREFIX = "https://bio-database.net/users/";
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
+const ASSOCIATED_MEDIA_PREDICATE = "http://rs.tdwg.org/ac/terms/associatedMedia";
 
 interface OccurrenceDetailState {
   status: "loading" | "ready" | "not_found" | "error";
@@ -36,6 +37,12 @@ interface IntermediateSection {
   subject: string;
   title: string;
   quads: ParsedQuad[];
+}
+
+interface MediaAttachment {
+  mediaUri: string;
+  mediaId: string;
+  fetchUrl: string;
 }
 
 export default function OccurrenceDetailPage() {
@@ -105,11 +112,13 @@ export default function OccurrenceDetailPage() {
         (quad) =>
           quad.subject === occurrenceUri &&
           quad.predicate !== CREATOR_PREDICATE &&
+          quad.predicate !== ASSOCIATED_MEDIA_PREDICATE &&
           !isIntermediateRelationPredicate(quad.predicate),
       ),
     [occurrenceUri, quads],
   );
   const intermediateSections = useMemo(() => buildIntermediateSections(quads, occurrenceUri), [occurrenceUri, quads]);
+  const mediaAttachments = useMemo(() => buildMediaAttachments(quads), [quads]);
   const canEditOccurrence = creatorUserId !== null && currentUserId === creatorUserId;
 
   useEffect(() => {
@@ -251,9 +260,142 @@ export default function OccurrenceDetailPage() {
                 </div>
               </section>
             ))}
+
+            {mediaAttachments.length > 0 ? (
+              <MediaAttachments attachments={mediaAttachments} />
+            ) : null}
           </div>
         ) : null}
       </main>
+    </div>
+  );
+}
+
+function MediaAttachments({ attachments }: { attachments: MediaAttachment[] }) {
+  return (
+    <section className="rounded-md border border-[#d8dfe2] bg-white px-5 py-5">
+      <h2 className="text-sm font-medium text-[#526168]">添付ファイル</h2>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {attachments.map((attachment) => (
+          <MediaAttachmentPreview attachment={attachment} key={attachment.mediaUri} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MediaAttachmentPreview({ attachment }: { attachment: MediaAttachment }) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ready"; objectUrl: string; contentType: string }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    async function loadMedia() {
+      setState({ status: "loading" });
+
+      try {
+        const response = await fetch(attachment.fetchUrl, {
+          cache: "no-store",
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          if (active) setState({ status: "error" });
+          return;
+        }
+
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        const contentType = response.headers.get("content-type") ?? blob.type;
+
+        if (active) {
+          setState({ status: "ready", objectUrl, contentType });
+        }
+      } catch {
+        if (active) setState({ status: "error" });
+      }
+    }
+
+    void loadMedia();
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.fetchUrl]);
+
+  return (
+    <div className="rounded-md border border-[#eef2f3] bg-[#fafcfc] p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-[#65737a]">Media ID</p>
+          <p className="mt-1 break-all text-sm text-[#182126]">{attachment.mediaId}</p>
+        </div>
+        <a
+          className="shrink-0 rounded-md border border-[#b8c3c8] bg-white px-3 py-2 text-xs font-medium hover:bg-[#eef2f3]"
+          download
+          href={attachment.fetchUrl}
+        >
+          ダウンロード
+        </a>
+      </div>
+
+      {state.status === "loading" ? (
+        <div className="grid min-h-36 place-items-center rounded-md border border-dashed border-[#c9d2d6] text-sm text-[#65737a]">
+          読み込み中
+        </div>
+      ) : null}
+
+      {state.status === "error" ? (
+        <div className="grid min-h-36 place-items-center rounded-md border border-dashed border-[#c9d2d6] px-4 text-center text-sm text-[#a23c32]">
+          添付ファイルを取得できませんでした
+        </div>
+      ) : null}
+
+      {state.status === "ready" ? (
+        <MediaObjectRenderer contentType={state.contentType} objectUrl={state.objectUrl} />
+      ) : null}
+    </div>
+  );
+}
+
+function MediaObjectRenderer({
+  contentType,
+  objectUrl,
+}: {
+  contentType: string;
+  objectUrl: string;
+}) {
+  if (contentType.startsWith("image/")) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        alt="添付画像"
+        className="max-h-[520px] w-full rounded-md border border-[#d8dfe2] object-contain"
+        src={objectUrl}
+      />
+    );
+  }
+
+  if (contentType.startsWith("video/")) {
+    return (
+      <video className="w-full rounded-md border border-[#d8dfe2] bg-black" controls src={objectUrl} />
+    );
+  }
+
+  if (contentType.startsWith("audio/")) {
+    return <audio className="w-full" controls src={objectUrl} />;
+  }
+
+  return (
+    <div className="rounded-md border border-dashed border-[#c9d2d6] px-4 py-8 text-center">
+      <p className="text-sm text-[#65737a]">プレビューできない形式です</p>
+      <p className="mt-2 break-all text-xs text-[#7c898f]">{contentType || "application/octet-stream"}</p>
     </div>
   );
 }
@@ -378,6 +520,38 @@ function parseNQuads(nquads: string): ParsedQuad[] {
       };
     })
     .filter((quad): quad is ParsedQuad => quad !== null);
+}
+
+function buildMediaAttachments(quads: ParsedQuad[]): MediaAttachment[] {
+  const attachments = new Map<string, MediaAttachment>();
+
+  for (const quad of quads) {
+    if (quad.predicate !== ASSOCIATED_MEDIA_PREDICATE) continue;
+
+    const mediaUri = normalizeObject(quad.object);
+    const mediaId = extractMediaId(mediaUri);
+    if (!mediaId || attachments.has(mediaUri)) continue;
+
+    attachments.set(mediaUri, {
+      mediaUri,
+      mediaId,
+      fetchUrl: `${API_PREFIX}/media/${encodeURIComponent(mediaId)}`,
+    });
+  }
+
+  return Array.from(attachments.values());
+}
+
+function extractMediaId(mediaUri: string): string | null {
+  try {
+    const parsed = new URL(mediaUri);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const mediaIndex = segments.lastIndexOf("media");
+    const mediaId = mediaIndex >= 0 ? segments[mediaIndex + 1] : null;
+    return mediaId && mediaId.length > 0 ? decodeURIComponent(mediaId) : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildIntermediateSections(quads: ParsedQuad[], occurrenceUri: string): IntermediateSection[] {

@@ -9,6 +9,11 @@ const OCCURRENCE_GRAPH_URI =
   "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_MEDIA_PREDICATE_URI =
   "http://rs.tdwg.org/ac/terms/associatedMedia";
+const ACCESS_RIGHTS_PREDICATE_URI = "http://purl.org/dc/terms/accessRights";
+const PUBLIC_ACCESS_RIGHTS_URI =
+  "https://bio-database.net/terms/access-rights/public";
+const PRIVATE_ACCESS_RIGHTS_URI =
+  "https://bio-database.net/terms/access-rights/private";
 const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
@@ -69,6 +74,7 @@ export default function NewOccurrencePage() {
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [taxonScientificNames, setTaxonScientificNames] = useState<Record<number, string>>({});
+  const [isPublic, setIsPublic] = useState(true);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(
@@ -187,7 +193,7 @@ export default function NewOccurrencePage() {
     let statements: StatementRow[];
     try {
       statements = validateStatementRows(rows);
-      statements = addHiddenScientificNames(statements, taxonScientificNames);
+      statements = normalizeTaxonStatements(statements, taxonScientificNames);
       validateSelectedFiles(selectedFiles);
     } catch (error) {
       setErrorMessage(
@@ -220,7 +226,8 @@ export default function NewOccurrencePage() {
       }
 
       setSubmissionMessage("オカレンスデータを登録しています");
-      const nquads = buildOccurrenceNQuads(statements, mediaUris);
+      const accessRightsUri = isPublic ? PUBLIC_ACCESS_RIGHTS_URI : PRIVATE_ACCESS_RIGHTS_URI;
+      const nquads = buildOccurrenceNQuads(statements, mediaUris, accessRightsUri);
       const created = await apiFetch<CreateOccurrenceResponse>("/occurrences", {
         method: "POST",
         headers: { "Content-Type": "application/n-quads" },
@@ -232,6 +239,7 @@ export default function NewOccurrencePage() {
       setRows(initialRows.map((row) => ({ ...row })));
       setSelectedFiles([]);
       setTaxonScientificNames({});
+      setIsPublic(true);
       nextId.current = 3;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -276,7 +284,19 @@ export default function NewOccurrencePage() {
         </div>
 
         <section className="overflow-visible rounded-md border border-[#d8dfe2] bg-white">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3 text-xs font-medium text-[#526168] md:grid">
+          <div className="flex items-center justify-end border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-[#526168]">
+              <input
+                checked={isPublic}
+                className="h-4 w-4 rounded border-[#b8c3c8] text-[#176b57] focus:ring-[#176b57]"
+                disabled={isSubmitting}
+                onChange={(event) => setIsPublic(event.target.checked)}
+                type="checkbox"
+              />
+              公開する
+            </label>
+          </div>
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 border-b border-[#d8dfe2] bg-[#f7f9fa] px-5 py-3 text-xs font-medium text-[#526168] md:grid">
             <span>項目名</span>
             <span>値</span>
             <span className="w-12" aria-hidden="true" />
@@ -761,27 +781,44 @@ function validateStatementRows(rows: StatementRow[]): StatementRow[] {
   return statements;
 }
 
-function addHiddenScientificNames(
+// 分類の入力は、URIならtoTaxon、任意テキストならscientificNameとして保存する。
+// テキストをtoTaxonへ保存するとIRI専用語彙の意味を壊すため、送信直前に述語を正規化する。
+function normalizeTaxonStatements(
   statements: StatementRow[],
   scientificNamesByRowId: Record<number, string>,
 ): StatementRow[] {
-  const nextStatements = [...statements];
+  const normalizedStatements: StatementRow[] = [];
+  const generatedScientificNames: StatementRow[] = [];
 
   for (const row of statements) {
-    if (row.predicate.trim() !== DWCIRI_TO_TAXON_URI) continue;
-    if (!isAbsoluteHttpUri(row.object)) continue;
+    if (row.predicate !== DWCIRI_TO_TAXON_URI) {
+      normalizedStatements.push(row);
+      continue;
+    }
 
+    if (!isAbsoluteHttpUri(row.object)) {
+      // 手入力の分類名はtoTaxonを作らず、学名リテラルとして保存する。
+      normalizedStatements.push({
+        ...row,
+        predicate: DWC_SCIENTIFIC_NAME_URI,
+      });
+      continue;
+    }
+
+    normalizedStatements.push(row);
+
+    // GBIF候補を選んだURIには、候補表示から得た学名を非表示で補完する。
     const scientificName = scientificNamesByRowId[row.id];
-    if (!scientificName || !scientificName.trim()) continue;
-
-    nextStatements.push({
-      id: nextStatements.length + 1,
-      predicate: DWC_SCIENTIFIC_NAME_URI,
-      object: scientificName.trim(),
-    });
+    if (scientificName?.trim()) {
+      generatedScientificNames.push({
+        id: statements.length + generatedScientificNames.length + 1,
+        predicate: DWC_SCIENTIFIC_NAME_URI,
+        object: scientificName.trim(),
+      });
+    }
   }
 
-  return nextStatements;
+  return [...normalizedStatements, ...generatedScientificNames];
 }
 
 function validateSelectedFiles(files: File[]) {
@@ -793,6 +830,7 @@ function validateSelectedFiles(files: File[]) {
 function buildOccurrenceNQuads(
   statements: StatementRow[],
   mediaUris: string[],
+  accessRightsUri: string,
 ): string {
   const lines = statements.map((statement) => {
     const object = isAbsoluteHttpUri(statement.object)
@@ -801,6 +839,10 @@ function buildOccurrenceNQuads(
 
     return `_:occurrence <${statement.predicate}> ${object} <${OCCURRENCE_GRAPH_URI}> .`;
   });
+
+  lines.push(
+    `_:occurrence <${ACCESS_RIGHTS_PREDICATE_URI}> <${accessRightsUri}> <${OCCURRENCE_GRAPH_URI}> .`,
+  );
 
   for (const mediaUri of mediaUris) {
     lines.push(

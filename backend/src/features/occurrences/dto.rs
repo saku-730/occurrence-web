@@ -28,8 +28,7 @@ pub struct DeleteOccurrenceResponse {
 pub struct SearchOccurrenceItem {
     pub occurrence_id: String,
     pub occurrence_uri: String,
-    // 権限判定用にstoreから受け取る内部値。APIレスポンスには出さない。
-    #[serde(skip_serializing)]
+    // RDFのdcterms:creator URIから取得する作成者ID。フロントは既存のユーザー概要APIで表示名を解決する。
     pub creator_user_id: Option<Uuid>,
     pub scientific_name: Option<String>,
     pub basis_of_record: Option<String>,

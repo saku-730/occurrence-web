@@ -58,7 +58,7 @@ export function SiteHeader() {
     <header className="overflow-x-auto border-b border-[#d8dfe2] bg-white">
       <div className="mx-auto flex h-16 min-w-max max-w-7xl items-center px-5 sm:px-8">
         <Link className="text-base font-semibold" href="/">
-          Occurrence Web
+          Bio Database
         </Link>
 
         <nav className="ml-10" aria-label="メインナビゲーション">

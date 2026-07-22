@@ -7520,12 +7520,13 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
         let occurrence_id =
             uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid uuid");
         let occurrence_uri = format!("https://bio-database.net/occurrences/{}", occurrence_id);
+        let creator_user_id = uuid::Uuid::new_v4();
 
         store.set_search_page(SearchOccurrencesStorePage {
             rows: vec![SearchOccurrenceStoreRow {
                 occurrence_id,
                 occurrence_uri: occurrence_uri.clone(),
-                creator_user_id: None,
+                creator_user_id: Some(creator_user_id),
                 scientific_name: Some("Quercus serrata".to_string()),
                 basis_of_record: Some("PreservedSpecimen".to_string()),
                 recorded_by: Some("Yamada Taro".to_string()),
@@ -7578,6 +7579,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             body_json["items"][0]["occurrence_id"],
             occurrence_id.to_string()
         );
+        assert_eq!(body_json["items"][0]["creator_user_id"], creator_user_id.to_string());
         assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
         assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
         assert_eq!(

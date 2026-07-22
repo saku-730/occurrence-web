@@ -17,6 +17,11 @@ interface CurrentUser {
   user_name: string;
   role: string;
 }
+interface UserSummary {
+  user_id: string;
+  user_name: string;
+}
+
 
 interface SearchFilter {
   predicate: string;
@@ -28,9 +33,9 @@ interface SearchFilter {
 interface OccurrenceItem {
   occurrence_id: string;
   occurrence_uri: string;
+  // dcterms:creatorのURIからバックエンドが抽出したUUID。表示名は/users/{id}で解決する。
+  creator_user_id: string | null;
   scientific_name: string | null;
-  basis_of_record: string | null;
-  recorded_by: string | null;
   created: string | null;
   modified: string | null;
   access_rights: string | null;
@@ -50,6 +55,7 @@ type SearchStatus = "loading" | "ready" | "unauthenticated" | "error";
 export default function OccurrenceSearchPage() {
   const [query, setQuery] = useState("");
   const [ownOnly, setOwnOnly] = useState(false);
+  const [creatorNames, setCreatorNames] = useState<Record<string, string>>({});
   const [appliedQuery, setAppliedQuery] = useState("");
   const [appliedOwnOnly, setAppliedOwnOnly] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
@@ -73,6 +79,36 @@ export default function OccurrenceSearchPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    const creatorIds = [...new Set(result?.items
+      .map((item) => item.creator_user_id)
+      .filter((creatorUserId): creatorUserId is string => creatorUserId !== null) ?? [])];
+
+    if (creatorIds.length === 0) {
+      setCreatorNames({});
+      return;
+    }
+
+    let active = true;
+
+    // 一覧応答のcreator UUIDを重複なく既存ユーザー概要APIへ問い合わせる。
+    Promise.all(creatorIds.map(async (creatorUserId) => {
+      try {
+        const user = await apiFetch<UserSummary>(`/users/${encodeURIComponent(creatorUserId)}`);
+        return [creatorUserId, user.user_name] as const;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (!active) return;
+      setCreatorNames(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null)));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [result]);
 
   async function runSearch(
     searchQuery: string,
@@ -147,7 +183,7 @@ export default function OccurrenceSearchPage() {
           </label>
         </form>
 
-        <SearchResults result={result} status={status} />
+        <SearchResults creatorNames={creatorNames} result={result} status={status} />
 
         {status === "ready" && result?.page.has_next && result.page.next_cursor ? (
           <div className="mt-5 flex justify-center">
@@ -171,10 +207,13 @@ export default function OccurrenceSearchPage() {
   );
 }
 
+
 function SearchResults({
+  creatorNames,
   result,
   status,
 }: {
+  creatorNames: Record<string, string>;
   result: SearchResponse | null;
   status: SearchStatus;
 }) {
@@ -196,14 +235,12 @@ function SearchResults({
 
   return (
     <div className="overflow-x-auto rounded-md border border-[#d8dfe2] bg-white">
-      <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
+      <table className="w-full min-w-[900px] border-collapse text-left text-sm">
         <thead className="border-b border-[#d8dfe2] bg-[#eef2f3] text-xs text-[#526168]">
           <tr>
             <TableHeader>ID</TableHeader>
-            <TableHeader>URI</TableHeader>
             <TableHeader>学名</TableHeader>
-            <TableHeader>記録種別</TableHeader>
-            <TableHeader>記録者</TableHeader>
+            <TableHeader>作成者</TableHeader>
             <TableHeader>作成日時</TableHeader>
             <TableHeader>更新日時</TableHeader>
             <TableHeader>公開範囲</TableHeader>
@@ -220,14 +257,8 @@ function SearchResults({
                   {item.occurrence_id}
                 </Link>
               </TableCell>
-              <TableCell>
-                <span className="block max-w-64 break-all">
-                  {item.occurrence_uri}
-                </span>
-              </TableCell>
               <TableCell>{item.scientific_name ?? "-"}</TableCell>
-              <TableCell>{item.basis_of_record ?? "-"}</TableCell>
-              <TableCell>{item.recorded_by ?? "-"}</TableCell>
+              <TableCell>{item.creator_user_id ? creatorNames[item.creator_user_id] ?? "-" : "-"}</TableCell>
               <TableCell>{formatDate(item.created)}</TableCell>
               <TableCell>{formatDate(item.modified)}</TableCell>
               <TableCell>{item.access_rights ?? "-"}</TableCell>

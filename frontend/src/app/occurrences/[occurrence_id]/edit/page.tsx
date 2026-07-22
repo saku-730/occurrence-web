@@ -14,6 +14,11 @@ const ASSOCIATED_MEDIA_PREDICATE_URI = "http://rs.tdwg.org/ac/terms/associatedMe
 const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
+const DWC_SCIENTIFIC_NAME_URI = "http://rs.tdwg.org/dwc/terms/scientificName";
+const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
+const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
+const GBIF_SUGGEST_DEBOUNCE_MS = 300;
+const EDIT_MEDIA_FILE_INPUT_ID = "edit-occurrence-media-files";
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
 const CREATED_PREDICATE = "http://purl.org/dc/terms/created";
 const MODIFIED_PREDICATE = "http://purl.org/dc/terms/modified";
@@ -33,6 +38,13 @@ interface StatementRow {
   id: number;
   predicate: string;
   object: string;
+}
+
+interface ExistingMediaAttachment {
+  mediaUri: string;
+  mediaId: string;
+  fetchUrl: string;
+  unlinkPending: boolean;
 }
 
 interface UploadMediaResponse {
@@ -62,6 +74,12 @@ interface OccurrenceCreatorSummary {
   user_id: string;
   user_name: string;
 }
+interface GbifSpeciesSuggestion {
+  key: number;
+  scientificName: string;
+  canonicalName?: string;
+}
+
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 
@@ -80,7 +98,9 @@ export default function EditOccurrencePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [taxonScientificNames, setTaxonScientificNames] = useState<Record<number, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [existingMediaAttachments, setExistingMediaAttachments] = useState<ExistingMediaAttachment[]>([]);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(null);
@@ -169,7 +189,8 @@ export default function EditOccurrencePage() {
 
     const loadedRows = buildEditableRowsFromNQuads(detailNQuads);
     setRows(loadedRows.length > 0 ? loadedRows : emptyRows.map((row) => ({ ...row })));
-    nextId.current = loadedRows.length + 1;
+    setExistingMediaAttachments(buildExistingMediaAttachmentsFromNQuads(detailNQuads));
+    nextId.current = loadedRows.length > 0 ? Math.max(...loadedRows.map((row) => row.id)) + 1 : 3;
     setSelectedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [detailNQuads, detailStatus]);
@@ -236,7 +257,20 @@ export default function EditOccurrencePage() {
   }
 
   function updateRow(id: number, field: "predicate" | "object", value: string) {
-    setRows((currentRows) => currentRows.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+    setRows((currentRows) =>
+      currentRows.map((row) =>
+        row.id === id ? { ...row, [field]: value } : row,
+      ),
+    );
+
+    if (field === "predicate" && value.trim() !== DWCIRI_TO_TAXON_URI) {
+      setTaxonScientificNames((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    }
   }
 
   function addRow() {
@@ -248,11 +282,18 @@ export default function EditOccurrencePage() {
   }
 
   function addFiles(files: FileList | null) {
-    if (!files) return;
+    if (!files || files.length === 0) return;
+
+    // FileList is tied to the native input. Snapshot it before clearing the input,
+    // otherwise React may read an already-cleared list when applying the state update.
+    const selectedFileSnapshot = Array.from(files);
+
+    setErrorMessage(null);
+    setUpdatedOccurrence(null);
 
     setSelectedFiles((currentFiles) => {
       const knownFiles = new Set(currentFiles.map((file) => fileIdentity(file)));
-      const addedFiles = Array.from(files).filter((file) => !knownFiles.has(fileIdentity(file)));
+      const addedFiles = selectedFileSnapshot.filter((file) => !knownFiles.has(fileIdentity(file)));
       return [...currentFiles, ...addedFiles];
     });
 
@@ -262,6 +303,16 @@ export default function EditOccurrencePage() {
 
   function removeFile(target: File) {
     setSelectedFiles((currentFiles) => currentFiles.filter((file) => fileIdentity(file) !== fileIdentity(target)));
+  }
+
+  function toggleExistingMediaUnlink(mediaUri: string) {
+    setExistingMediaAttachments((currentAttachments) =>
+      currentAttachments.map((attachment) =>
+        attachment.mediaUri === mediaUri
+          ? { ...attachment, unlinkPending: !attachment.unlinkPending }
+          : attachment,
+      ),
+    );
   }
 
   async function deleteOccurrence() {
@@ -302,13 +353,14 @@ export default function EditOccurrencePage() {
     let statements: StatementRow[];
     try {
       statements = validateStatementRows(rows);
+      statements = normalizeTaxonStatements(statements, taxonScientificNames);
       validateSelectedFiles(selectedFiles);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "入力内容を確認してください");
       return;
     }
 
-    if (statements.length === 0 && selectedFiles.length === 0) {
+    if (statements.length === 0 && selectedFiles.length === 0 && existingMediaAttachments.length === 0) {
       setErrorMessage("項目または添付ファイルを1つ以上入力してください");
       return;
     }
@@ -330,7 +382,10 @@ export default function EditOccurrencePage() {
       }
 
       setSubmissionMessage("データを更新しています");
-      const nquads = buildOccurrenceNQuads(statements, mediaUris);
+      const retainedMediaUris = existingMediaAttachments
+        .filter((attachment) => !attachment.unlinkPending)
+        .map((attachment) => attachment.mediaUri);
+      const nquads = buildOccurrenceNQuads(statements, [...retainedMediaUris, ...mediaUris]);
       const updated = await apiFetch<UpdateOccurrenceResponse>(`/occurrences/${occurrenceId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/n-quads" },
@@ -338,6 +393,7 @@ export default function EditOccurrencePage() {
       });
 
       setUpdatedOccurrence(updated);
+      setExistingMediaAttachments(buildExistingMediaAttachmentsFromUris([...retainedMediaUris, ...mediaUris]));
       setSubmissionMessage(null);
       setSelectedFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -465,7 +521,7 @@ export default function EditOccurrencePage() {
           </div>
         </section>
 
-        <section className="mt-6 overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
+        <section className="mt-6 overflow-visible rounded-md border border-[#d8dfe2] bg-white">
           <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3 text-xs font-medium text-[#526168] md:grid">
             <span>項目名</span>
             <span>値</span>
@@ -490,17 +546,24 @@ export default function EditOccurrencePage() {
                   />
                 </div>
 
-                <label className="min-w-0">
-                  <span className="mb-2 block text-sm font-medium md:sr-only">値 {index + 1}</span>
-                  <input
-                    className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
-                    disabled={isSubmitting}
-                    onChange={(event) => updateRow(row.id, "object", event.target.value)}
-                    placeholder="値"
-                    type="text"
-                    value={row.object}
-                  />
-                </label>
+                <ObjectValueField
+                  disabled={isSubmitting}
+                  onChange={(value) => updateRow(row.id, "object", value)}
+                  onTaxonSelect={(scientificName) =>
+                    setTaxonScientificNames((current) => {
+                      if (!scientificName.trim()) {
+                        if (!(row.id in current)) return current;
+                        const next = { ...current };
+                        delete next[row.id];
+                        return next;
+                      }
+
+                      return { ...current, [row.id]: scientificName };
+                    })
+                  }
+                  predicate={row.predicate}
+                  value={row.object}
+                />
 
                 <button
                   className="h-10 w-fit px-1 text-sm text-[#a23c32] hover:underline disabled:cursor-not-allowed disabled:text-[#9aa5aa] disabled:no-underline md:w-12"
@@ -536,39 +599,50 @@ export default function EditOccurrencePage() {
               accept=".jpg,.jpeg,.png,.webp,.mp3,.wav,.m4a,.mp4,.mov"
               className="sr-only"
               disabled={isSubmitting}
+              id={EDIT_MEDIA_FILE_INPUT_ID}
               multiple
               onChange={(event) => addFiles(event.target.files)}
               ref={fileInputRef}
               type="file"
             />
-            <button
-              className="h-10 rounded-md border border-[#b8c3c8] bg-white px-4 text-sm font-medium hover:bg-[#eef2f3] disabled:cursor-not-allowed disabled:bg-[#eef2f3] disabled:text-[#7c898f]"
-              disabled={isSubmitting}
-              onClick={() => fileInputRef.current?.click()}
-              type="button"
+            <label
+              aria-disabled={isSubmitting}
+              className="inline-flex h-10 cursor-pointer items-center rounded-md border border-[#b8c3c8] bg-white px-4 text-sm font-medium hover:bg-[#eef2f3] aria-disabled:cursor-not-allowed aria-disabled:bg-[#eef2f3] aria-disabled:text-[#7c898f]"
+              htmlFor={isSubmitting ? undefined : EDIT_MEDIA_FILE_INPUT_ID}
             >
               ファイルを追加
-            </button>
+            </label>
+
+            {existingMediaAttachments.length > 0 ? (
+              <div className="mt-5">
+                <p className="text-xs font-medium text-[#65737a]">既存の添付ファイル</p>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  {existingMediaAttachments.map((attachment) => (
+                    <ExistingMediaAttachmentPreview
+                      attachment={attachment}
+                      disabled={isSubmitting}
+                      key={attachment.mediaUri}
+                      onToggleUnlink={() => toggleExistingMediaUnlink(attachment.mediaUri)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {selectedFiles.length > 0 ? (
-              <ul className="mt-5 divide-y divide-[#e4e9eb] border-y border-[#e4e9eb]">
-                {selectedFiles.map((file) => (
-                  <li className="flex min-w-0 items-center gap-4 py-3" key={fileIdentity(file)}>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{file.name}</p>
-                      <p className="mt-1 text-xs text-[#65737a]">{formatFileSize(file.size)}</p>
-                    </div>
-                    <button
-                      className="shrink-0 px-1 text-sm text-[#a23c32] hover:underline disabled:cursor-not-allowed disabled:text-[#9aa5aa] disabled:no-underline"
+              <div className="mt-5">
+                <p className="text-xs font-medium text-[#65737a]">追加予定のファイル</p>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  {selectedFiles.map((file) => (
+                    <SelectedMediaFilePreview
                       disabled={isSubmitting}
-                      onClick={() => removeFile(file)}
-                      type="button"
-                    >
-                      削除
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      file={file}
+                      key={fileIdentity(file)}
+                      onRemove={() => removeFile(file)}
+                    />
+                  ))}
+                </div>
+              </div>
             ) : null}
           </div>
         </section>
@@ -628,6 +702,189 @@ function CreatorField({ userName, userId }: { userName: string | null; userId: s
   );
 }
 
+function ExistingMediaAttachmentPreview({
+  attachment,
+  disabled,
+  onToggleUnlink,
+}: {
+  attachment: ExistingMediaAttachment;
+  disabled: boolean;
+  onToggleUnlink: () => void;
+}) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ready"; objectUrl: string; contentType: string }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    async function loadMedia() {
+      setState({ status: "loading" });
+
+      try {
+        const response = await fetch(attachment.fetchUrl, {
+          cache: "no-store",
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          if (active) setState({ status: "error" });
+          return;
+        }
+
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        const contentType = response.headers.get("content-type") ?? blob.type;
+
+        if (active) {
+          setState({ status: "ready", objectUrl, contentType });
+        }
+      } catch {
+        if (active) setState({ status: "error" });
+      }
+    }
+
+    void loadMedia();
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.fetchUrl]);
+
+  return (
+    <div className={`rounded-md border border-[#eef2f3] bg-[#fafcfc] p-4 transition-opacity ${attachment.unlinkPending ? "opacity-45" : "opacity-100"}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-[#65737a]">Media ID</p>
+          <p className="mt-1 break-all text-sm text-[#182126]">{attachment.mediaId}</p>
+          <p className="mt-1 truncate text-xs text-[#65737a]">{attachment.mediaUri}</p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <a
+            className="rounded-md border border-[#b8c3c8] bg-white px-3 py-2 text-xs font-medium hover:bg-[#eef2f3]"
+            download
+            href={attachment.fetchUrl}
+          >
+            ダウンロード
+          </a>
+          <button
+            className={attachment.unlinkPending
+              ? "rounded-md border border-[#9dbeb4] bg-white px-3 py-2 text-xs font-medium text-[#176b57] hover:bg-[#eef8f5] disabled:cursor-not-allowed disabled:text-[#9aa5aa]"
+              : "rounded-md border border-[#d6a39b] bg-white px-3 py-2 text-xs font-medium text-[#a23c32] hover:bg-[#fff4f2] disabled:cursor-not-allowed disabled:text-[#d6a39b]"}
+            disabled={disabled}
+            onClick={onToggleUnlink}
+            type="button"
+          >
+            {attachment.unlinkPending ? "紐付け" : "紐付け解除"}
+          </button>
+        </div>
+      </div>
+
+      {state.status === "loading" ? <MediaPreviewStatus message="読み込み中" /> : null}
+      {state.status === "error" ? <MediaPreviewStatus error message="添付ファイルを取得できませんでした" /> : null}
+      {state.status === "ready" ? (
+        <MediaObjectRenderer contentType={state.contentType} objectUrl={state.objectUrl} />
+      ) : null}
+    </div>
+  );
+}
+
+function SelectedMediaFilePreview({
+  disabled,
+  file,
+  onRemove,
+}: {
+  disabled: boolean;
+  file: File;
+  onRemove: () => void;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const nextObjectUrl = URL.createObjectURL(file);
+    setObjectUrl(nextObjectUrl);
+
+    return () => URL.revokeObjectURL(nextObjectUrl);
+  }, [file]);
+
+  return (
+    <div className="rounded-md border border-[#eef2f3] bg-[#fafcfc] p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{file.name}</p>
+          <p className="mt-1 text-xs text-[#65737a]">{formatFileSize(file.size)}</p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          {objectUrl ? (
+            <a
+              className="rounded-md border border-[#b8c3c8] bg-white px-3 py-2 text-xs font-medium hover:bg-[#eef2f3]"
+              download={file.name}
+              href={objectUrl}
+            >
+              ダウンロード
+            </a>
+          ) : null}
+          <button
+            className="rounded-md border border-[#d6a39b] bg-white px-3 py-2 text-xs font-medium text-[#a23c32] hover:bg-[#fff4f2] disabled:cursor-not-allowed disabled:text-[#d6a39b]"
+            disabled={disabled}
+            onClick={onRemove}
+            type="button"
+          >
+            削除
+          </button>
+        </div>
+      </div>
+
+      {objectUrl ? (
+        <MediaObjectRenderer contentType={file.type} objectUrl={objectUrl} />
+      ) : (
+        <MediaPreviewStatus message="読み込み中" />
+      )}
+    </div>
+  );
+}
+
+function MediaObjectRenderer({ contentType, objectUrl }: { contentType: string; objectUrl: string }) {
+  if (contentType.startsWith("image/")) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        alt="添付画像"
+        className="max-h-[520px] w-full rounded-md border border-[#d8dfe2] object-contain"
+        src={objectUrl}
+      />
+    );
+  }
+
+  if (contentType.startsWith("video/")) {
+    return <video className="w-full rounded-md border border-[#d8dfe2] bg-black" controls src={objectUrl} />;
+  }
+
+  if (contentType.startsWith("audio/")) {
+    return <audio className="w-full" controls src={objectUrl} />;
+  }
+
+  return (
+    <div className="rounded-md border border-dashed border-[#c9d2d6] px-4 py-8 text-center">
+      <p className="text-sm text-[#65737a]">プレビューできない形式です</p>
+      <p className="mt-2 break-all text-xs text-[#7c898f]">{contentType || "application/octet-stream"}</p>
+    </div>
+  );
+}
+
+function MediaPreviewStatus({ error = false, message }: { error?: boolean; message: string }) {
+  const textColor = error ? "text-[#a23c32]" : "text-[#65737a]";
+  return (
+    <div className={`grid min-h-36 place-items-center rounded-md border border-dashed border-[#c9d2d6] px-4 text-center text-sm ${textColor}`}>
+      {message}
+    </div>
+  );
+}
+
 function PredicateCombobox({ disabled, onOpen, onSelect, terms, termsStatus, value }: { disabled: boolean; onOpen: () => void; onSelect: (uri: string) => void; terms: DarwinCoreTerm[]; termsStatus: "idle" | "loading" | "loaded" | "error"; value: string; }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState(() => predicateLabelForUri(value));
@@ -638,15 +895,10 @@ function PredicateCombobox({ disabled, onOpen, onSelect, terms, termsStatus, val
 
   const sortedTerms = [...terms].sort((left, right) => {
     const byName = left.local_name.localeCompare(right.local_name, "ja", { sensitivity: "base" });
-    if (byName !== 0) return byName;
-    return left.uri.localeCompare(right.uri, "en", { sensitivity: "base" });
+    return byName !== 0 ? byName : left.uri.localeCompare(right.uri, "en", { sensitivity: "base" });
   });
-
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const filteredTerms = sortedTerms.filter((term) => {
-    if (!normalizedQuery) return true;
-    return term.local_name.toLocaleLowerCase().includes(normalizedQuery) || term.uri.toLocaleLowerCase().includes(normalizedQuery);
-  });
+  const filteredTerms = sortedTerms.filter((term) => !normalizedQuery || term.local_name.toLocaleLowerCase().includes(normalizedQuery) || term.uri.toLocaleLowerCase().includes(normalizedQuery));
 
   return (
     <div className="relative">
@@ -660,29 +912,20 @@ function PredicateCombobox({ disabled, onOpen, onSelect, terms, termsStatus, val
           const next = event.target.value;
           const normalizedNext = next.trim();
           setQuery(next);
-
           const exactMatch = sortedTerms.find((term) => term.local_name.toLocaleLowerCase() === normalizedNext.toLocaleLowerCase() || term.uri === normalizedNext);
-          if (exactMatch) {
-            onSelect(exactMatch.uri);
-          } else if (isAbsoluteHttpUri(normalizedNext)) {
-            onSelect(normalizedNext);
-          } else {
-            onSelect("");
-          }
-
+          if (exactMatch) onSelect(exactMatch.uri);
+          else if (isAbsoluteHttpUri(normalizedNext)) onSelect(normalizedNext);
+          else onSelect("");
           setIsOpen(true);
         }}
-        onFocus={() => {
-          setIsOpen(true);
-          onOpen();
-        }}
+        onFocus={() => { setIsOpen(true); onOpen(); }}
         placeholder="項目名"
         role="combobox"
         type="text"
         value={query}
       />
       {isOpen ? (
-        <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg" role="listbox">
+        <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg" role="listbox">
           {termsStatus === "loading" ? <p className="px-3 py-2 text-sm text-[#65737a]">読み込み中</p> : null}
           {termsStatus === "error" ? <p className="px-3 py-2 text-sm text-[#a23c32]">候補を取得できませんでした</p> : null}
           {termsStatus === "loaded" && filteredTerms.length === 0 ? <p className="px-3 py-2 text-sm text-[#65737a]">一致する項目はありません</p> : null}
@@ -691,16 +934,125 @@ function PredicateCombobox({ disabled, onOpen, onSelect, terms, termsStatus, val
               className="block w-full px-3 py-2 text-left hover:bg-[#eef2f3] focus:bg-[#eef2f3] focus:outline-none"
               key={term.uri}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                onSelect(term.uri);
-                setQuery(predicateLabelForUri(term.uri, terms));
-                setIsOpen(false);
-              }}
+              onClick={() => { onSelect(term.uri); setQuery(predicateLabelForUri(term.uri, terms)); setIsOpen(false); }}
               role="option"
               type="button"
             >
               <span className="block text-sm font-medium">{term.local_name}</span>
               <span className="block truncate text-xs text-[#65737a]">{term.uri}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ObjectValueField({ disabled, onChange, onTaxonSelect, predicate, value }: { disabled: boolean; onChange: (value: string) => void; onTaxonSelect: (scientificName: string) => void; predicate: string; value: string; }) {
+  if (predicate === DWCIRI_TO_TAXON_URI) {
+    return <TaxonValueCombobox disabled={disabled} onChange={onChange} onSelectScientificName={onTaxonSelect} value={value} />;
+  }
+
+  return (
+    <label className="min-w-0">
+      <span className="mb-2 block text-sm font-medium md:sr-only">値</span>
+      <input
+        className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="値"
+        type="text"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function TaxonValueCombobox({ disabled, onChange, onSelectScientificName, value }: { disabled: boolean; onChange: (value: string) => void; onSelectScientificName: (scientificName: string) => void; value: string; }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const [suggestions, setSuggestions] = useState<GbifSpeciesSuggestion[]>([]);
+  const [suggestStatus, setSuggestStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const lastSelectedLabel = useRef("");
+  const lastSelectedValue = useRef("");
+
+  useEffect(() => {
+    if (value === lastSelectedValue.current && lastSelectedLabel.current) {
+      setQuery(lastSelectedLabel.current);
+      return;
+    }
+    setQuery(value);
+  }, [value]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 3) {
+      setSuggestions([]);
+      setSuggestStatus("idle");
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSuggestStatus("loading");
+      void fetch(`${GBIF_SUGGEST_ENDPOINT}?q=${encodeURIComponent(trimmed)}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("gbif suggest failed");
+          const items = (await response.json()) as GbifSpeciesSuggestion[];
+          setSuggestions(items.slice(0, 10));
+          setSuggestStatus("loaded");
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setSuggestions([]);
+          setSuggestStatus("error");
+        });
+    }, GBIF_SUGGEST_DEBOUNCE_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [query]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredSuggestions = suggestions.filter((item) => !normalizedQuery || item.scientificName.toLocaleLowerCase().includes(normalizedQuery) || (item.canonicalName ?? "").toLocaleLowerCase().includes(normalizedQuery));
+
+  return (
+    <div className="relative min-w-0">
+      <input
+        aria-autocomplete="list"
+        aria-expanded={isOpen}
+        className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
+        disabled={disabled}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        onChange={(event) => { const next = event.target.value; setQuery(next); onSelectScientificName(""); onChange(next); setIsOpen(true); }}
+        onFocus={() => setIsOpen(true)}
+        placeholder="分類"
+        role="combobox"
+        type="text"
+        value={query}
+      />
+      {isOpen ? (
+        <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg" role="listbox">
+          {suggestStatus === "loading" ? <p className="px-3 py-2 text-sm text-[#65737a]">GBIF候補を読み込み中</p> : null}
+          {suggestStatus === "error" ? <p className="px-3 py-2 text-sm text-[#a23c32]">GBIF候補を取得できませんでした</p> : null}
+          {suggestStatus === "loaded" && filteredSuggestions.length === 0 ? <p className="px-3 py-2 text-sm text-[#65737a]">一致する候補はありません</p> : null}
+          {filteredSuggestions.map((item) => (
+            <button
+              className="block w-full px-3 py-2 text-left hover:bg-[#eef2f3] focus:bg-[#eef2f3] focus:outline-none"
+              key={item.key}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const label = item.scientificName || item.canonicalName || String(item.key);
+                const speciesUri = `${GBIF_SPECIES_URI_PREFIX}${item.key}`;
+                lastSelectedLabel.current = label;
+                lastSelectedValue.current = speciesUri;
+                onSelectScientificName(label);
+                onChange(speciesUri);
+                setQuery(label);
+                setIsOpen(false);
+              }}
+              role="option"
+              type="button"
+            >
+              <span className="block text-sm font-medium">{item.scientificName}</span>
+              <span className="block truncate text-xs text-[#65737a]">GBIF key: {item.key}</span>
             </button>
           ))}
         </div>
@@ -715,6 +1067,39 @@ function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): stri
   }
 
   return terms.find((term) => term.uri === value)?.local_name ?? value;
+}
+
+// 分類の入力は、URIならtoTaxon、任意テキストならscientificNameとして保存する。
+function normalizeTaxonStatements(
+  statements: StatementRow[],
+  scientificNamesByRowId: Record<number, string>,
+): StatementRow[] {
+  const normalizedStatements: StatementRow[] = [];
+  const generatedScientificNames: StatementRow[] = [];
+
+  for (const row of statements) {
+    if (row.predicate !== DWCIRI_TO_TAXON_URI) {
+      normalizedStatements.push(row);
+      continue;
+    }
+
+    if (!isAbsoluteHttpUri(row.object)) {
+      normalizedStatements.push({ ...row, predicate: DWC_SCIENTIFIC_NAME_URI });
+      continue;
+    }
+
+    normalizedStatements.push(row);
+    const scientificName = scientificNamesByRowId[row.id];
+    if (scientificName?.trim()) {
+      generatedScientificNames.push({
+        id: statements.length + generatedScientificNames.length + 1,
+        predicate: DWC_SCIENTIFIC_NAME_URI,
+        object: scientificName.trim(),
+      });
+    }
+  }
+
+  return [...normalizedStatements, ...generatedScientificNames];
 }
 
 function validateStatementRows(rows: StatementRow[]): StatementRow[] {
@@ -763,6 +1148,45 @@ function buildOccurrenceNQuads(statements: StatementRow[], mediaUris: string[]):
   return `${lines.join("\n")}\n`;
 }
 
+
+function buildExistingMediaAttachmentsFromNQuads(nquads: string): ExistingMediaAttachment[] {
+  const mediaUris = parseNQuads(nquads)
+    .filter((quad) => quad.predicate === ASSOCIATED_MEDIA_PREDICATE_URI)
+    .map((quad) => normalizeObject(quad.object));
+
+  return buildExistingMediaAttachmentsFromUris(mediaUris);
+}
+
+function buildExistingMediaAttachmentsFromUris(mediaUris: string[]): ExistingMediaAttachment[] {
+  const attachments = new Map<string, ExistingMediaAttachment>();
+
+  for (const mediaUri of mediaUris) {
+    const mediaId = extractMediaId(mediaUri);
+    if (!mediaId || attachments.has(mediaUri)) continue;
+
+    attachments.set(mediaUri, {
+      mediaUri,
+      mediaId,
+      fetchUrl: `${API_PREFIX}/media/${encodeURIComponent(mediaId)}`,
+      unlinkPending: false,
+    });
+  }
+
+  return Array.from(attachments.values());
+}
+
+function extractMediaId(mediaUri: string): string | null {
+  try {
+    const parsed = new URL(mediaUri);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const mediaIndex = segments.lastIndexOf("media");
+    const mediaId = mediaIndex >= 0 ? segments[mediaIndex + 1] : null;
+    return mediaId && mediaId.length > 0 ? decodeURIComponent(mediaId) : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildEditableRowsFromNQuads(nquads: string): StatementRow[] {
   const rows: StatementRow[] = [];
   let id = 1;
@@ -771,7 +1195,8 @@ function buildEditableRowsFromNQuads(nquads: string): StatementRow[] {
       quad.predicate === CREATOR_PREDICATE ||
       quad.predicate === CREATED_PREDICATE ||
       quad.predicate === MODIFIED_PREDICATE ||
-      quad.predicate === RDF_TYPE_PREDICATE_URI
+      quad.predicate === RDF_TYPE_PREDICATE_URI ||
+      quad.predicate === ASSOCIATED_MEDIA_PREDICATE_URI
     ) {
       continue;
     }
