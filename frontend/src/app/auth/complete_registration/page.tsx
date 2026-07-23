@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -17,6 +17,14 @@ interface ErrorBody {
 }
 
 export default function CompleteRegistrationPage() {
+  return (
+    <Suspense fallback={null}>
+      <CompleteRegistrationContent />
+    </Suspense>
+  );
+}
+
+function CompleteRegistrationContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
