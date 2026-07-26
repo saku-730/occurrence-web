@@ -29,5 +29,5 @@ The full name, with authorship and date information if known, of the currently v
 
 ## alternative label
 
-- 採用名:accepted(botanical)より
-- 有効名:valid(zoological)より
+- 採用名
+- 有効名
