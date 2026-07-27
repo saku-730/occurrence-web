@@ -18,6 +18,12 @@ const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
 const DWC_SCIENTIFIC_NAME_URI = "http://rs.tdwg.org/dwc/terms/scientificName";
+const DWC_DECIMAL_LONGITUDE_URI =
+  "http://rs.tdwg.org/dwc/terms/decimalLongitude";
+const DWC_DECIMAL_LONGITUDE_LABEL = "経度";
+const DWC_DECIMAL_LATITUDE_URI =
+  "http://rs.tdwg.org/dwc/terms/decimalLatitude";
+const DWC_DECIMAL_LATITUDE_LABEL = "緯度";
 const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
 const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
 const GBIF_SUGGEST_DEBOUNCE_MS = 300;
@@ -62,13 +68,15 @@ type AuthStatus =
   | "error";
 
 const initialRows: StatementRow[] = [
+  // 最初に分類と位置情報を提示し、よく使うオカレンス項目の入力を始めやすくする。
   { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" },
-  { id: 2, predicate: "", object: "" },
+  { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
+  { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
 ];
 
 export default function NewOccurrencePage() {
   const [rows, setRows] = useState(initialRows);
-  const nextId = useRef(3);
+  const nextId = useRef(4);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -131,13 +139,24 @@ export default function NewOccurrencePage() {
     setTermsStatus("loading");
     try {
       const terms = await apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core");
-      // backendから返った語彙候補は制限せず表示し、toTaxonだけは「分類」候補へ一本化する。
-      const visibleTerms = terms.filter((term) =>
-        term.uri !== DWCIRI_TO_TAXON_URI,
+      // 特別表示する語彙はバックエンド候補から除外し、候補の重複を防ぐ。
+      const visibleTerms = terms.filter(
+        (term) =>
+          term.uri !== DWCIRI_TO_TAXON_URI &&
+          term.uri !== DWC_DECIMAL_LONGITUDE_URI &&
+          term.uri !== DWC_DECIMAL_LATITUDE_URI,
       );
-      // 分類は UI 上の特別候補としてだけ追加し、保存値は dwciri:toTaxon に固定する。
+      // UI上の日本語候補と保存するDarwin Core URIをここで対応付ける。
       setDarwinCoreTerms([
         { uri: DWCIRI_TO_TAXON_URI, local_name: DWCIRI_TO_TAXON_LABEL },
+        {
+          uri: DWC_DECIMAL_LONGITUDE_URI,
+          local_name: DWC_DECIMAL_LONGITUDE_LABEL,
+        },
+        {
+          uri: DWC_DECIMAL_LATITUDE_URI,
+          local_name: DWC_DECIMAL_LATITUDE_LABEL,
+        },
         ...visibleTerms,
       ]);
       setTermsStatus("loaded");
@@ -240,7 +259,7 @@ export default function NewOccurrencePage() {
       setSelectedFiles([]);
       setTaxonScientificNames({});
       setIsPublic(true);
-      nextId.current = 3;
+      nextId.current = 4;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         setAuthStatus("unauthenticated");
@@ -486,6 +505,13 @@ function ObjectValueField({
     );
   }
 
+  const placeholder =
+    predicate === DWC_DECIMAL_LONGITUDE_URI
+      ? "140.106861"
+      : predicate === DWC_DECIMAL_LATITUDE_URI
+        ? "36.225333"
+        : "値";
+
   return (
     <label className="min-w-0">
       <span className="mb-2 block text-sm font-medium md:sr-only">値</span>
@@ -493,7 +519,7 @@ function ObjectValueField({
         className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15 disabled:bg-[#eef2f3]"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="値"
+        placeholder={placeholder}
         type="text"
         value={value}
       />
@@ -752,6 +778,14 @@ function PredicateCombobox({
 function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): string {
   if (value === DWCIRI_TO_TAXON_URI) {
     return DWCIRI_TO_TAXON_LABEL;
+  }
+
+  if (value === DWC_DECIMAL_LONGITUDE_URI) {
+    return DWC_DECIMAL_LONGITUDE_LABEL;
+  }
+
+  if (value === DWC_DECIMAL_LATITUDE_URI) {
+    return DWC_DECIMAL_LATITUDE_LABEL;
   }
 
   return terms.find((term) => term.uri === value)?.local_name ?? value;
