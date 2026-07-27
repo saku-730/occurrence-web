@@ -1,0 +1,87 @@
+# Bio Database
+
+> 生物オカレンス情報を登録、管理、共有するためのデータベースです。
+
+- [Page not found](http://localhost:1313/404/): The page you're looking for doesn’t exist or has moved. Check the URL, use the navigation to browse sections, or return to the homepage.
+- [Privacy Policy](http://localhost:1313/privacy/): Learn how we collect, use, and protect your personal data, what rights you have over your information, and how to contact us with questions.
+- [Usage](http://localhost:1313/usage/): Bio Databaseの利用方法
+- [Blog](http://localhost:1313/blog/): Read product updates, release highlights, and practical tips that explain what’s new, why it matters, and how to get the most value from this project.
+- [Docs](http://localhost:1313/docs/): Browse guides and reference documentation that explain how to use this site’s features, configure Doks, and publish clear, user-focused content.
+
+## Usage
+
+> Bio Databaseの利用方法
+
+- [Overview](http://localhost:1313/usage/overview/): Bio Databaseプロジェクトの背景、解決したい問題、対象利用者、範囲
+- [Getting Started](http://localhost:1313/usage/getting-started/): Bio Databaseを使い始めるための基本的な流れ
+- [User Guide](http://localhost:1313/usage/user-guide/): Bio Databaseの機能別利用ガイド
+
+### User Guide
+
+> Bio Databaseの機能別利用ガイド
+
+- [Occurrences](http://localhost:1313/usage/user-guide/occurrences/): オカレンスデータの登録、編集、削除、公開範囲、所有者、入力項目
+- [Search](http://localhost:1313/usage/user-guide/search/): オカレンスデータのキーワード、分類群、日付、場所による検索と検索結果の見方
+- [Identifications](http://localhost:1313/usage/user-guide/identifications/): 同定情報をオカレンス本体から分離して管理するIdentificationの考え方と入力項目
+- [Media](http://localhost:1313/usage/user-guide/media/): オカレンスに添付する画像、音声、動画のアップロード、公開、削除
+- [Access Control](http://localhost:1313/usage/user-guide/access-control/): 公開範囲、作成者、閲覧権限、編集権限に関するオカレンスデータのアクセス制御
+
+## Blog
+
+> Read product updates, release highlights, and practical tips that explain what’s new, why it matters, and how to get the most value from this project.
+
+- [Example Post](http://localhost:1313/blog/example-post/): Learn how to write clear, structured product update posts that explain what changed, why it matters, and how users can successfully adopt new features.
+
+## Docs
+
+> Browse guides and reference documentation that explain how to use this site’s features, configure Doks, and publish clear, user-focused content.
+
+- [Concepts](http://localhost:1313/docs/concepts/): Bio Databaseのデータモデルと基本概念
+- [Overview](http://localhost:1313/docs/overview/): Bio Databaseのシステム構成と技術スタック
+- [Development](http://localhost:1313/docs/development/): Bio Databaseの設計判断と今後の改善方針
+- [Architecture](http://localhost:1313/docs/architecture/): Bio Databaseのバックエンド、ストレージ、デプロイメント構成
+- [API](http://localhost:1313/docs/api/): Bio Database APIの認証、オカレンス、検索、分類候補、メディア、エラーレスポンス
+- [Guides](http://localhost:1313/docs/guides/): Explore step-by-step guides that walk you through common tasks, from setup to advanced workflows, helping you learn and use this project with confidence.
+- [Reference](http://localhost:1313/docs/reference/): Find detailed, structured reference pages that explain concepts, configuration options, and behavior so you can quickly look up precise information as you work.
+- [Resources](http://localhost:1313/docs/resources/): Discover curated links to official docs, tools, templates, and learning materials that help you deepen your knowledge and get more from this project.
+
+### Concepts
+
+> Bio Databaseのデータモデルと基本概念
+
+- [Data Model](http://localhost:1313/docs/concepts/data-model/): Occurrenceを中心にIdentification、Event、Location、MaterialSample、Media、Projectを関連付けるデータモデル
+- [Darwin Core](http://localhost:1313/docs/concepts/darwin-core/): Bio DatabaseにおけるDarwin Core語彙、dwcとdwciri、リテラルとIRIの正規化
+- [RDF](http://localhost:1313/docs/concepts/rdf/): Bio DatabaseにおけるRDF、Named Graph、N-Quads、Fuseki、SPARQL検索の基本概念
+- [Taxonomy](http://localhost:1313/docs/concepts/taxonomy/): GBIF Backbone Taxonomyの基本概念とBio DatabaseへのRDF変換・Fuseki投入処理
+
+### Development
+
+> Bio Databaseの設計判断と今後の改善方針
+
+- [Design Decisions](http://localhost:1313/docs/development/design-decisions/): Bio Databaseで採用した設計判断と、その課題、候補、理由、欠点、今後の改善
+
+### Architecture
+
+> Bio Databaseのバックエンド、ストレージ、デプロイメント構成
+
+- [Backend](http://localhost:1313/docs/architecture/backend/): Rust APIサーバーの責務、入力検証、RDF生成、ストレージ連携、エラーハンドリング
+- [Storage](http://localhost:1313/docs/architecture/storage/): PostgreSQL、Fuseki、Garageに分けたBio Databaseのデータ保存設計
+- [Deployment](http://localhost:1313/docs/architecture/deployment/): Bio Databaseの本番ビルド、nginx、Cloudflare Tunnel、プロセス起動に関する公開可能な運用概要
+
+### API
+
+> Bio Database APIの認証、オカレンス、検索、分類候補、メディア、エラーレスポンス
+
+
+### Guides
+
+> Explore step-by-step guides that walk you through common tasks, from setup to advanced workflows, helping you learn and use this project with confidence.
+
+- [Example Guide](http://localhost:1313/docs/guides/example-guide/): Learn how to structure clear, task-focused guides that walk users through real workflows step by step, improving documentation usability and success.
+
+### Reference
+
+> Find detailed, structured reference pages that explain concepts, configuration options, and behavior so you can quickly look up precise information as you work.
+
+- [Example Reference](http://localhost:1313/docs/reference/example-reference/): Learn how to design concise, comprehensive reference pages that document concepts, options, and behavior clearly so users can quickly find exact answers.
+

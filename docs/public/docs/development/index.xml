@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Development on Bio Database</title>
+		<link>http://localhost:1313/docs/development/</link>
+		<description>Recent content in Development on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<atom:link href="http://localhost:1313/docs/development/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Design Decisions</title>
+				<link>http://localhost:1313/docs/development/design-decisions/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/development/design-decisions/</guid>
+				<description>&lt;p&gt;このページでは、Bio Databaseにおける主要な設計判断を記録します。利用手順ではなく、技術選定の背景とトレードオフを説明するためのページです。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdfとpostgresqlを併用した理由&#34;&gt;RDFとPostgreSQLを併用した理由&lt;/h2&gt;&#xA;&lt;h3 id=&#34;課題&#34;&gt;課題&lt;/h3&gt;&#xA;&lt;p&gt;オカレンスは柔軟な語彙と多様な関係を必要とする一方、ユーザー、セッション、認証トークン、メディアメタデータには整合性の高い更新と検索が必要です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;候補&#34;&gt;候補&lt;/h3&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;すべてをRDFストアで管理する&lt;/li&gt;&#xA;&lt;li&gt;すべてをリレーショナルデータベースで管理する&lt;/li&gt;&#xA;&lt;li&gt;RDFとPostgreSQLを用途別に併用する&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h3 id=&#34;採用した方法&#34;&gt;採用した方法&lt;/h3&gt;&#xA;&lt;p&gt;オカレンスと語彙・分類群はRDFとしてFusekiに保存し、ユーザー・認証・セッション・メディアメタデータはPostgreSQLで管理します。&lt;/p&gt;&#xA;&lt;h3 id=&#34;採用理由&#34;&gt;採用理由&lt;/h3&gt;&#xA;&lt;p&gt;RDFは外部語彙と関係の追加に適し、PostgreSQLは認証やトランザクションを伴うアプリケーションデータに適しています。&lt;/p&gt;&#xA;&lt;h3 id=&#34;欠点&#34;&gt;欠点&lt;/h3&gt;&#xA;&lt;p&gt;データが2つのストアに分かれるため、横断処理と障害時の整合性を考慮する必要があります。&lt;/p&gt;&#xA;&lt;h3 id=&#34;今後の改善&#34;&gt;今後の改善&lt;/h3&gt;&#xA;&lt;p&gt;ストア間の補償処理、監査ログ、孤立メディア検出を強化します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;fusekiをdockerで運用する理由&#34;&gt;FusekiをDockerで運用する理由&lt;/h2&gt;&#xA;&lt;h3 id=&#34;課題-1&#34;&gt;課題&lt;/h3&gt;&#xA;&lt;p&gt;RDFストアを開発環境と本番環境で同じ構成に保ち、設定とデータ保存先を明確にする必要があります。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>

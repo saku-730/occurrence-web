@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Concepts on Bio Database</title>
+		<link>http://localhost:1313/docs/concepts/</link>
+		<description>Recent content in Concepts on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<atom:link href="http://localhost:1313/docs/concepts/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Data Model</title>
+				<link>http://localhost:1313/docs/concepts/data-model/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/data-model/</guid>
+				<description>&lt;h2 id=&#34;全体像&#34;&gt;全体像&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseでは、Occurrenceを記録全体の起点として、関連する情報をそれぞれの役割に応じて分離します。&lt;/p&gt;&#xA;&#xD;&#xA;&#xD;&#xA;&#xD;&#xA;&lt;div class=&#34;expressive-code&#34;&gt;&#xD;&#xA;  &lt;figure class=&#34;frame not-content&#34;&gt;&#xD;&#xA;  &lt;figcaption class=&#34;header&#34;&gt;&#xD;&#xA;    &lt;span class=&#34;title&#34;&gt;&lt;/span&gt;&#xD;&#xA;  &lt;/figcaption&gt;&#xD;&#xA;  &lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-text&#34; data-lang=&#34;text&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;Occurrence&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Identification&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Event&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Location&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── MaterialSample&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Media&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;└── Project&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&#xD;&#xA;  &lt;/figure&gt;&#xD;&#xA;&lt;/div&gt;&#xD;&#xA;&lt;p&gt;現行実装では、Identification、Event、LocationをOccurrenceから独立した中間ノードとして保存します。Mediaは外部メディアURIとして関連付けます。MaterialSampleとProjectは、このモデルを拡張するための概念です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;occurrence&#34;&gt;Occurrence&lt;/h2&gt;&#xA;&lt;p&gt;記録全体の起点です。以下の情報と、ほかの構成要素との関連を保持します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Darwin Core</title>
+				<link>http://localhost:1313/docs/concepts/darwin-core/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/darwin-core/</guid>
+				<description>&lt;h2 id=&#34;darwin-coreとは何か&#34;&gt;Darwin Coreとは何か&lt;/h2&gt;&#xA;&lt;p&gt;Darwin Coreは、生物多様性データを記述するための標準語彙です。分類、採集・観察イベント、位置情報、標本、同定などに共通の項目名を提供します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;このアプリで採用している理由&#34;&gt;このアプリで採用している理由&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseでは、プロジェクトごとに項目名や意味がばらつくことを避けるため、Darwin Coreを主要な入力語彙として採用しています。共通語彙を使うことで、登録したデータを検索・共有・再利用しやすくします。&lt;/p&gt;&#xA;&lt;h2 id=&#34;dwcとdwciriの違い&#34;&gt;dwcとdwciriの違い&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;dwc&lt;/code&gt; は主にリテラル値を取るDarwin Core Termsの語彙です。&lt;code&gt;dwciri&lt;/code&gt; は主にIRIを目的語として関連先のリソースを指すDarwin Core RDFの語彙です。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;&lt;code&gt;dwc:scientificName&lt;/code&gt;: 学名を文字列として記録する&lt;/li&gt;&#xA;&lt;li&gt;&lt;code&gt;dwciri:toTaxon&lt;/code&gt;: 分類群をURIとして関連付ける&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;リテラル値とiri値&#34;&gt;リテラル値とIRI値&lt;/h2&gt;&#xA;&lt;p&gt;リテラル値は、学名や注記のような文字列・日付・数値です。IRI値は、GBIFの分類群ページのように、別のリソースを一意に指すURIです。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>RDF</title>
+				<link>http://localhost:1313/docs/concepts/rdf/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/rdf/</guid>
+				<description>&lt;h2 id=&#34;rdfを採用した理由&#34;&gt;RDFを採用した理由&lt;/h2&gt;&#xA;&lt;p&gt;生物オカレンス情報には、同定、採集・観察イベント、位置情報、分類群、メディア、権利情報など、複数の関係があります。RDFはこれらをURIでつなぎ、項目の追加や外部語彙との連携を柔軟に扱えるため採用しています。&lt;/p&gt;&#xA;&lt;h2 id=&#34;主語述語目的語&#34;&gt;主語・述語・目的語&lt;/h2&gt;&#xA;&lt;p&gt;RDFは、主語・述語・目的語からなるトリプルで情報を表します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;主語: 説明したいリソース&lt;/li&gt;&#xA;&lt;li&gt;述語: 主語と目的語の関係や項目名&lt;/li&gt;&#xA;&lt;li&gt;目的語: 値または関連先のリソース&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;p&gt;たとえば、オカレンスの学名は次のように表します。&lt;/p&gt;&#xA;&#xD;&#xA;&#xD;&#xA;&#xD;&#xA;&lt;div class=&#34;expressive-code&#34;&gt;&#xD;&#xA;  &lt;figure class=&#34;frame not-content&#34;&gt;&#xD;&#xA;  &lt;figcaption class=&#34;header&#34;&gt;&#xD;&#xA;    &lt;span class=&#34;title&#34;&gt;&lt;/span&gt;&#xD;&#xA;  &lt;/figcaption&gt;&#xD;&#xA;  &lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-turtle&#34; data-lang=&#34;turtle&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;k&#34;&gt;@prefix&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;nn&#34;&gt;dwc:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;&amp;lt;http://rs.tdwg.org/dwc/terms/&amp;gt;&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;&#xA;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;&#xA;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;nv&#34;&gt;&amp;lt;https://bio-database.net/occurrences/example&amp;gt;&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;&#xA;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nn&#34;&gt;dwc:&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scientificName&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;s&#34;&gt;&amp;#34;Homo sapiens&amp;#34;&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&#xD;&#xA;  &lt;/figure&gt;&#xD;&#xA;&lt;/div&gt;&#xD;&#xA;&lt;h2 id=&#34;iriとリテラル&#34;&gt;IRIとリテラル&lt;/h2&gt;&#xA;&lt;p&gt;IRIは、リソースを一意に指すURIです。オカレンスやGBIFの分類群など、ほかのデータへ関連付ける場合に使います。リテラルは文字列、数値、日付などの値です。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Taxonomy</title>
+				<link>http://localhost:1313/docs/concepts/taxonomy/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/taxonomy/</guid>
+				<description>&lt;h2 id=&#34;gbif-backbone-taxonomyとは何か&#34;&gt;GBIF Backbone Taxonomyとは何か&lt;/h2&gt;&#xA;&lt;p&gt;GBIF Backbone Taxonomyは、GBIFが提供する統合的な分類群データセットです。多様なデータ提供元の分類情報を整理し、分類群ごとに安定した識別子を提供します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;分類候補として使う理由&#34;&gt;分類候補として使う理由&lt;/h2&gt;&#xA;&lt;p&gt;学名の文字列だけでは、表記揺れ、同名異物、分類体系の違いを十分に扱えません。GBIF Backbone Taxonomyの分類群URIを記録することで、入力候補の統一と分類群を起点とする検索を可能にします。&lt;/p&gt;&#xA;&lt;h2 id=&#34;scientificnameとcanonicalname&#34;&gt;scientificNameとcanonicalName&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;scientificName&lt;/code&gt; は、著者名や命名情報を含む完全な学名表記です。&lt;code&gt;canonicalName&lt;/code&gt; は、著者名などを除いた基本となる学名です。用途に応じて、表示や検索の対象を区別できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;taxonkey&#34;&gt;taxonKey&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;taxonKey&lt;/code&gt; は、GBIF Backbone Taxonomy内で分類群を識別する数値IDです。Bio Databaseでは、分類群URIを &lt;code&gt;https://www.gbif.org/species/{taxonKey}&lt;/code&gt; の形式で記録します。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>

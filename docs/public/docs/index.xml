@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Docs on Bio Database</title>
+		<link>http://localhost:1313/docs/</link>
+		<description>Recent content in Docs on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<lastBuildDate>Tue, 27 Feb 2024 09:30:56 +0100</lastBuildDate>
+		
+			<atom:link href="http://localhost:1313/docs/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Overview</title>
+				<link>http://localhost:1313/docs/overview/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/overview/</guid>
+				<description>&lt;h2 id=&#34;概要&#34;&gt;概要&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseは、生物オカレンス情報を構造化して登録、検索、共有するためのWebアプリケーションです。オカレンスのRDFデータ、ユーザー・認証情報、添付メディアを役割ごとに分けて管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;フロントエンド&#34;&gt;フロントエンド&lt;/h2&gt;&#xA;&lt;p&gt;Next.jsを使用して、データ登録、検索、詳細表示、編集、ユーザー操作の画面を提供します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;apiサーバー&#34;&gt;APIサーバー&lt;/h2&gt;&#xA;&lt;p&gt;Rustで実装したAPIサーバーが、認証、入力検証、オカレンスのRDF変換、アクセス制御を担当します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ユーザー認証情報&#34;&gt;ユーザー・認証情報&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLでユーザー、セッション、パスワードリセットトークン、メディアのメタデータを管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdfデータストア&#34;&gt;RDFデータストア&lt;/h2&gt;&#xA;&lt;p&gt;Apache Jena Fusekiに、オカレンス、語彙、分類群のRDFグラフを保存します。APIサーバーはSPARQLを使って保存、取得、検索を行います。&lt;/p&gt;&#xA;&lt;h2 id=&#34;メディアストレージ&#34;&gt;メディアストレージ&lt;/h2&gt;&#xA;&lt;p&gt;GarageをS3互換オブジェクトストレージとして使用し、画像、音声、動画などのファイル本体を保存します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;分類群データ&#34;&gt;分類群データ&lt;/h2&gt;&#xA;&lt;p&gt;GBIF Backbone TaxonomyをRDFへ変換し、約20GB規模の分類群データとしてFusekiへ投入します。分類候補の表示と分類群URIの記録に利用します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開基盤&#34;&gt;公開基盤&lt;/h2&gt;&#xA;&lt;p&gt;nginxをリバースプロキシとして使用し、Cloudflare Tunnelを経由して外部へ公開します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Resources</title>
+				<link>http://localhost:1313/docs/resources/</link>
+				<pubDate>Tue, 27 Feb 2024 09:30:56 +0100</pubDate>
+				<guid>http://localhost:1313/docs/resources/</guid>
+				<description>&lt;p&gt;Link to valuable, relevant resources.&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>
