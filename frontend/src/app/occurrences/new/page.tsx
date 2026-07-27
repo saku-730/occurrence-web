@@ -8,7 +8,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 const OCCURRENCE_GRAPH_URI =
   "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_MEDIA_PREDICATE_URI =
-  "http://rs.tdwg.org/ac/terms/associatedMedia";
+  "http://rs.tdwg.org/dwc/terms/associatedMedia";
 const ACCESS_RIGHTS_PREDICATE_URI = "http://purl.org/dc/terms/accessRights";
 const PUBLIC_ACCESS_RIGHTS_URI =
   "https://bio-database.net/terms/access-rights/public";
