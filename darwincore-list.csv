@@ -21,3 +21,4 @@ dwc:accuracy dwc:assertionEffectiveDate
  dwc:assertionUnit 
  dwc:assertionValue 
  dwciri:assertionValue 
+ dwc:associatedMedia 
