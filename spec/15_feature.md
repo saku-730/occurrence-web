@@ -245,6 +245,42 @@ https://bio-database.net/terms/literalEquivalent
 
 ---
 
+## 複数コンポーネントとコンポーネント単位の日時管理
+
+### MVPでの扱い
+
+Occurrenceは、Identification、Event、Locationをそれぞれ最大1件だけ持つ。
+
+各コンポーネントは、次の固定URIで保存する。
+
+```text
+https://bio-database.net/occurrences/{occurrence_id}/identifications/1
+https://bio-database.net/occurrences/{occurrence_id}/events/1
+https://bio-database.net/occurrences/{occurrence_id}/locations/1
+```
+
+`dcterms:created` と `dcterms:modified` はOccurrence本体だけにバックエンドが付与する。Identification、Event、Location、または各学名・各値には、バックエンド管理の作成日時・更新日時を付与しない。
+
+このため、複数の `dwc:scientificName` が同じIdentificationに存在しても、RDFだけから登録順や「最新の学名」を判定できない。`dwc:dateIdentified` は利用者が任意で入力する同定日であり、バックエンドが付与する履歴順序ではない。
+
+### 将来実装する内容
+
+- Identification、Event、Locationをそれぞれ複数件持てるようにする
+- 各コンポーネントに連番URIを割り当てる
+  - 例: `/identifications/1`、`/identifications/2`
+- 各コンポーネントへバックエンド管理の `dcterms:created` と `dcterms:modified` を付与する
+- コンポーネントの更新時に、対象コンポーネントだけの `dcterms:modified` を更新する
+- 検索一覧では、学名を表示するIdentificationをコンポーネントの管理日時で明示的に選択できるようにする
+  - 最新の学名を表示する検索では、Identificationの `dcterms:created` または設計で定めた更新日時を基準にする
+- 詳細画面では複数のIdentification、Event、Locationを時系列または利用者指定順で表示できるようにする
+- コンポーネントの追加・更新・削除と、既存の単一ノードデータからの移行方針を仕様化する
+
+### 設計上の注意
+
+RDFトリプルそのものには順序がない。そのため、SPARQLの `SAMPLE()`、`MIN()`、`MAX()` だけで複数の学名から1件を選んでも、それを「最新」とみなしてはならない。最新表示には、比較可能でバックエンドが管理するコンポーネント単位の日時が必要である。
+
+---
+
 ## 管理方針
 
 このファイルに記載した項目を実装する場合は、先に該当テストを追加する。
