@@ -171,7 +171,9 @@ export default function OccurrenceSearchPage() {
   }
 
   const selectedOccurrences =
-    result?.items.filter((item) => selectedOccurrenceIds.has(item.occurrence_id)) ?? [];
+    uniqueOccurrenceItems(result?.items ?? []).filter((item) =>
+      selectedOccurrenceIds.has(item.occurrence_id),
+    );
   return (
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
       <SiteHeader />
@@ -220,6 +222,12 @@ export default function OccurrenceSearchPage() {
                 {selectedOccurrenceIds.size}件選択
               </span>
             ) : null}
+            <Link
+              className="text-sm font-medium text-[#176b57] hover:underline"
+              href="/label-templates/new"
+            >
+              ラベルテンプレート
+            </Link>
             <button
               className="h-10 rounded-md border border-[#176b57] bg-white px-4 text-sm font-medium text-[#176b57] hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:border-[#b8c3c8] disabled:text-[#829b95] disabled:hover:bg-white"
               disabled={selectedOccurrences.length === 0}
@@ -687,11 +695,17 @@ function SearchResults({
     return <StatusPanel message="検索結果を取得できませんでした" />;
   }
 
-  if (!result || result.items.length === 0) {
+  if (!result) {
     return <StatusPanel message="該当するデータはありません" />;
   }
 
-  const occurrenceIds = result.items.map((item) => item.occurrence_id);
+  const items = uniqueOccurrenceItems(result.items);
+
+  if (items.length === 0) {
+    return <StatusPanel message="該当するデータはありません" />;
+  }
+
+  const occurrenceIds = items.map((item) => item.occurrence_id);
   const allSelected = occurrenceIds.every((occurrenceId) =>
     selectedOccurrenceIds.has(occurrenceId),
   );
@@ -739,7 +753,7 @@ function SearchResults({
           </tr>
         </thead>
         <tbody className="divide-y divide-[#e4e9eb]">
-          {result.items.map((item) => (
+          {items.map((item) => (
             <tr key={item.occurrence_id} className="hover:bg-[#f8faf9]">
               <TableCell>
                 <input
@@ -774,6 +788,19 @@ function SearchResults({
       </table>
     </div>
   );
+}
+
+function uniqueOccurrenceItems(items: OccurrenceItem[]): OccurrenceItem[] {
+  const seenOccurrenceIds = new Set<string>();
+
+  // The store can bind one occurrence once per optional RDF value. Until
+  // component-level timestamps exist, retain the first returned row per URI.
+  return items.filter((item) => {
+    if (seenOccurrenceIds.has(item.occurrence_id)) return false;
+
+    seenOccurrenceIds.add(item.occurrence_id);
+    return true;
+  });
 }
 
 function TableHeader({ children }: { children: React.ReactNode }) {
