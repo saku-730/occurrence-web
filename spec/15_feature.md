@@ -281,6 +281,107 @@ RDFトリプルそのものには順序がない。そのため、SPARQLの `SAM
 
 ---
 
+## ラベル印刷とラベルテンプレート
+
+### 現在の進捗
+
+検索画面でoccurrenceを複数選択し、ラベル作成モーダルを開ける。検索結果が同じoccurrenceを複数行返しても、フロントエンドではoccurrence IDごとに重複排除して一覧、選択、ラベル作成の対象を1件にする。
+
+ラベル作成モーダルには、次の2種類のプレビューがある。
+
+- A4全体: A4縦の用紙に5列 x 13行、最大65枚を配置する。ラベル間隔は0とする。65件を超える場合は追加のA4ページを作る。
+- 個別: 選択順に1枚ずつ大きく表示し、前後矢印で確認する。個別表示は確認用の拡大表示であり、印刷寸法ではない。
+
+デフォルトラベルは固定仕様とし、利用者は変更できない。
+
+- ラベル寸法: 横40mm x 縦20mm
+- QRコード: 15mm x 15mm
+- 背景: 白
+- 文字色: 黒
+- 表示値: 学名、作成者、緯度経度、作成日、occurrence詳細URLのQRコード
+- 学名がない場合: ラベル自体は作成し、学名の文字だけを表示しない
+- 作成日: 時刻を含めず日付だけを表示する
+- occurrence ID: 表示しない
+- QRコード: 専用の固定領域へ置き、文字がQRコードの下や背後へ回り込まないようにする
+
+緯度経度は、ラベル作成時に各occurrenceの詳細APIからN-Quadsを取得し、`dwc:decimalLatitude` と `dwc:decimalLongitude` を抽出する。両方がある場合だけ表示する。
+
+A4全体プレビューでは以下を実装済みとする。
+
+- 印刷: A4プレビューだけをPDF化し、別ウィンドウの印刷ダイアログを開く
+- PDFダウンロード: `occurrence-labels.pdf` をダウンロードする
+- PDF生成: `html2canvas` と `jspdf` を使い、日本語文字とQRコードを含むA4プレビューをPDF化する
+
+検索画面の `ラベルテンプレート` は `/label-templates/new` へのテキストリンクである。
+
+`/label-templates/new` には新規テンプレート作成画面を追加済みである。テンプレート名、横幅、縦幅、QR寸法、表示項目を入力し、プレビューを確認できる。表示項目は学名、作成者、緯度経度、作成日、QRコードである。
+
+### 暫定実装と問題点
+
+作成画面は現在、テンプレートをブラウザの `localStorage` の `occurrence-web.label-templates` キーへ保存する。これは画面試作のためだけの暫定実装である。
+
+`localStorage` のデータは同一ブラウザ・同一端末にしか存在せず、ログインユーザーとの所有関係、他端末同期、認可、バックアップ、削除管理を実現できない。また、保存したテンプレートはラベル作成モーダルへまだ適用されない。
+
+### 次に実装すること
+
+#### 1. PostgreSQLへの永続化
+
+テンプレートはRDFとして検索・共有する意味データではなく、ユーザー単位のUI・印刷設定である。そのためFusekiではなくPostgreSQLに保存する。
+
+Goose migrationで `label_templates` テーブルを追加する。最低限の列は以下とする。
+
+```text
+id UUID PRIMARY KEY
+user_id UUID NOT NULL REFERENCES users(id)
+name TEXT NOT NULL
+width_mm INTEGER NOT NULL
+height_mm INTEGER NOT NULL
+qr_size_mm INTEGER NOT NULL
+fields JSONB NOT NULL
+created_at TIMESTAMPTZ NOT NULL
+updated_at TIMESTAMPTZ NOT NULL
+```
+
+デフォルトラベルはコード上の固定テンプレートとして扱い、`label_templates` テーブルには保存しない。
+
+#### 2. API、service、認可
+
+ログイン済みユーザーだけが自分のテンプレートを操作できるAPIを追加する。
+
+- `POST /label-templates`: テンプレート作成
+- `GET /label-templates`: ログインユーザー自身のテンプレート一覧取得
+- `GET /label-templates/{id}`: 自分のテンプレート取得
+- `PUT /label-templates/{id}`: 自分のテンプレート更新
+- `DELETE /label-templates/{id}`: 自分のテンプレート削除
+
+未ログインは `401`、存在しないテンプレートまたは他人のテンプレートは `404` とする。他人の存在を通知しない。
+
+入力値は正の数値であること、QR寸法がラベル寸法内に収まること、`fields` が許可済みの表示項目だけで構成されることを検証する。
+
+#### 3. フロントエンドへの適用
+
+- `/label-templates/new` の `localStorage` 保存をAPI呼び出しへ置き換える
+- テンプレート一覧ページを追加し、作成、編集、削除へ遷移できるようにする
+- ラベル作成モーダルでデフォルトまたは自分のテンプレートを選択できるようにする
+- A4全体、個別、PDF、印刷で同じテンプレート定義を使う
+- PostgreSQL移行後は `localStorage` の `occurrence-web.label-templates` を読まず、暫定コードを削除する
+
+将来、項目の配置・文字サイズ・罫線などを編集可能にする場合も、任意HTMLや任意CSSは保存・実行しない。許可した表示項目とレイアウト属性だけを構造化データとして保存する。
+
+#### 4. テストと仕様更新
+
+実装開始時は先に `backend/test.md` へテスト内容を追記する。
+
+- service: 正常なテンプレートの作成、取得、更新、削除
+- service: 寸法、QR寸法、表示項目のvalidation
+- handler: 未ログイン `401`、他ユーザーの取得・更新・削除が `404`
+- PostgreSQL統合: 実DBへ保存・取得できること
+- フロントエンド: 作成済みテンプレートを選択するとA4、個別、PDF出力へ同じ設定が反映されること
+
+API実装時はOpenAPIと `spec/11_api_contract.md` を更新する。
+
+---
+
 ## 管理方針
 
 このファイルに記載した項目を実装する場合は、先に該当テストを追加する。
