@@ -9,10 +9,19 @@ pub struct InsertPaperMetadata<'a> {
     pub size_bytes: i64,
     pub original_filename: Option<&'a str>,
     pub sha256: &'a str,
+    pub doi: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub authors: Option<&'a str>,
+    pub publication_year: Option<i32>,
+    pub journal: Option<&'a str>,
+    pub volume: Option<&'a str>,
+    pub issue: Option<&'a str>,
+    pub pages: Option<&'a str>,
+    pub article_number: Option<&'a str>,
     pub uploaded_by: Uuid,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PaperMetadata {
     pub id: Uuid,
     pub bucket: String,
@@ -21,6 +30,15 @@ pub struct PaperMetadata {
     pub size_bytes: i64,
     pub original_filename: Option<String>,
     pub sha256: String,
+    pub doi: Option<String>,
+    pub title: Option<String>,
+    pub authors: Option<String>,
+    pub publication_year: Option<i32>,
+    pub journal: Option<String>,
+    pub volume: Option<String>,
+    pub issue: Option<String>,
+    pub pages: Option<String>,
+    pub article_number: Option<String>,
     pub uploaded_by: Uuid,
 }
 
@@ -34,7 +52,10 @@ impl PaperRepository {
         sqlx::query_as::<_, PaperMetadata>(
             r#"
             SELECT id, bucket, object_key, content_type, size_bytes,
-                   original_filename, sha256, uploaded_by
+                   original_filename, sha256,
+                   doi, title, authors, publication_year, journal,
+                   volume, issue, pages, article_number,
+                   uploaded_by
             FROM papers
             WHERE sha256 = $1
             "#,
@@ -60,9 +81,22 @@ impl PaperRepository {
                 size_bytes,
                 original_filename,
                 sha256,
+                doi,
+                title,
+                authors,
+                publication_year,
+                journal,
+                volume,
+                issue,
+                pages,
+                article_number,
                 uploaded_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                $17
+            )
             ON CONFLICT (sha256) DO NOTHING
             "#,
         )
@@ -73,6 +107,15 @@ impl PaperRepository {
         .bind(metadata.size_bytes)
         .bind(metadata.original_filename)
         .bind(metadata.sha256)
+        .bind(metadata.doi)
+        .bind(metadata.title)
+        .bind(metadata.authors)
+        .bind(metadata.publication_year)
+        .bind(metadata.journal)
+        .bind(metadata.volume)
+        .bind(metadata.issue)
+        .bind(metadata.pages)
+        .bind(metadata.article_number)
         .bind(metadata.uploaded_by)
         .execute(db)
         .await?;
