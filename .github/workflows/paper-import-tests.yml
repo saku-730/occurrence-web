@@ -52,6 +52,15 @@ jobs:
         with:
           workspaces: backend
 
+      # Compile and pure unit tests first so code errors fail fast without waiting for DB tooling.
+      - name: Check all Rust targets
+        working-directory: backend
+        run: cargo check --all-targets
+
+      - name: Run GROBID parser unit tests
+        working-directory: backend
+        run: cargo test grobid::tests --lib -- --test-threads=1
+
       - name: Set up Go for goose
         uses: actions/setup-go@v5
         with:
@@ -62,14 +71,6 @@ jobs:
 
       - name: Apply PostgreSQL migrations
         run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
-
-      - name: Check all Rust targets
-        working-directory: backend
-        run: cargo check --all-targets
-
-      - name: Run GROBID parser unit tests
-        working-directory: backend
-        run: cargo test grobid::tests --lib -- --test-threads=1
 
       - name: Run paper import service integration tests
         working-directory: backend
