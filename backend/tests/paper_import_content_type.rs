@@ -90,8 +90,11 @@ impl MediaObjectStore for RecordingObjectStore {
 }
 
 async fn test_db_pool() -> PgPool {
+    // Local tests use the same .env loading convention as the application.
+    // CI-provided environment variables keep precedence because dotenvy does not overwrite them.
+    dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set for paper import tests");
+        .expect("DATABASE_URL must be set in the environment or .env for paper import tests");
     PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
