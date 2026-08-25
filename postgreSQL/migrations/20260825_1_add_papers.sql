@@ -16,7 +16,7 @@ CREATE TABLE papers (
     sha256 TEXT NOT NULL UNIQUE,
 
     -- GROBIDから取得する論文metadata。
-    -- PDF保存直後はGROBID未処理のためNULLを許可し、解析完了後にUPDATEする。
+    -- 論文によって存在しない項目やGROBIDが抽出できない項目があるためNULLを許可する。
     doi TEXT,
     title TEXT,
     authors TEXT,
@@ -32,7 +32,10 @@ CREATE TABLE papers (
 
     CONSTRAINT chk_papers_content_type CHECK (content_type = 'application/pdf'),
     CONSTRAINT chk_papers_size_bytes CHECK (size_bytes > 0),
-    CONSTRAINT chk_papers_sha256_format CHECK (sha256 ~ '^[0-9a-f]{64}$')
+    CONSTRAINT chk_papers_sha256_format CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT chk_papers_publication_year CHECK (
+        publication_year IS NULL OR publication_year BETWEEN 1000 AND 3000
+    )
 );
 
 CREATE INDEX idx_papers_uploaded_by
