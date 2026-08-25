@@ -7,6 +7,7 @@
 - PostgreSQL
 - Apache Jena Fuseki
 - Garage
+- GROBID
 - 外部メール送信サービス
 - 開発用 Mailpit
 
@@ -50,6 +51,15 @@ S3_SECRET_KEY=...
 S3_FORCE_PATH_STYLE=true
 ```
 
+### GROBID
+
+論文PDFの書誌情報抽出にGROBIDの `processHeaderDocument` を利用する。
+未指定時は `http://127.0.0.1:8070` を使用する。
+
+```env
+GROBID_BASE_URL=http://127.0.0.1:8070
+```
+
 ### Mail
 
 ```env
@@ -91,6 +101,10 @@ COOKIE_SECURE=false
 - pending_registrations
 - password_reset_tokens
 - media_objects
+- papers
+  - PDF本体は保存せずGarageのbucket/object keyを保持する
+  - SHA-256によるPDF重複判定
+  - GROBIDで抽出した論文書誌情報
 - audit_logs
 - app settings
 
@@ -129,6 +143,7 @@ COOKIE_SECURE=false
 - 画像本体
 - 音声本体
 - 動画本体
+- importした論文PDF本体
 
 bucket は private 固定。
 
