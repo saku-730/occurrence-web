@@ -79,6 +79,10 @@ jobs:
         working-directory: backend
         run: cargo test --test paper_import_http -- --test-threads=1
 
+      - name: Run paper import HTTP error-path tests
+        working-directory: backend
+        run: cargo test --test paper_import_http_errors -- --test-threads=1
+
       - name: Run paper import MIME normalization regression test
         working-directory: backend
         run: cargo test --test paper_import_content_type -- --test-threads=1
