@@ -28,6 +28,15 @@ pub enum GrobidError {
     InvalidResponse,
 }
 
+#[async_trait::async_trait]
+pub trait PaperMetadataExtractor: Send + Sync {
+    async fn extract_header(
+        &self,
+        pdf_path: &Path,
+        pdf_size_bytes: u64,
+    ) -> Result<GrobidPaperMetadata, GrobidError>;
+}
+
 pub struct GrobidClient {
     http: Client,
     base_url: String,
@@ -35,8 +44,6 @@ pub struct GrobidClient {
 
 impl GrobidClient {
     pub fn from_env() -> Result<Self, GrobidError> {
-        // 開発環境ではGROBID標準portをdefaultにする。
-        // 別hostで動かす場合はGROBID_BASE_URLを設定する。
         let base_url = env::var("GROBID_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8070".to_string());
         let base_url = base_url.trim().trim_end_matches('/').to_string();
@@ -51,19 +58,19 @@ impl GrobidClient {
 
         Ok(Self { http, base_url })
     }
+}
 
-    pub async fn extract_header(
+#[async_trait::async_trait]
+impl PaperMetadataExtractor for GrobidClient {
+    async fn extract_header(
         &self,
         pdf_path: &Path,
         pdf_size_bytes: u64,
     ) -> Result<GrobidPaperMetadata, GrobidError> {
-        // reqwestのmultipart featureを追加せず、既存stream featureだけでmultipart bodyを組み立てる。
-        // PDF本体はmemoryへ集約せず、そのままGROBIDへstreamする。
         let boundary = format!("occurrence-web-grobid-{}", uuid::Uuid::new_v4().simple());
         let prefix = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"input\"; filename=\"paper.pdf\"\r\nContent-Type: application/pdf\r\n\r\n"
         );
-        // 外部Crossref等へ依存せずPDFから得られたheaderだけを使う。
         let suffix = format!(
             "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"consolidateHeader\"\r\n\r\n0\r\n--{boundary}--\r\n"
         );
@@ -128,8 +135,6 @@ fn parse_grobid_bibtex(input: &str) -> Result<GrobidPaperMetadata, GrobidError> 
     let volume = field(&fields, &["volume"]);
     let issue = field(&fields, &["number", "issue"]);
     let pages = field(&fields, &["pages"]).map(normalize_pages);
-    // GROBID/BibTeXでarticle numberが明示された場合のみ採用する。
-    // pagesが単一値でもarticle numberとは限らないため推測しない。
     let article_number = field(
         &fields,
         &["eid", "article_number", "article-number", "articlenumber"],
@@ -160,7 +165,6 @@ fn parse_bibtex_fields(input: &str) -> Option<HashMap<String, String>> {
     let bytes = input.as_bytes();
     let entry_open = bytes.iter().position(|byte| *byte == b'{')?;
 
-    // @article{citation-key, ...} のcitation-keyを飛ばす。
     let mut index = entry_open + 1;
     let mut depth = 0_i32;
     while index < bytes.len() {
@@ -288,7 +292,6 @@ fn clean_bibtex_value(value: &str) -> String {
         .replace("~", " ")
         .replace(['\n', '\r', '\t'], " ");
 
-    // BibTeXの大文字保持用grouping braceはDB表示値では不要。
     cleaned = cleaned.replace(['{', '}'], "");
     cleaned
         .split_whitespace()
@@ -366,6 +369,40 @@ mod tests {
     }
 
     #[test]
+    fn missing_optional_fields_remain_none() {
+        let bibtex = r#"@article{sample,
+  title = {Only a title}
+}"#;
+
+        let metadata = parse_grobid_bibtex(bibtex).expect("BibTeX should parse");
+
+        assert_eq!(metadata.title.as_deref(), Some("Only a title"));
+        assert_eq!(metadata.doi, None);
+        assert_eq!(metadata.authors, None);
+        assert_eq!(metadata.publication_year, None);
+        assert_eq!(metadata.journal, None);
+        assert_eq!(metadata.volume, None);
+        assert_eq!(metadata.issue, None);
+        assert_eq!(metadata.pages, None);
+        assert_eq!(metadata.article_number, None);
+    }
+
+    #[test]
+    fn normalizes_doi_authors_and_pages() {
+        let bibtex = r#"@article{sample,
+  author = {Doe, Jane and Smith, John},
+  pages = {10--20},
+  doi = {doi:10.9999/test}
+}"#;
+
+        let metadata = parse_grobid_bibtex(bibtex).expect("BibTeX should parse");
+
+        assert_eq!(metadata.authors.as_deref(), Some("Doe, Jane; Smith, John"));
+        assert_eq!(metadata.pages.as_deref(), Some("10-20"));
+        assert_eq!(metadata.doi.as_deref(), Some("10.9999/test"));
+    }
+
+    #[test]
     fn does_not_guess_article_number_from_pages() {
         let bibtex = r#"@article{sample,
   title = {Example},
@@ -376,5 +413,11 @@ mod tests {
 
         assert_eq!(metadata.pages.as_deref(), Some("055406"));
         assert_eq!(metadata.article_number, None);
+    }
+
+    #[test]
+    fn rejects_malformed_bibtex() {
+        let result = parse_grobid_bibtex("not bibtex");
+        assert!(matches!(result, Err(GrobidError::InvalidResponse)));
     }
 }
