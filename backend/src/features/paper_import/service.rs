@@ -77,7 +77,9 @@ impl PaperImportService {
         S: MediaObjectStore + ?Sized,
     {
         let bucket = input.bucket.trim();
-        let content_type = input.content_type.trim();
+        // MIME typeのtype/subtypeは大文字小文字を区別しない。
+        // handlerとserviceで判定を一致させ、DB/Garageにはcanonicalな小文字を保存する。
+        let content_type = input.content_type.trim().to_ascii_lowercase();
         let sha256 = input.payload_sha256.trim().to_ascii_lowercase();
 
         if bucket.is_empty()
@@ -106,7 +108,7 @@ impl PaperImportService {
             .put_object(PutMediaObjectInput {
                 bucket: bucket.to_string(),
                 object_key: object_key.clone(),
-                content_type: content_type.to_string(),
+                content_type: content_type.clone(),
                 file_path: input.file_path.clone(),
                 size_bytes: input.size_bytes,
                 payload_sha256: sha256.clone(),
@@ -133,7 +135,7 @@ impl PaperImportService {
                 id: paper_id,
                 bucket,
                 object_key: &object_key,
-                content_type,
+                content_type: &content_type,
                 size_bytes: input.size_bytes as i64,
                 original_filename: input.original_filename.as_deref(),
                 sha256: &sha256,
@@ -165,7 +167,7 @@ impl PaperImportService {
                 paper_id,
                 bucket,
                 object_key,
-                content_type,
+                &content_type,
                 input.size_bytes as i64,
                 input.original_filename,
                 sha256,
