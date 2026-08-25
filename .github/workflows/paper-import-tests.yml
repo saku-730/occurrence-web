@@ -8,6 +8,13 @@ on:
       - "backend/**"
       - "postgreSQL/migrations/**"
       - ".github/workflows/paper-import-tests.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "postgreSQL/migrations/**"
+      - ".github/workflows/paper-import-tests.yml"
   workflow_dispatch:
 
 jobs:
