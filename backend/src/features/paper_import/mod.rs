@@ -4,6 +4,7 @@ use crate::state::AppState;
 
 pub mod dto;
 pub mod grobid;
+mod grobid_client_api;
 pub mod handler;
 pub mod repository;
 pub mod service;
