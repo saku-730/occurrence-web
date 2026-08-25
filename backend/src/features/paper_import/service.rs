@@ -7,13 +7,17 @@ use crate::features::media::service::{
     DeleteMediaObjectInput, MediaObjectStore, PutMediaObjectInput,
 };
 
-use super::repository::{InsertPaperMetadata, PaperMetadata, PaperRepository};
+use super::{
+    grobid::{GrobidClient, GrobidError, GrobidPaperMetadata},
+    repository::{InsertPaperMetadata, PaperMetadata, PaperRepository},
+};
 
 #[derive(Debug)]
 pub enum PaperImportServiceError {
     InvalidInput,
     ObjectStoreFailed,
     Database(sqlx::Error),
+    Grobid(GrobidError),
     ConflictResolutionFailed,
 }
 
@@ -50,6 +54,15 @@ pub struct ImportPaperPdfOutput {
     pub size_bytes: i64,
     pub original_filename: Option<String>,
     pub sha256: String,
+    pub doi: Option<String>,
+    pub title: Option<String>,
+    pub authors: Option<String>,
+    pub publication_year: Option<i32>,
+    pub journal: Option<String>,
+    pub volume: Option<String>,
+    pub issue: Option<String>,
+    pub pages: Option<String>,
+    pub article_number: Option<String>,
 }
 
 pub struct PaperImportService;
@@ -75,13 +88,16 @@ impl PaperImportService {
             return Err(PaperImportServiceError::InvalidInput);
         }
 
-        // 通常の重複はGarageへ送る前にここで終了する。
+        // 同一PDFが既に確定済みなら、GarageにもGROBIDにも送らずここで終了する。
         if let Some(existing) = PaperRepository::find_by_sha256(db, &sha256).await? {
             return Ok(output_from_metadata(
                 ImportPaperPdfStatus::AlreadyImported,
                 existing,
             ));
         }
+
+        // 設定不備をGarage PUTより先に検出する。
+        let grobid = GrobidClient::from_env().map_err(PaperImportServiceError::Grobid)?;
 
         let paper_id = Uuid::new_v4();
         let object_key = format!("papers/{paper_id}/original.pdf");
@@ -98,6 +114,19 @@ impl PaperImportService {
             .await
             .map_err(|_| PaperImportServiceError::ObjectStoreFailed)?;
 
+        // Garage保存後に同じ一時PDFをGROBIDへstreamする。
+        // GROBID失敗時はpaperをimport済みにしないため、Garage objectを削除して巻き戻す。
+        let grobid_metadata = match grobid
+            .extract_header(&input.file_path, input.size_bytes)
+            .await
+        {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                rollback_object(store, bucket, &object_key).await?;
+                return Err(PaperImportServiceError::Grobid(error));
+            }
+        };
+
         let insert_result = PaperRepository::insert_if_sha256_absent(
             db,
             InsertPaperMetadata {
@@ -108,6 +137,15 @@ impl PaperImportService {
                 size_bytes: input.size_bytes as i64,
                 original_filename: input.original_filename.as_deref(),
                 sha256: &sha256,
+                doi: grobid_metadata.doi.as_deref(),
+                title: grobid_metadata.title.as_deref(),
+                authors: grobid_metadata.authors.as_deref(),
+                publication_year: grobid_metadata.publication_year,
+                journal: grobid_metadata.journal.as_deref(),
+                volume: grobid_metadata.volume.as_deref(),
+                issue: grobid_metadata.issue.as_deref(),
+                pages: grobid_metadata.pages.as_deref(),
+                article_number: grobid_metadata.article_number.as_deref(),
                 uploaded_by: input.uploaded_by,
             },
         )
@@ -117,39 +155,27 @@ impl PaperImportService {
             Ok(inserted) => inserted,
             Err(database_error) => {
                 // Garageだけに孤立objectを残さないよう、DB失敗時はPUTを巻き戻す。
-                store
-                    .delete_object(DeleteMediaObjectInput {
-                        bucket: bucket.to_string(),
-                        object_key: object_key.clone(),
-                    })
-                    .await
-                    .map_err(|_| PaperImportServiceError::ObjectStoreFailed)?;
+                rollback_object(store, bucket, &object_key).await?;
                 return Err(PaperImportServiceError::Database(database_error));
             }
         };
 
         if inserted {
-            return Ok(ImportPaperPdfOutput {
-                status: ImportPaperPdfStatus::Imported,
+            return Ok(output_from_new_import(
                 paper_id,
-                bucket: bucket.to_string(),
+                bucket,
                 object_key,
-                content_type: content_type.to_string(),
-                size_bytes: input.size_bytes as i64,
-                original_filename: input.original_filename,
+                content_type,
+                input.size_bytes as i64,
+                input.original_filename,
                 sha256,
-            });
+                grobid_metadata,
+            ));
         }
 
-        // 事前確認後に同じSHA-256が同時登録された場合。
-        // 自分が作ったGarage objectを削除し、先に確定したpaperを返す。
-        store
-            .delete_object(DeleteMediaObjectInput {
-                bucket: bucket.to_string(),
-                object_key,
-            })
-            .await
-            .map_err(|_| PaperImportServiceError::ObjectStoreFailed)?;
+        // 事前確認からINSERTまでの間に同じSHA-256が別requestで確定した場合。
+        // 自分のGarage objectは不要なので削除し、先に確定したpaperを返す。
+        rollback_object(store, bucket, &object_key).await?;
 
         let existing = PaperRepository::find_by_sha256(db, &sha256)
             .await?
@@ -159,6 +185,54 @@ impl PaperImportService {
             ImportPaperPdfStatus::AlreadyImported,
             existing,
         ))
+    }
+}
+
+async fn rollback_object<S>(
+    store: &S,
+    bucket: &str,
+    object_key: &str,
+) -> Result<(), PaperImportServiceError>
+where
+    S: MediaObjectStore + ?Sized,
+{
+    store
+        .delete_object(DeleteMediaObjectInput {
+            bucket: bucket.to_string(),
+            object_key: object_key.to_string(),
+        })
+        .await
+        .map_err(|_| PaperImportServiceError::ObjectStoreFailed)
+}
+
+fn output_from_new_import(
+    paper_id: Uuid,
+    bucket: &str,
+    object_key: String,
+    content_type: &str,
+    size_bytes: i64,
+    original_filename: Option<String>,
+    sha256: String,
+    metadata: GrobidPaperMetadata,
+) -> ImportPaperPdfOutput {
+    ImportPaperPdfOutput {
+        status: ImportPaperPdfStatus::Imported,
+        paper_id,
+        bucket: bucket.to_string(),
+        object_key,
+        content_type: content_type.to_string(),
+        size_bytes,
+        original_filename,
+        sha256,
+        doi: metadata.doi,
+        title: metadata.title,
+        authors: metadata.authors,
+        publication_year: metadata.publication_year,
+        journal: metadata.journal,
+        volume: metadata.volume,
+        issue: metadata.issue,
+        pages: metadata.pages,
+        article_number: metadata.article_number,
     }
 }
 
@@ -175,6 +249,15 @@ fn output_from_metadata(
         size_bytes: metadata.size_bytes,
         original_filename: metadata.original_filename,
         sha256: metadata.sha256,
+        doi: metadata.doi,
+        title: metadata.title,
+        authors: metadata.authors,
+        publication_year: metadata.publication_year,
+        journal: metadata.journal,
+        volume: metadata.volume,
+        issue: metadata.issue,
+        pages: metadata.pages,
+        article_number: metadata.article_number,
     }
 }
 
