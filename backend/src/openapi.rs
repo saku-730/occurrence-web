@@ -8,6 +8,7 @@ use crate::features::auth::dto::{
 };
 
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
+use crate::features::paper_import::dto::{ReceivePaperPdfRequest, ReceivePaperPdfResponse};
 
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -35,6 +36,7 @@ use crate::features::occurrences::dto::{
         crate::features::media::handler::upload_media,
         crate::features::media::handler::get_media,
         crate::features::media::handler::delete_media,
+        crate::features::paper_import::handler::receive_pdf,
     ),
     components(
         schemas(
@@ -63,12 +65,15 @@ use crate::features::occurrences::dto::{
             UploadMediaRequest,
             UploadMediaResponse,
             DeleteMediaResponse,
+            ReceivePaperPdfRequest,
+            ReceivePaperPdfResponse,
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
         (name = "occurrences", description = "Occurrence RDF endpoints"),
         (name = "media", description = "Media attachment endpoints"),
+        (name = "paper-import", description = "Paper PDF import endpoints"),
         (name = "vocabularies", description = "Read-only RDF vocabulary endpoints")
     )
 )]
