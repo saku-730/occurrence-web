@@ -39,6 +39,7 @@ pub enum PaperImportHandlerError {
     UnsupportedMediaType,
     PayloadTooLarge,
     ObjectStoreFailed,
+    GrobidFailed,
     Database(sqlx::Error),
     FileSystem(std::io::Error),
     Internal,
@@ -59,6 +60,7 @@ impl From<PaperImportServiceError> for PaperImportHandlerError {
         match error {
             PaperImportServiceError::InvalidInput => Self::InvalidInput,
             PaperImportServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
+            PaperImportServiceError::Grobid(_) => Self::GrobidFailed,
             PaperImportServiceError::Database(error) => Self::Database(error),
             PaperImportServiceError::ConflictResolutionFailed => Self::Internal,
         }
@@ -108,6 +110,14 @@ impl IntoResponse for PaperImportHandlerError {
                 }),
             )
                 .into_response(),
+            Self::GrobidFailed => (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: "grobid_error".to_string(),
+                    message: "Failed to extract paper metadata with GROBID".to_string(),
+                }),
+            )
+                .into_response(),
             Self::Database(_) | Self::FileSystem(_) | Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -131,12 +141,12 @@ impl IntoResponse for PaperImportHandlerError {
     responses(
         (
             status = 201,
-            description = "New PDF stored in Garage and registered in PostgreSQL",
+            description = "New PDF stored in Garage, bibliographic metadata extracted by GROBID, and paper registered in PostgreSQL",
             body = ReceivePaperPdfResponse
         ),
         (
             status = 200,
-            description = "The identical PDF has already been imported; no new Garage object is created",
+            description = "The identical PDF has already been imported; no new Garage object or GROBID request is created",
             body = ReceivePaperPdfResponse
         ),
         (
@@ -166,7 +176,7 @@ impl IntoResponse for PaperImportHandlerError {
         ),
         (
             status = 502,
-            description = "Garage object storage operation failed",
+            description = "Garage or GROBID operation failed",
             body = ErrorResponse
         )
     ),
@@ -251,7 +261,7 @@ pub async fn receive_pdf(
         ImportPaperPdfStatus::Imported => (
             StatusCode::CREATED,
             "imported",
-            "paper PDF imported",
+            "paper PDF imported and metadata extracted",
         ),
         ImportPaperPdfStatus::AlreadyImported => (
             StatusCode::OK,
@@ -269,6 +279,15 @@ pub async fn receive_pdf(
             content_type: output.content_type,
             size_bytes: output.size_bytes,
             sha256: output.sha256,
+            doi: output.doi,
+            title: output.title,
+            authors: output.authors,
+            publication_year: output.publication_year,
+            journal: output.journal,
+            volume: output.volume,
+            issue: output.issue,
+            pages: output.pages,
+            article_number: output.article_number,
             message: message.to_string(),
         }),
     ))
