@@ -19,6 +19,19 @@ services:
     ports:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
+
+  grobid:
+    image: grobid/grobid:0.9.1-crf
+    container_name: occurrence_grobid
+    restart: unless-stopped
+    init: true
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    ports:
+      - "127.0.0.1:8070:8070"
+
   fuseki:
     build:
       context: ./jena-fuseki-docker-6.1.0
@@ -27,7 +40,6 @@ services:
         JENA_VERSION: 6.1.0
 
     container_name: occurrence_fuseki
-
 
     ports:
       - "127.0.0.1:3033:3030"
