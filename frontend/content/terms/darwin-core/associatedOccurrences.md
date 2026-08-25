@@ -5,14 +5,21 @@
 IRI  
 `http://rs.tdwg.org/dwc/terms/associatedOccurrences`
 
-Label  
+ラベル
 `Associated Occurrences`
+
+種別
+`Property`
 
 目的語の形式: リテラル（関連するオカレンスの識別子と関係の一覧）
 
-Definition
+## 定義
+
+- 原文 -
 
 A list (concatenated and separated) of identifiers of other dwc:Occurrence records and their associations to this dwc:Occurrence.
+
+- 日本語訳 -
 
 この`dwc:Occurrence`に関連する、他の`dwc:Occurrence`レコードの識別子と、その関係を区切って連結した一覧。
 
@@ -38,12 +45,14 @@ A list (concatenated and separated) of identifiers of other dwc:Occurrence recor
 
 ## 関連用語
 
-- `dwc:occurrenceID`：オカレンスを識別する識別子
-- `dwc:associatedOrganisms`：あるOrganismに関連する別のOrganism
-- `dwc:ResourceRelationship`：リソース間の関係を詳細に記録するためのクラス
-- `dwc:relationshipOfResource`：リソース間の関係
-- `dwc:relatedResourceID`：関連するリソースの識別子
+- `dwc:occurrenceID`：関連先オカレンスの識別子
+- `dwc:associatedOrganisms`：関連する生物個体
+- `dwc:relatedResourceID`：関連リソースの識別子
 
-## alternative label
+## 別名（日本語）
 
 - 関連オカレンス
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwc_associatedOccurrences)

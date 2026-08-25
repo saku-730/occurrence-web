@@ -5,16 +5,25 @@
 IRI  
 `http://rs.tdwg.org/dwc/iri/assayType`
 
-Label  
+ラベル
 `Assay Type (IRI)`
+
+種別
+`Property`
 
 目的語の形式: IRI（検出方法の種類を表すリソース）
 
-Definition
+## 定義
+
+- 原文 -
 
 A type of method used in a study to detect taxon/taxa of interest in a dwc:MaterialEntity.
 
-`dwc:MaterialEntity`に含まれる対象分類群を検出するために、研究で使用された方法の種類。
+`dwc:MaterialEntity`
+
+- 日本語訳 -
+
+に含まれる対象分類群を検出するために、研究で使用された方法の種類。
 
 ## 説明
 
@@ -38,13 +47,15 @@ A type of method used in a study to detect taxon/taxa of interest in a dwc:Mater
 
 ## 関連用語
 
-- `dwc:assayType`：検出方法の種類を文字列で記録する用語
-- `dwc:MaterialEntity`：分析や検出の対象となる物理的な試料
-- `dwc:protocolType`：実施したプロトコルの種類
-- `dwc:protocolDescription`：実施した具体的な手順の説明
+- `dwc:assayType`：分析方法種別を文字列で記録する用語
+- `dwc:MaterialEntity`：分析対象となる試料
+- `dwc:protocolType`：実施した手順の種別
 
-## alternative label
-
+## 別名（日本語）
 - アッセイ種別
 - 検出方法
 - 検出法種別
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwciri_assayType)

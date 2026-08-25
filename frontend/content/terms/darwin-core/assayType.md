@@ -5,16 +5,25 @@
 IRI  
 `http://rs.tdwg.org/dwc/terms/assayType`
 
-Label  
+ラベル
 `Assay Type`
+
+種別
+`Property`
 
 目的語の形式: リテラル（統制語彙の使用を推奨）
 
-Definition
+## 定義
+
+- 原文 -
 
 A type of method used in a study to detect taxon/taxa of interest in a dwc:MaterialEntity.
 
-`dwc:MaterialEntity`から対象となる分類群を検出するために、研究で使用された方法の種類。
+`dwc:MaterialEntity`
+
+- 日本語訳 -
+
+dwc_molecularProtocolID から対象となる分類群を検出するために、研究で使用された方法の種類。
 
 ## 説明
 
@@ -36,11 +45,16 @@ A type of method used in a study to detect taxon/taxa of interest in a dwc:Mater
 
 ## 関連用語
 
-- `dwciri:assayType`：検出方法の種類をIRIで記録する用語
-- `dwc:MaterialEntity`：分析や検出の対象となる物理的な試料
+- `dwciri:assayType`：分析方法種別を IRI で示す用語
+- `dwc:MaterialEntity`：分析対象となる試料
+- `dwc:protocolType`：実施した手順の種別
 
-## alternative label
+## 別名（日本語）
 
 - アッセイ種別
 - 検出方法の種類
 - 分析方法の種類
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwc_assayType)

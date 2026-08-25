@@ -5,14 +5,22 @@
 IRI
 `http://rs.tdwg.org/dwc/terms/acceptedNameUsage`
 
-Label
+ラベル
 `Accepted Name Usage`
+
+種別
+`Property`
 
 目的語の形式:リテラル
 
-Definition
+## 定義
+
+- 原文 -
 
 The full name, with authorship and date information if known, of the currently valid (zoological) or accepted (botanical) dwc:Taxon.
+
+- 日本語訳 -
+
 植物学的に受け入れられている、または動物学的に有効とされている現在、動物学的に有効または植物学的に採用されている分類群の完全な学名。判明している場合は著者名および日付情報を含む。
 
 ## 説明
@@ -25,9 +33,15 @@ The full name, with authorship and date information if known, of the currently v
 
 ## 関連用語
 
-[acceptedNameUsageID](https://bio-database.net/terms/darwin-core/acceptedNameUsageID):目的語がIRIの場合
+- `dwc:acceptedNameUsageID`：採用名用法を示す識別子
+- `dwc:scientificName`：記録時点の学名
+- `dwc:taxonomicStatus`：採用名・シノニムなどの分類学的状態
 
-## alternative label
+## 別名（日本語）
 
 - 採用名
 - 有効名
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwc_acceptedNameUsage)
