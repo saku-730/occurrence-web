@@ -1,7 +1,10 @@
 use axum::{
     Json,
     extract::{Multipart, State, multipart::Field},
-    http::{HeaderMap, StatusCode, header::{CONTENT_LENGTH, COOKIE}},
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_LENGTH, COOKIE},
+    },
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
@@ -16,7 +19,12 @@ use crate::{
     state::AppState,
 };
 
-use super::dto::{ReceivePaperPdfRequest, ReceivePaperPdfResponse};
+use super::{
+    dto::{ReceivePaperPdfRequest, ReceivePaperPdfResponse},
+    service::{
+        ImportPaperPdfInput, ImportPaperPdfStatus, PaperImportService, PaperImportServiceError,
+    },
+};
 
 pub const PAPER_PDF_FILE_SIZE_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
 const MULTIPART_OVERHEAD_ALLOWANCE_BYTES: usize = 1024 * 1024;
@@ -30,8 +38,10 @@ pub enum PaperImportHandlerError {
     InvalidInput,
     UnsupportedMediaType,
     PayloadTooLarge,
+    ObjectStoreFailed,
     Database(sqlx::Error),
     FileSystem(std::io::Error),
+    Internal,
 }
 
 impl From<AuthServiceError> for PaperImportHandlerError {
@@ -40,6 +50,17 @@ impl From<AuthServiceError> for PaperImportHandlerError {
             AuthServiceError::InvalidSession => Self::InvalidSession,
             AuthServiceError::Database(error) => Self::Database(error),
             _ => Self::InvalidSession,
+        }
+    }
+}
+
+impl From<PaperImportServiceError> for PaperImportHandlerError {
+    fn from(error: PaperImportServiceError) -> Self {
+        match error {
+            PaperImportServiceError::InvalidInput => Self::InvalidInput,
+            PaperImportServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
+            PaperImportServiceError::Database(error) => Self::Database(error),
+            PaperImportServiceError::ConflictResolutionFailed => Self::Internal,
         }
     }
 }
@@ -79,7 +100,15 @@ impl IntoResponse for PaperImportHandlerError {
                 }),
             )
                 .into_response(),
-            Self::Database(_) | Self::FileSystem(_) => (
+            Self::ObjectStoreFailed => (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: "object_store_error".to_string(),
+                    message: "Failed to store paper PDF".to_string(),
+                }),
+            )
+                .into_response(),
+            Self::Database(_) | Self::FileSystem(_) | Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: "internal_server_error".to_string(),
@@ -97,12 +126,17 @@ impl IntoResponse for PaperImportHandlerError {
     request_body(
         content = ReceivePaperPdfRequest,
         content_type = "multipart/form-data",
-        description = "Authenticated paper PDF upload. The multipart field name must be `file`. Only PDF files up to 100MB are accepted."
+        description = "Authenticated paper PDF import. The multipart field name must be `file`. Only PDF files up to 100MB are accepted."
     ),
     responses(
         (
+            status = 201,
+            description = "New PDF stored in Garage and registered in PostgreSQL",
+            body = ReceivePaperPdfResponse
+        ),
+        (
             status = 200,
-            description = "PDF received and validated. The temporary file is removed after this request; persistence is implemented in a later stage.",
+            description = "The identical PDF has already been imported; no new Garage object is created",
             body = ReceivePaperPdfResponse
         ),
         (
@@ -129,6 +163,11 @@ impl IntoResponse for PaperImportHandlerError {
             status = 500,
             description = "PostgreSQL or temporary file operation failed",
             body = ErrorResponse
+        ),
+        (
+            status = 502,
+            description = "Garage object storage operation failed",
+            body = ErrorResponse
         )
     ),
     tag = "paper-import"
@@ -141,7 +180,7 @@ pub async fn receive_pdf(
     reject_oversized_request_by_content_length(&headers)?;
 
     let session_token = extract_session_token(&headers)?;
-    AuthService::current_user(&state.posgre, session_token).await?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
 
     let mut received_pdf = None;
 
@@ -161,7 +200,7 @@ pub async fn receive_pdf(
             .content_type()
             .map(ToString::to_string)
             .ok_or(PaperImportHandlerError::UnsupportedMediaType)?;
-        if content_type != "application/pdf" {
+        if !content_type.trim().eq_ignore_ascii_case("application/pdf") {
             return Err(PaperImportHandlerError::UnsupportedMediaType);
         }
 
@@ -179,20 +218,58 @@ pub async fn receive_pdf(
         sha256,
     } = staged;
 
-    // 現段階は「PDF受信」まで。後続の重複判定・永続化へ渡す前提の値を返し、
-    // 一時ファイル自体はrequest終了前に確実に削除する。
-    temp_path
-        .close()
-        .map_err(PaperImportHandlerError::FileSystem)?;
-
-    Ok((
-        StatusCode::OK,
-        Json(ReceivePaperPdfResponse {
+    let import_result = PaperImportService::import_pdf(
+        ImportPaperPdfInput {
+            bucket: state.config.garage.bucket.clone(),
+            uploaded_by: current_user.user_id,
             original_filename,
             content_type,
+            file_path: temp_path.to_path_buf(),
             size_bytes,
-            sha256,
-            message: "paper PDF received".to_string(),
+            payload_sha256: sha256,
+        },
+        state.media_object_store.as_ref(),
+        &state.posgre,
+    )
+    .await;
+
+    // 成功・失敗のどちらでもrequest終了前に一時PDFを削除する。
+    // import本体のエラーがある場合はcleanupエラーで上書きしない。
+    let cleanup_result = temp_path.close();
+    let output = match import_result {
+        Ok(output) => {
+            cleanup_result.map_err(PaperImportHandlerError::FileSystem)?;
+            output
+        }
+        Err(error) => {
+            let _ = cleanup_result;
+            return Err(error.into());
+        }
+    };
+
+    let (http_status, status, message) = match output.status {
+        ImportPaperPdfStatus::Imported => (
+            StatusCode::CREATED,
+            "imported",
+            "paper PDF imported",
+        ),
+        ImportPaperPdfStatus::AlreadyImported => (
+            StatusCode::OK,
+            "already_imported",
+            "paper PDF already imported",
+        ),
+    };
+
+    Ok((
+        http_status,
+        Json(ReceivePaperPdfResponse {
+            status: status.to_string(),
+            paper_id: output.paper_id,
+            original_filename: output.original_filename,
+            content_type: output.content_type,
+            size_bytes: output.size_bytes,
+            sha256: output.sha256,
+            message: message.to_string(),
         }),
     ))
 }
