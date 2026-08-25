@@ -1,5 +1,6 @@
 use serde::Serialize;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 #[derive(Debug, ToSchema)]
 pub struct ReceivePaperPdfRequest {
@@ -9,9 +10,11 @@ pub struct ReceivePaperPdfRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReceivePaperPdfResponse {
+    pub status: String,
+    pub paper_id: Uuid,
     pub original_filename: Option<String>,
     pub content_type: String,
-    pub size_bytes: u64,
+    pub size_bytes: i64,
     pub sha256: String,
     pub message: String,
 }
