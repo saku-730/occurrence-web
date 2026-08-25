@@ -37,7 +37,7 @@ async fn main() {
         occurrence_rdf_store,
         media_object_store,
     );
-    let app = build_app(state);
+    let app = build_app(state.clone()).merge(backend::features::paper_import::router(state));
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
