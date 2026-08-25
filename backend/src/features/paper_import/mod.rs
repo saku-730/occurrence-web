@@ -4,9 +4,11 @@ use crate::state::AppState;
 
 pub mod dto;
 pub mod handler;
+pub mod repository;
+pub mod service;
 
 // paper import機能のrouteを機能単位でまとめる。
-// 現段階ではPDF受信・検証までを担当し、重複判定、永続化、GROBID処理は後続で追加する。
+// 現段階ではPDF受信、重複判定、Garage保存、PostgreSQL metadata保存までを担当する。
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
