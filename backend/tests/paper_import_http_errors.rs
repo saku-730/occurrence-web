@@ -134,18 +134,21 @@ impl OccurrenceRdfStore for NoopOccurrenceRdfStore {
     }
 }
 
+fn database_url() -> String {
+    dotenvy::dotenv().ok();
+    std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set in the environment or .env for paper import tests")
+}
+
 async fn test_db_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set for paper import tests");
     PgPoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect(&database_url())
         .await
         .expect("failed to connect test PostgreSQL")
 }
 
 fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     AppState::new_with_media_object_store(
         Config {
             app: AppConfig {
@@ -155,7 +158,7 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
                 environment: "test".to_string(),
                 cookie_secure: false,
             },
-            posgre: PosgreConfig { url: database_url },
+            posgre: PosgreConfig { url: database_url() },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
