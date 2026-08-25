@@ -8,6 +8,7 @@ on:
     paths:
       - "backend/**"
       - "postgreSQL/migrations/**"
+      - "compose.yaml"
       - ".github/workflows/paper-import-tests.yml"
   pull_request:
     branches:
@@ -15,6 +16,7 @@ on:
     paths:
       - "backend/**"
       - "postgreSQL/migrations/**"
+      - "compose.yaml"
       - ".github/workflows/paper-import-tests.yml"
   workflow_dispatch:
 
@@ -87,3 +89,52 @@ jobs:
       - name: Run paper import MIME normalization regression test
         working-directory: backend
         run: cargo test --test paper_import_content_type -- --test-threads=1
+
+  real-grobid-smoke:
+    runs-on: ubuntu-latest
+    env:
+      GROBID_BASE_URL: http://127.0.0.1:8070
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Start real GROBID 0.9.1 CRF server
+        run: >-
+          docker run -d
+          --name occurrence-grobid-ci
+          --init
+          --ulimit core=0
+          -p 8070:8070
+          grobid/grobid:0.9.1-crf
+
+      - name: Wait for GROBID server
+        run: |
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8070/api/version; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs occurrence-grobid-ci
+          exit 1
+
+      - name: Run real GROBID PDF smoke test
+        working-directory: backend
+        run: cargo test --test paper_import_real_grobid -- --ignored --nocapture --test-threads=1
+
+      - name: Show GROBID logs on failure
+        if: failure()
+        run: docker logs occurrence-grobid-ci
+
+      - name: Stop GROBID
+        if: always()
+        run: docker rm -f occurrence-grobid-ci || true
