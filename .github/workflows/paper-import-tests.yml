@@ -1,5 +1,6 @@
 name: Paper Import Tests
 
+# TDD safety net for the paper-import backend flow.
 on:
   push:
     branches:
