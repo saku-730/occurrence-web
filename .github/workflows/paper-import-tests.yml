@@ -86,6 +86,10 @@ jobs:
         working-directory: backend
         run: cargo test --test paper_import_flow -- --test-threads=1
 
+      - name: Run staged PDF extraction bridge tests
+        working-directory: backend
+        run: cargo test --test paper_import_extraction_bridge -- --test-threads=1
+
       - name: Run paper import HTTP integration tests
         working-directory: backend
         run: cargo test --test paper_import_http -- --test-threads=1
