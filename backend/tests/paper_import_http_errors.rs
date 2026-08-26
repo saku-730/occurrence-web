@@ -216,6 +216,11 @@ async fn create_test_user_and_session(db: &PgPool) -> (Uuid, String) {
 }
 
 async fn cleanup_user(db: &PgPool, user_id: Uuid) {
+    sqlx::query("DELETE FROM paper_imports WHERE uploaded_by = $1")
+        .bind(user_id)
+        .execute(db)
+        .await
+        .expect("failed to delete staged paper imports");
     sqlx::query("DELETE FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .execute(db)
@@ -698,7 +703,7 @@ async fn streamed_pdf_over_limit_returns_413_without_side_effects() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn garage_put_failure_returns_502_without_grobid_or_database_row() {
+async fn garage_put_failure_returns_502_after_grobid_without_database_row() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, token) = create_test_user_and_session(&db).await;
@@ -727,6 +732,12 @@ async fn garage_put_failure_returns_502_without_grobid_or_database_row() {
         .expect("request failed");
     let status = response.status();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+    let staged_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM paper_imports WHERE uploaded_by = $1")
+            .bind(user_id)
+            .fetch_one(&db)
+            .await
+            .expect("failed to count staged paper imports");
     let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .fetch_one(&db)
@@ -738,6 +749,7 @@ async fn garage_put_failure_returns_502_without_grobid_or_database_row() {
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(store.put_count(), 0);
-    assert_eq!(grobid_calls, 0);
+    assert_eq!(grobid_calls, 1);
+    assert_eq!(staged_count.0, 0);
     assert_eq!(paper_count.0, 0);
 }
