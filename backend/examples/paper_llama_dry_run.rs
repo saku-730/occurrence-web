@@ -8,7 +8,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     routing::post,
 };
 use backend::features::paper_import::{
@@ -16,6 +16,8 @@ use backend::features::paper_import::{
     preprocess::PaperPdfPreprocessor,
 };
 use serde_json::{Value, json};
+
+const CAPTURE_REQUEST_BODY_LIMIT_BYTES: usize = 200 * 1024 * 1024;
 
 #[derive(Clone, Default)]
 struct CaptureState {
@@ -103,6 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = listener.local_addr()?;
     let app = Router::new()
         .route("/v1/chat/completions", post(capture_request))
+        // Axum's default JSON body limit is too small for a multimodal request
+        // containing all rendered pages as base64 data URIs. The real PDF
+        // upload limit is 100 MiB, so 200 MiB is sufficient for this dry-run
+        // capture after base64 expansion and JSON overhead.
+        .layer(DefaultBodyLimit::max(CAPTURE_REQUEST_BODY_LIMIT_BYTES))
         .with_state(capture);
     let server = tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
