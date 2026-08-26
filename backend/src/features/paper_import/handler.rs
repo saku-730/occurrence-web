@@ -141,12 +141,12 @@ impl IntoResponse for PaperImportHandlerError {
     responses(
         (
             status = 201,
-            description = "New PDF stored in Garage, bibliographic metadata extracted by GROBID, and paper registered in PostgreSQL",
+            description = "New PDF stored in Garage, GROBID metadata saved when available, and paper registered in PostgreSQL. If both DOI and title are missing, status is metadata_required.",
             body = ReceivePaperPdfResponse
         ),
         (
             status = 200,
-            description = "The identical PDF has already been imported; no new Garage object or GROBID request is created",
+            description = "The identical PDF has already been imported; no new Garage object or GROBID request is created. If both DOI and title are missing, status is metadata_required.",
             body = ReceivePaperPdfResponse
         ),
         (
@@ -257,17 +257,31 @@ pub async fn receive_pdf(
         }
     };
 
-    let (http_status, status, message) = match output.status {
-        ImportPaperPdfStatus::Imported => (
-            StatusCode::CREATED,
-            "imported",
-            "paper PDF imported and metadata extracted",
-        ),
-        ImportPaperPdfStatus::AlreadyImported => (
-            StatusCode::OK,
-            "already_imported",
-            "paper PDF already imported",
-        ),
+    let requires_bibliographic_input = output.doi.is_none() && output.title.is_none();
+
+    let (http_status, status, message) = if requires_bibliographic_input {
+        let http_status = match output.status {
+            ImportPaperPdfStatus::Imported => StatusCode::CREATED,
+            ImportPaperPdfStatus::AlreadyImported => StatusCode::OK,
+        };
+        (
+            http_status,
+            "metadata_required",
+            "paper PDF saved, but a DOI or title must be supplied",
+        )
+    } else {
+        match output.status {
+            ImportPaperPdfStatus::Imported => (
+                StatusCode::CREATED,
+                "imported",
+                "paper PDF imported and metadata extracted",
+            ),
+            ImportPaperPdfStatus::AlreadyImported => (
+                StatusCode::OK,
+                "already_imported",
+                "paper PDF already imported",
+            ),
+        }
     };
 
     Ok((
@@ -281,6 +295,7 @@ pub async fn receive_pdf(
             sha256: output.sha256,
             doi: output.doi,
             title: output.title,
+            requires_bibliographic_input,
             authors: output.authors,
             publication_year: output.publication_year,
             journal: output.journal,
