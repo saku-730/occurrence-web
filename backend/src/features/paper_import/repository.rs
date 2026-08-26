@@ -122,4 +122,34 @@ impl PaperRepository {
 
         Ok(result.rows_affected() == 1)
     }
+
+    pub async fn fill_missing_bibliographic_identity(
+        db: &PgPool,
+        paper_id: Uuid,
+        doi: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<Option<PaperMetadata>, sqlx::Error> {
+        // papers are globally deduplicated by SHA-256, so uploaded_by can belong to the
+        // first uploader rather than the user currently completing the metadata.
+        // Authenticated users may therefore fill only missing DOI/title fields, while
+        // existing values extracted by GROBID are never overwritten here.
+        sqlx::query_as::<_, PaperMetadata>(
+            r#"
+            UPDATE papers
+            SET doi = CASE WHEN doi IS NULL THEN $2 ELSE doi END,
+                title = CASE WHEN title IS NULL THEN $3 ELSE title END
+            WHERE id = $1
+            RETURNING id, bucket, object_key, content_type, size_bytes,
+                      original_filename, sha256,
+                      doi, title, authors, publication_year, journal,
+                      volume, issue, pages, article_number,
+                      uploaded_by
+            "#,
+        )
+        .bind(paper_id)
+        .bind(doi)
+        .bind(title)
+        .fetch_optional(db)
+        .await
+    }
 }
