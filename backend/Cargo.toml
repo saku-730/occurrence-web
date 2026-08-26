@@ -42,3 +42,4 @@ infer = "0.19.0"
 tempfile = "3.27.0"
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3.32"
+base64 = "0.22"
