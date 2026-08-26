@@ -2,7 +2,7 @@ use crate::state::AppState;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{patch, post},
+    routing::{delete, patch, post},
 };
 
 pub mod dto;
@@ -11,21 +11,28 @@ mod grobid_client_api;
 pub mod handler;
 pub mod repository;
 pub mod service;
+pub mod staging;
+pub mod staging_dto;
+pub mod staging_handler;
 
-// paper import機能のrouteを機能単位でまとめる。
-// PDF受信、重複判定、Garage保存、GROBID metadata抽出、PostgreSQL保存と、
-// GROBIDで最低限の書誌情報が取れなかったpaperのユーザー補完を担当する。
+// PDF受信からユーザー確認まではpaper_imports + Garage上の仮PDFとして保持する。
+// papersへの正式登録はOccurrenceの確定処理と同じタイミングで行う。
+// 旧handler/serviceは既存テストとの互換のため一旦残すが、実routeからは呼ばない。
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
             "/paper-import",
-            post(handler::receive_pdf).layer(DefaultBodyLimit::max(
-                handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES,
+            post(staging_handler::receive_pdf).layer(DefaultBodyLimit::max(
+                staging_handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES,
             )),
         )
         .route(
-            "/papers/{paper_id}/bibliographic-metadata",
-            patch(handler::complete_bibliographic_metadata),
+            "/paper-imports/{import_id}/bibliographic-metadata",
+            patch(staging_handler::complete_bibliographic_metadata),
+        )
+        .route(
+            "/paper-imports/{import_id}",
+            delete(staging_handler::cancel_import),
         )
         .with_state(state)
 }
