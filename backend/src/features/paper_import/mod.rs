@@ -6,6 +6,8 @@ use axum::{
 };
 
 pub mod dto;
+pub mod extraction;
+pub mod extraction_handler;
 pub mod fulltext;
 pub mod grobid;
 mod grobid_client_api;
@@ -32,6 +34,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/paper-imports/{import_id}/bibliographic-metadata",
             patch(staging_handler::complete_bibliographic_metadata),
+        )
+        .route(
+            "/paper-imports/{import_id}/extract-occurrences",
+            post(extraction_handler::extract_occurrences),
         )
         .route(
             "/paper-imports/{import_id}",
