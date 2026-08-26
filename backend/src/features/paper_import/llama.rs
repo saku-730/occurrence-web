@@ -147,7 +147,7 @@ impl LlamaClient {
         Self::new(
             LLAMA_CHAT_COMPLETIONS_URL,
             LLAMA_MODEL,
-            Duration::from_secs(600),
+            Duration::from_secs(1800),
         )
     }
 
