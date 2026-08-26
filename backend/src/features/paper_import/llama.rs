@@ -1,14 +1,16 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::preprocess::PreprocessedPaper;
+use super::preprocess::{
+    PaperPdfPreprocessor, PaperPreprocessError, PreprocessedPageImage, PreprocessedPaper,
+};
 
-// Temporary hard-coded llama.cpp endpoint. Replace this with the actual LAN IP
-// when deploying the backend next to the selected llama.cpp server.
+// Temporary hard-coded llama.cpp endpoint. Replace 127.0.0.1 with the actual
+// llama.cpp LAN host when deploying this feature.
 pub const LLAMA_CHAT_COMPLETIONS_URL: &str =
     "http://127.0.0.1:8080/v1/chat/completions";
 pub const LLAMA_MODEL: &str = "local-model";
@@ -89,6 +91,24 @@ impl From<std::io::Error> for LlamaError {
     }
 }
 
+#[derive(Debug)]
+pub enum PaperLlmExtractionError {
+    Preprocess(PaperPreprocessError),
+    Llama(LlamaError),
+}
+
+impl From<PaperPreprocessError> for PaperLlmExtractionError {
+    fn from(error: PaperPreprocessError) -> Self {
+        Self::Preprocess(error)
+    }
+}
+
+impl From<LlamaError> for PaperLlmExtractionError {
+    fn from(error: LlamaError) -> Self {
+        Self::Llama(error)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OccurrenceCandidate {
     #[serde(rename = "scientificName")]
@@ -103,6 +123,17 @@ pub struct OccurrenceCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OccurrenceExtractionResult {
     pub occurrences: Vec<OccurrenceCandidate>,
+}
+
+/// Complete local-PDF to llama.cpp extraction path used by the paper-import
+/// pipeline. The preprocessor always renders every PDF page and also keeps the
+/// GROBID text when available; both are then sent in one multimodal request.
+pub async fn extract_occurrences_from_pdf(
+    pdf_path: &Path,
+) -> Result<OccurrenceExtractionResult, PaperLlmExtractionError> {
+    let paper = PaperPdfPreprocessor::preprocess(pdf_path).await?;
+    let llama = LlamaClient::hardcoded()?;
+    Ok(llama.extract_occurrences(&paper).await?)
 }
 
 pub struct LlamaClient {
@@ -150,7 +181,7 @@ impl LlamaClient {
         &self,
         paper: &PreprocessedPaper,
     ) -> Result<OccurrenceExtractionResult, LlamaError> {
-        let request = build_request(&self.model, paper).await?;
+        let request = build_request_parts(&self.model, &paper.text, &paper.page_images).await?;
         let response = self
             .http
             .post(&self.endpoint)
@@ -185,27 +216,28 @@ impl LlamaClient {
     }
 }
 
-async fn build_request(model: &str, paper: &PreprocessedPaper) -> Result<Value, LlamaError> {
-    let mut content = Vec::with_capacity(2 + paper.page_images.len() * 2);
+async fn build_request_parts(
+    model: &str,
+    text: &str,
+    page_images: &[PreprocessedPageImage],
+) -> Result<Value, LlamaError> {
+    let mut content = Vec::with_capacity(2 + page_images.len() * 2);
     content.push(json!({
         "type": "text",
         "text": OCCURRENCE_EXTRACTION_PROMPT,
     }));
 
-    let extracted_text = if paper.text.trim().is_empty() {
+    let extracted_text = if text.trim().is_empty() {
         "## 論文PDFから抽出したテキスト\n\nテキストは抽出できませんでした。ページ画像を主に参照してください。".to_string()
     } else {
-        format!(
-            "## 論文PDFから抽出したテキスト\n\n{}",
-            paper.text
-        )
+        format!("## 論文PDFから抽出したテキスト\n\n{text}")
     };
     content.push(json!({
         "type": "text",
         "text": extracted_text,
     }));
 
-    for page in &paper.page_images {
+    for page in page_images {
         let bytes = tokio::fs::read(&page.path).await?;
         if bytes.is_empty() {
             return Err(LlamaError::InvalidResponse);
@@ -305,6 +337,51 @@ struct ChatCompletionMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::paper_import::preprocess::PAPER_PAGE_IMAGE_MEDIA_TYPE;
+
+    #[tokio::test]
+    async fn multimodal_request_contains_extracted_text_and_page_image() {
+        let directory = tempfile::tempdir().expect("temporary image directory should exist");
+        let image_path = directory.path().join("page-1.jpg");
+        tokio::fs::write(&image_path, b"jpeg-test-bytes")
+            .await
+            .expect("test image should be written");
+        let pages = vec![PreprocessedPageImage {
+            page_number: 1,
+            path: image_path,
+            media_type: PAPER_PAGE_IMAGE_MEDIA_TYPE,
+        }];
+
+        let request = build_request_parts(
+            "local-model",
+            "Metaphire hilgendorfi was collected in Tokyo.",
+            &pages,
+        )
+        .await
+        .expect("multimodal request should be constructed");
+
+        let content = request["messages"][0]["content"]
+            .as_array()
+            .expect("message content should be an array");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], OCCURRENCE_EXTRACTION_PROMPT);
+        assert_eq!(content[1]["type"], "text");
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .expect("extracted text should be a string")
+                .contains("Metaphire hilgendorfi")
+        );
+        assert_eq!(content[2]["text"], "## PDF page 1");
+        assert_eq!(content[3]["type"], "image_url");
+        assert!(
+            content[3]["image_url"]["url"]
+                .as_str()
+                .expect("image URL should be a string")
+                .starts_with("data:image/jpeg;base64,")
+        );
+        assert_eq!(request["response_format"]["type"], "json_schema");
+    }
 
     #[test]
     fn validates_occurrence_coordinate_ranges() {
