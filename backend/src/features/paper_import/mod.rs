@@ -17,7 +17,7 @@ pub mod staging_handler;
 
 // PDF受信からユーザー確認まではpaper_imports + Garage上の仮PDFとして保持する。
 // papersへの正式登録はOccurrenceの確定処理と同じタイミングで行う。
-// 旧handler/serviceは既存テストとの互換のため一旦残すが、実routeからは呼ばない。
+// 旧handler/serviceは既存テストと既に正式登録済みpaperの補完互換のため一旦残す。
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
@@ -33,6 +33,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/paper-imports/{import_id}",
             delete(staging_handler::cancel_import),
+        )
+        .route(
+            "/papers/{paper_id}/bibliographic-metadata",
+            patch(handler::complete_bibliographic_metadata),
         )
         .with_state(state)
 }
