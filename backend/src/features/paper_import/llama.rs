@@ -110,6 +110,7 @@ impl From<LlamaError> for PaperLlmExtractionError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OccurrenceCandidate {
     #[serde(rename = "scientificName")]
     pub scientific_name: String,
@@ -121,6 +122,7 @@ pub struct OccurrenceCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OccurrenceExtractionResult {
     pub occurrences: Vec<OccurrenceCandidate>,
 }
@@ -181,7 +183,19 @@ impl LlamaClient {
         &self,
         paper: &PreprocessedPaper,
     ) -> Result<OccurrenceExtractionResult, LlamaError> {
-        let request = build_request_parts(&self.model, &paper.text, &paper.page_images).await?;
+        self.extract_occurrences_from_parts(&paper.text, &paper.page_images)
+            .await
+    }
+
+    /// Submit already preprocessed text and page images. Keeping this boundary
+    /// separate lets the import pipeline own PDF conversion while callers can
+    /// reuse the same multimodal request for a staged paper.
+    pub async fn extract_occurrences_from_parts(
+        &self,
+        text: &str,
+        page_images: &[PreprocessedPageImage],
+    ) -> Result<OccurrenceExtractionResult, LlamaError> {
+        let request = build_request_parts(&self.model, text, page_images).await?;
         let response = self
             .http
             .post(&self.endpoint)
@@ -336,8 +350,102 @@ struct ChatCompletionMessage {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::StatusCode,
+        response::{IntoResponse, Response},
+        routing::post,
+    };
+
     use super::*;
     use crate::features::paper_import::preprocess::PAPER_PAGE_IMAGE_MEDIA_TYPE;
+
+    #[derive(Clone)]
+    struct MockLlamaResponse {
+        status: StatusCode,
+        body: Value,
+        requests: Arc<Mutex<Vec<Value>>>,
+    }
+
+    async fn mock_llama_handler(
+        State(response): State<MockLlamaResponse>,
+        Json(request): Json<Value>,
+    ) -> Response {
+        response
+            .requests
+            .lock()
+            .expect("mock llama request lock should not be poisoned")
+            .push(request);
+        (response.status, Json(response.body)).into_response()
+    }
+
+    async fn start_mock_llama(
+        status: StatusCode,
+        body: Value,
+    ) -> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock llama listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock llama address should exist");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(mock_llama_handler))
+            .with_state(MockLlamaResponse {
+                status,
+                body,
+                requests: Arc::clone(&requests),
+            });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock llama server should run");
+        });
+        tokio::task::yield_now().await;
+
+        (format!("http://{address}/v1/chat/completions"), requests, server)
+    }
+
+    async fn test_page_images() -> (tempfile::TempDir, Vec<PreprocessedPageImage>) {
+        let directory = tempfile::tempdir().expect("temporary image directory should exist");
+        let first = directory.path().join("page-1.jpg");
+        let second = directory.path().join("page-2.jpg");
+        tokio::fs::write(&first, b"first-image")
+            .await
+            .expect("first image should be written");
+        tokio::fs::write(&second, b"second-image")
+            .await
+            .expect("second image should be written");
+        (
+            directory,
+            vec![
+                PreprocessedPageImage {
+                    page_number: 1,
+                    path: first,
+                    media_type: PAPER_PAGE_IMAGE_MEDIA_TYPE,
+                },
+                PreprocessedPageImage {
+                    page_number: 2,
+                    path: second,
+                    media_type: PAPER_PAGE_IMAGE_MEDIA_TYPE,
+                },
+            ],
+        )
+    }
+
+    fn valid_response() -> Value {
+        json!({
+            "choices": [{
+                "message": {
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","decimalLatitude":35.0,"decimalLongitude":139.0}]}"#
+                }
+            }]
+        })
+    }
 
     #[tokio::test]
     async fn multimodal_request_contains_extracted_text_and_page_image() {
@@ -381,6 +489,154 @@ mod tests {
                 .starts_with("data:image/jpeg;base64,")
         );
         assert_eq!(request["response_format"]["type"], "json_schema");
+    }
+
+    #[tokio::test]
+    async fn llama_client_sends_multimodal_request_and_parses_occurrences() {
+        let (endpoint, requests, server) = start_mock_llama(StatusCode::OK, valid_response()).await;
+        let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+            .expect("llama client should initialize");
+        let (_directory, pages) = test_page_images().await;
+
+        let result = client
+            .extract_occurrences_from_parts("Text extracted by GROBID.", &pages)
+            .await
+            .expect("valid llama response should be parsed");
+
+        assert_eq!(result.occurrences.len(), 1);
+        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        let requests = requests
+            .lock()
+            .expect("mock llama request lock should not be poisoned");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["model"], "test-model");
+        assert_eq!(requests[0]["temperature"], 0);
+        assert_eq!(requests[0]["stream"], false);
+        let content = requests[0]["messages"][0]["content"]
+            .as_array()
+            .expect("multimodal content should be an array");
+        assert_eq!(content.len(), 6);
+        assert_eq!(content[0]["text"], OCCURRENCE_EXTRACTION_PROMPT);
+        assert!(content[1]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Text extracted by GROBID.")));
+        assert_eq!(content[2]["text"], "## PDF page 1");
+        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
+        assert_eq!(content[4]["text"], "## PDF page 2");
+        assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn multimodal_request_uses_image_fallback_for_empty_text_and_encodes_bytes() {
+        let (_directory, pages) = test_page_images().await;
+
+        let request = build_request_parts("test-model", " \n\t", &pages)
+            .await
+            .expect("request should be built from page images");
+        let content = request["messages"][0]["content"]
+            .as_array()
+            .expect("multimodal content should be an array");
+
+        assert!(content[1]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("テキストは抽出できませんでした")));
+        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
+        assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
+    }
+
+    #[tokio::test]
+    async fn llama_client_rejects_upstream_and_invalid_occurrence_responses() {
+        let (_directory, pages) = test_page_images().await;
+
+        let cases = [
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error":"model overloaded"}),
+                "upstream",
+            ),
+            (StatusCode::OK, json!({"choices":[]}), "invalid_response"),
+            (
+                StatusCode::OK,
+                json!({"choices":[{"message":{"content":"not JSON"}}]}),
+                "invalid_response",
+            ),
+            (
+                StatusCode::OK,
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
+                "invalid_occurrence",
+            ),
+            (
+                StatusCode::OK,
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
+                "invalid_occurrence",
+            ),
+        ];
+
+        for (status, body, expected) in cases {
+            let (endpoint, _, server) = start_mock_llama(status, body).await;
+            let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+                .expect("llama client should initialize");
+            let error = client
+                .extract_occurrences_from_parts("text", &pages)
+                .await
+                .expect_err("invalid llama response should be rejected");
+            match expected {
+                "upstream" => assert!(matches!(error, LlamaError::Upstream(StatusCode::INTERNAL_SERVER_ERROR, message) if message.contains("model overloaded"))),
+                "invalid_response" => assert!(matches!(error, LlamaError::InvalidResponse)),
+                "invalid_occurrence" => assert!(matches!(error, LlamaError::InvalidOccurrence)),
+                _ => unreachable!(),
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn llama_client_rejects_unknown_occurrence_json_fields() {
+        let (_directory, pages) = test_page_images().await;
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"decimalLatitude":null,"decimalLongitude":null,"inventedField":"must not be accepted"}]}"#
+                }
+            }]
+        });
+        let (endpoint, _, server) = start_mock_llama(StatusCode::OK, response).await;
+        let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+            .expect("llama client should initialize");
+
+        let result = client.extract_occurrences_from_parts("text", &pages).await;
+
+        assert!(matches!(result, Err(LlamaError::InvalidResponse)));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn multimodal_request_rejects_empty_or_missing_page_image() {
+        let directory = tempfile::tempdir().expect("temporary image directory should exist");
+        let empty = directory.path().join("empty.jpg");
+        tokio::fs::write(&empty, [])
+            .await
+            .expect("empty image should be written");
+        let empty_page = PreprocessedPageImage {
+            page_number: 1,
+            path: empty,
+            media_type: PAPER_PAGE_IMAGE_MEDIA_TYPE,
+        };
+        assert!(matches!(
+            build_request_parts("model", "text", &[empty_page]).await,
+            Err(LlamaError::InvalidResponse)
+        ));
+
+        let missing_page = PreprocessedPageImage {
+            page_number: 2,
+            path: directory.path().join("missing.jpg"),
+            media_type: PAPER_PAGE_IMAGE_MEDIA_TYPE,
+        };
+        assert!(matches!(
+            build_request_parts("model", "text", &[missing_page]).await,
+            Err(LlamaError::FileSystem(_))
+        ));
     }
 
     #[test]

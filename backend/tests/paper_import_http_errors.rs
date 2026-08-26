@@ -84,6 +84,9 @@ async fn start_counting_grobid() -> (String, Arc<Mutex<usize>>, tokio::task::Joi
             .await
             .expect("mock GROBID failed");
     });
+    // The handler starts an HTTP request immediately after this helper
+    // returns. Give the mock server task a chance to begin polling first.
+    tokio::task::yield_now().await;
     (format!("http://{address}"), count, handle)
 }
 

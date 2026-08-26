@@ -373,6 +373,12 @@
 
 ### GROBID client / parser
 
+- [x] llama clientは固定prompt・抽出テキスト・全ページJPEGを同一`/v1/chat/completions` requestのcontent配列へ順序どおり送り、正常なOccurrence JSONを返す`llama_client_sends_multimodal_request_and_parses_occurrences`
+- [x] llama clientは空テキスト時に画像参照用メッセージを送り、画像bytesを完全なdata URIとして送る`multimodal_request_uses_image_fallback_for_empty_text_and_encodes_bytes`
+- [x] llama clientは500、choicesなし、assistant contentの不正JSON、空scientificName、不正緯度経度を拒否する`llama_client_rejects_upstream_and_invalid_occurrence_responses`
+- [x] llama clientはOccurrence JSONの未知フィールドを拒否する`llama_client_rejects_unknown_occurrence_json_fields`
+- [x] llama request作成時に空または読めないページ画像を拒否する`multimodal_request_rejects_empty_or_missing_page_image`
+
 - [x] fulltext clientは`processFulltextDocument`へPDF、`consolidateHeader=0`、`consolidateCitations=0`、XML Acceptを送信し、TEIを返す`grobid_fulltext_client_sends_expected_request_and_returns_tei`
 - [x] fulltext clientは204を`NoContent`、不正または空TEIを`InvalidResponse`として返す`grobid_fulltext_client_handles_no_content_and_invalid_tei`
 - [x] TEIの`front`と`body`だけをLLMテキストにし、名前空間付き要素でも`back`の参考文献を除外する`extracts_namespaced_front_and_body_without_bibliography`
