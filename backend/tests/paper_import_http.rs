@@ -347,6 +347,11 @@ fn multipart_body(
 }
 
 async fn cleanup_user(db: &PgPool, user_id: Uuid) {
+    sqlx::query("DELETE FROM paper_imports WHERE uploaded_by = $1")
+        .bind(user_id)
+        .execute(db)
+        .await
+        .expect("failed to delete staged paper imports");
     sqlx::query("DELETE FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .execute(db)
@@ -360,7 +365,7 @@ async fn cleanup_user(db: &PgPool, user_id: Uuid) {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn authenticated_pdf_request_returns_created_and_persists_grobid_metadata() {
+async fn authenticated_pdf_request_returns_created_and_stages_grobid_metadata() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, session_token) = create_test_user_and_session(&db).await;
@@ -391,7 +396,9 @@ async fn authenticated_pdf_request_returns_created_and_persists_grobid_metadata(
         .expect("failed to read response body");
     let json: serde_json::Value =
         serde_json::from_slice(&response_body).expect("response should be JSON");
-    assert_eq!(json["status"], "imported");
+    assert_eq!(json["status"], "staged");
+    assert_eq!(json["requires_bibliographic_input"], false);
+    assert!(json["paper_id"].is_null());
     assert_eq!(json["doi"], "10.1234/example.1");
     assert_eq!(json["title"], "A study of earthworms");
     assert_eq!(json["publication_year"], 2025);
@@ -401,17 +408,26 @@ async fn authenticated_pdf_request_returns_created_and_persists_grobid_metadata(
         1
     );
 
-    let paper_id = Uuid::parse_str(json["paper_id"].as_str().expect("paper_id string"))
-        .expect("paper_id UUID");
-    let row: (Option<String>, Option<String>, Option<i32>) =
-        sqlx::query_as("SELECT doi, title, publication_year FROM papers WHERE id = $1")
-            .bind(paper_id)
-            .fetch_one(&db)
-            .await
-            .expect("failed to load saved paper");
+    let import_id = Uuid::parse_str(json["import_id"].as_str().expect("import_id string"))
+        .expect("import_id UUID");
+    let row: (Option<String>, Option<String>, Option<i32>, String) = sqlx::query_as(
+        "SELECT doi, title, publication_year, status FROM paper_imports WHERE id = $1",
+    )
+    .bind(import_id)
+    .fetch_one(&db)
+    .await
+    .expect("failed to load staged paper import");
     assert_eq!(row.0.as_deref(), Some("10.1234/example.1"));
     assert_eq!(row.1.as_deref(), Some("A study of earthworms"));
     assert_eq!(row.2, Some(2025));
+    assert_eq!(row.3, "staged");
+
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count formally registered papers");
+    assert_eq!(paper_count.0, 0);
 
     cleanup_user(&db, user_id).await;
     server.abort();
@@ -482,7 +498,7 @@ async fn send_pdf_request(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn duplicate_pdf_request_returns_ok_without_repeating_side_effects() {
+async fn duplicate_staged_pdf_request_reuses_import_without_repeating_side_effects() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, session_token) = create_test_user_and_session(&db).await;
@@ -517,11 +533,17 @@ async fn duplicate_pdf_request_returns_ok_without_repeating_side_effects() {
         .expect("failed to read duplicate response");
     let second_json: serde_json::Value =
         serde_json::from_slice(&second_body).expect("response should be JSON");
+    let staged_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM paper_imports WHERE uploaded_by = $1")
+            .bind(user_id)
+            .fetch_one(&db)
+            .await
+            .expect("failed to count staged paper imports");
     let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .fetch_one(&db)
         .await
-        .expect("failed to count papers");
+        .expect("failed to count formally registered papers");
     let puts = store.put_count();
     let deletes = store.delete_count();
     let grobid_calls = *request_count.lock().expect("request count lock poisoned");
@@ -530,16 +552,19 @@ async fn duplicate_pdf_request_returns_ok_without_repeating_side_effects() {
     server.abort();
 
     assert_eq!(first_status, StatusCode::CREATED);
-    assert_eq!(second_status, StatusCode::OK);
-    assert_eq!(second_json["status"], "already_imported");
-    assert_eq!(paper_count.0, 1);
+    assert_eq!(second_status, StatusCode::CREATED);
+    assert_eq!(second_json["status"], "staged");
+    assert!(second_json["paper_id"].is_null());
+    assert!(second_json["import_id"].is_string());
+    assert_eq!(staged_count.0, 1);
+    assert_eq!(paper_count.0, 0);
     assert_eq!(puts, 1);
     assert_eq!(deletes, 0);
     assert_eq!(grobid_calls, 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn grobid_http_failures_return_502_and_rollback() {
+async fn grobid_http_failures_return_502_before_staging() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, session_token) = create_test_user_and_session(&db).await;
@@ -587,6 +612,12 @@ async fn grobid_http_failures_return_502_and_rollback() {
         error_codes.push(json["error"].as_str().map(ToString::to_string));
     }
 
+    let staged_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM paper_imports WHERE uploaded_by = $1")
+            .bind(user_id)
+            .fetch_one(&db)
+            .await
+            .expect("failed to count staged paper imports");
     let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .fetch_one(&db)
@@ -601,9 +632,10 @@ async fn grobid_http_failures_return_502_and_rollback() {
 
     assert_eq!(statuses, vec![StatusCode::BAD_GATEWAY; 3]);
     assert_eq!(error_codes, vec![Some("grobid_error".to_string()); 3]);
+    assert_eq!(staged_count.0, 0);
     assert_eq!(paper_count.0, 0);
-    assert_eq!(puts, 3);
-    assert_eq!(deletes, 3);
+    assert_eq!(puts, 0);
+    assert_eq!(deletes, 0);
     assert_eq!(grobid_calls, 3);
 }
 
@@ -635,18 +667,28 @@ async fn paper_import_without_minimum_metadata_returns_metadata_required() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
     assert_eq!(json["status"], "metadata_required");
     assert_eq!(json["requires_bibliographic_input"], true);
+    assert!(json["paper_id"].is_null());
     assert!(json["doi"].is_null());
     assert!(json["title"].is_null());
 
-    let paper_id = Uuid::parse_str(json["paper_id"].as_str().expect("paper_id string"))
-        .expect("paper_id UUID");
-    let saved: (Option<String>, Option<String>) =
-        sqlx::query_as("SELECT doi, title FROM papers WHERE id = $1")
-            .bind(paper_id)
+    let import_id = Uuid::parse_str(json["import_id"].as_str().expect("import_id string"))
+        .expect("import_id UUID");
+    let saved: (Option<String>, Option<String>, String) =
+        sqlx::query_as("SELECT doi, title, status FROM paper_imports WHERE id = $1")
+            .bind(import_id)
             .fetch_one(&db)
             .await
-            .expect("metadata-required paper must be saved");
-    assert_eq!(saved, (None, None));
+            .expect("metadata-required staged import must be saved");
+    assert_eq!(saved.0, None);
+    assert_eq!(saved.1, None);
+    assert_eq!(saved.2, "metadata_required");
+
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count formally registered papers");
+    assert_eq!(paper_count.0, 0);
     assert_eq!(store.put_count(), 1);
     assert_eq!(
         *request_count.lock().expect("request count lock poisoned"),
@@ -817,7 +859,7 @@ async fn bibliographic_metadata_route_preserves_existing_values() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn duplicate_pdf_without_metadata_returns_metadata_required_ok() {
+async fn duplicate_pdf_without_metadata_reuses_staged_import() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, token) = create_test_user_and_session(&db).await;
@@ -843,13 +885,29 @@ async fn duplicate_pdf_without_metadata_returns_metadata_required_ok() {
         send_pdf_request(app, &token, "metadata-required-second", "renamed.pdf", &pdf).await;
 
     assert_eq!(first.status(), StatusCode::CREATED);
-    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::CREATED);
     let body = to_bytes(second.into_body(), usize::MAX)
         .await
         .expect("failed to read duplicate response");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
     assert_eq!(json["status"], "metadata_required");
     assert_eq!(json["requires_bibliographic_input"], true);
+    assert!(json["paper_id"].is_null());
+    assert!(json["import_id"].is_string());
+
+    let staged_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM paper_imports WHERE uploaded_by = $1")
+            .bind(user_id)
+            .fetch_one(&db)
+            .await
+            .expect("failed to count staged paper imports");
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count formally registered papers");
+    assert_eq!(staged_count.0, 1);
+    assert_eq!(paper_count.0, 0);
     assert_eq!(store.put_count(), 1);
     assert_eq!(
         *request_count.lock().expect("request count lock poisoned"),
