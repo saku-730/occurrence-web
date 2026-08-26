@@ -658,7 +658,7 @@ async fn paper_import_without_minimum_metadata_returns_metadata_required() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn owner_can_complete_bibliographic_metadata_through_app() {
+async fn authenticated_user_can_complete_bibliographic_metadata_through_app() {
     let db = test_db_pool().await;
     let (owner, token) = create_test_user_and_session(&db).await;
     let paper_id = insert_test_paper(&db, owner, None, None).await;
@@ -696,10 +696,38 @@ async fn owner_can_complete_bibliographic_metadata_through_app() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests() {
+async fn authenticated_non_uploader_can_complete_bibliographic_metadata_through_app() {
+    let db = test_db_pool().await;
+    let (uploader, _uploader_token) = create_test_user_and_session(&db).await;
+    let (other_user, other_token) = create_test_user_and_session(&db).await;
+    let paper_id = insert_test_paper(&db, uploader, None, None).await;
+    let app = paper_import::router(test_state(db.clone(), RecordingObjectStore::default()));
+
+    let response = app
+        .oneshot(bibliographic_patch_request(
+            &paper_id.to_string(),
+            Some(&other_token),
+            serde_json::json!({"title": "Shared paper title"}),
+        ))
+        .await
+        .expect("bibliographic PATCH response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved: (Option<String>,) = sqlx::query_as("SELECT title FROM papers WHERE id = $1")
+        .bind(paper_id)
+        .fetch_one(&db)
+        .await
+        .expect("completed title should be saved");
+    assert_eq!(saved.0.as_deref(), Some("Shared paper title"));
+
+    cleanup_user(&db, uploader).await;
+    cleanup_user(&db, other_user).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bibliographic_metadata_route_rejects_invalid_requests() {
     let db = test_db_pool().await;
     let (owner, owner_token) = create_test_user_and_session(&db).await;
-    let (other_user, other_token) = create_test_user_and_session(&db).await;
     let paper_id = insert_test_paper(&db, owner, None, None).await;
     let app = paper_import::router(test_state(db.clone(), RecordingObjectStore::default()));
 
@@ -728,12 +756,6 @@ async fn bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests()
             serde_json::json!({"title": "Missing paper"}),
             StatusCode::NOT_FOUND,
         ),
-        (
-            paper_id.to_string(),
-            Some(other_token.as_str()),
-            serde_json::json!({"title": "Other owner"}),
-            StatusCode::NOT_FOUND,
-        ),
     ];
 
     for (requested_id, token, body, expected_status) in cases {
@@ -753,7 +775,6 @@ async fn bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests()
             .expect("paper should remain unchanged");
     assert_eq!(saved, (None, None));
     cleanup_user(&db, owner).await;
-    cleanup_user(&db, other_user).await;
 }
 
 #[tokio::test(flavor = "current_thread")]

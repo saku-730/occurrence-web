@@ -680,7 +680,7 @@ async fn concurrent_imports_persist_one_global_paper_and_rollback_loser() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn owner_can_complete_missing_doi_with_normalization() {
+async fn authenticated_user_can_complete_missing_doi_with_normalization() {
     let db = test_db_pool().await;
     let owner = create_test_user(&db).await;
     let paper_id = insert_test_paper(&db, owner, None, None).await;
@@ -688,14 +688,13 @@ async fn owner_can_complete_missing_doi_with_normalization() {
     let output = PaperImportService::complete_bibliographic_metadata(
         CompleteBibliographicMetadataInput {
             paper_id,
-            requested_by: owner,
             doi: Some("  https://doi.org/10.5555/Example.DOI  ".to_string()),
             title: None,
         },
         &db,
     )
     .await
-    .expect("owner should complete missing DOI");
+    .expect("authenticated user should complete missing DOI");
 
     assert_eq!(output.paper_id, paper_id);
     assert_eq!(output.doi.as_deref(), Some("10.5555/Example.DOI"));
@@ -712,7 +711,7 @@ async fn owner_can_complete_missing_doi_with_normalization() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn owner_can_complete_missing_title() {
+async fn authenticated_user_can_complete_missing_title() {
     let db = test_db_pool().await;
     let owner = create_test_user(&db).await;
     let paper_id = insert_test_paper(&db, owner, None, None).await;
@@ -720,14 +719,13 @@ async fn owner_can_complete_missing_title() {
     let output = PaperImportService::complete_bibliographic_metadata(
         CompleteBibliographicMetadataInput {
             paper_id,
-            requested_by: owner,
             doi: None,
             title: Some("  User supplied title  ".to_string()),
         },
         &db,
     )
     .await
-    .expect("owner should complete missing title");
+    .expect("authenticated user should complete missing title");
 
     assert_eq!(output.title.as_deref(), Some("User supplied title"));
     assert!(!output.requires_bibliographic_input);
@@ -750,7 +748,6 @@ async fn completion_preserves_existing_grobid_metadata() {
     let output = PaperImportService::complete_bibliographic_metadata(
         CompleteBibliographicMetadataInput {
             paper_id,
-            requested_by: owner,
             doi: Some("10.1000/user-replacement".to_string()),
             title: Some("User supplied title".to_string()),
         },
@@ -789,7 +786,6 @@ async fn completion_rejects_empty_bibliographic_input() {
         let result = PaperImportService::complete_bibliographic_metadata(
             CompleteBibliographicMetadataInput {
                 paper_id,
-                requested_by: owner,
                 doi,
                 title,
             },
@@ -810,34 +806,45 @@ async fn completion_rejects_empty_bibliographic_input() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn completion_enforces_paper_existence_and_ownership() {
+async fn completion_returns_not_found_for_missing_paper() {
     let db = test_db_pool().await;
-    let owner = create_test_user(&db).await;
-    let other_user = create_test_user(&db).await;
-    let paper_id = insert_test_paper(&db, owner, None, None).await;
 
-    for (requested_by, requested_paper_id) in [(other_user, paper_id), (owner, Uuid::new_v4())] {
-        let result = PaperImportService::complete_bibliographic_metadata(
-            CompleteBibliographicMetadataInput {
-                paper_id: requested_paper_id,
-                requested_by,
-                doi: None,
-                title: Some("Must not be saved".to_string()),
-            },
-            &db,
-        )
-        .await;
-        assert!(matches!(result, Err(PaperImportServiceError::NotFound)));
-    }
+    let result = PaperImportService::complete_bibliographic_metadata(
+        CompleteBibliographicMetadataInput {
+            paper_id: Uuid::new_v4(),
+            doi: None,
+            title: Some("Missing paper".to_string()),
+        },
+        &db,
+    )
+    .await;
 
-    let saved: (Option<String>,) = sqlx::query_as("SELECT title FROM papers WHERE id = $1")
-        .bind(paper_id)
-        .fetch_one(&db)
-        .await
-        .expect("paper should still exist");
-    assert!(saved.0.is_none());
-    delete_test_user(&db, owner).await;
-    delete_test_user(&db, other_user).await;
+    assert!(matches!(result, Err(PaperImportServiceError::NotFound)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_non_uploader_can_complete_globally_deduplicated_paper() {
+    let db = test_db_pool().await;
+    let uploader = create_test_user(&db).await;
+    let authenticated_user = create_test_user(&db).await;
+    let paper_id = insert_test_paper(&db, uploader, None, None).await;
+
+    // serviceにはユーザーIDを渡さない。HTTP層で認証した後は、全ユーザー共通の
+    // paperに対して未設定項目だけを補完する。
+    let output = PaperImportService::complete_bibliographic_metadata(
+        CompleteBibliographicMetadataInput {
+            paper_id,
+            doi: None,
+            title: Some("Shared paper title".to_string()),
+        },
+        &db,
+    )
+    .await
+    .expect("authenticated non-uploader should complete shared paper");
+
+    assert_eq!(output.title.as_deref(), Some("Shared paper title"));
+    delete_test_user(&db, uploader).await;
+    delete_test_user(&db, authenticated_user).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -849,7 +856,6 @@ async fn completion_clears_bibliographic_input_requirement() {
     let output = PaperImportService::complete_bibliographic_metadata(
         CompleteBibliographicMetadataInput {
             paper_id,
-            requested_by: owner,
             doi: None,
             title: Some("Minimum metadata".to_string()),
         },
@@ -871,7 +877,6 @@ async fn repository_completes_only_missing_bibliographic_metadata() {
     let updated = PaperRepository::complete_missing_bibliographic_metadata(
         &db,
         paper_id,
-        owner,
         Some("10.1000/replacement"),
         Some("Filled title"),
     )

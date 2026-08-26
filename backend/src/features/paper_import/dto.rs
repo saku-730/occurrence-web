@@ -18,6 +18,7 @@ pub struct ReceivePaperPdfResponse {
     pub sha256: String,
     pub doi: Option<String>,
     pub title: Option<String>,
+    pub requires_bibliographic_input: bool,
     pub authors: Option<String>,
     pub publication_year: Option<i32>,
     pub journal: Option<String>,
@@ -25,7 +26,6 @@ pub struct ReceivePaperPdfResponse {
     pub issue: Option<String>,
     pub pages: Option<String>,
     pub article_number: Option<String>,
-    pub requires_bibliographic_input: bool,
     pub message: String,
 }
 

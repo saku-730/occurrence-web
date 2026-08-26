@@ -126,28 +126,20 @@ impl PaperRepository {
     pub async fn complete_missing_bibliographic_metadata(
         db: &PgPool,
         paper_id: Uuid,
-        uploaded_by: Uuid,
         doi: Option<&str>,
         title: Option<&str>,
     ) -> Result<Option<PaperMetadata>, sqlx::Error> {
-        // Preserve metadata extracted by GROBID. CASE is evaluated by
-        // PostgreSQL during the UPDATE, so concurrent completion requests can
-        // never replace a value that another request has already supplied.
-        // Ownership belongs in the same predicate to prevent a check/update
-        // race and to hide other users' paper identifiers.
+        // papersはSHA-256で全ユーザー共通に重複排除されるため、uploaded_byは
+        // 最初のuploadユーザーを表す。後から同じPDFを登録したログインユーザーも
+        // 補完できるよう所有者では制限しないが、CASEをDB内で評価して
+        // GROBIDまたは先行requestが保存した非空値は同時更新でも上書きしない。
+
         sqlx::query_as::<_, PaperMetadata>(
             r#"
             UPDATE papers
-            SET doi = CASE
-                    WHEN doi IS NULL OR BTRIM(doi) = '' THEN $3
-                    ELSE doi
-                END,
-                title = CASE
-                    WHEN title IS NULL OR BTRIM(title) = '' THEN $4
-                    ELSE title
-                END
+            SET doi = CASE WHEN doi IS NULL OR BTRIM(doi) = '' THEN $2 ELSE doi END,
+                title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $3 ELSE title END
             WHERE id = $1
-              AND uploaded_by = $2
             RETURNING id, bucket, object_key, content_type, size_bytes,
                       original_filename, sha256,
                       doi, title, authors, publication_year, journal,
@@ -156,7 +148,6 @@ impl PaperRepository {
             "#,
         )
         .bind(paper_id)
-        .bind(uploaded_by)
         .bind(doi)
         .bind(title)
         .fetch_optional(db)

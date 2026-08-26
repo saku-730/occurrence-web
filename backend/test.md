@@ -362,11 +362,12 @@
 
 ### bibliographic metadata completion
 
-- [x] paper所有者は未設定のDOIだけを正規化して補完できる`owner_can_complete_missing_doi_with_normalization`
-- [x] paper所有者は未設定のtitleだけをtrimして補完できる`owner_can_complete_missing_title`
+- [ ] ログインユーザーは未設定のDOIだけを正規化して補完できる`authenticated_user_can_complete_missing_doi_with_normalization`
+- [ ] ログインユーザーは未設定のtitleだけをtrimして補完できる`authenticated_user_can_complete_missing_title`
 - [x] DOI・titleを同時入力しても既存値を上書きせず未設定項目だけ補完する`completion_preserves_existing_grobid_metadata`
 - [x] DOI・titleが空または空白だけなら補完を拒否する`completion_rejects_empty_bibliographic_input`
-- [x] 存在しないpaperと他人所有paperはいずれも存在を秘匿して`NotFound`になる`completion_enforces_paper_existence_and_ownership`
+- [ ] 存在しないpaperは`NotFound`になる`completion_returns_not_found_for_missing_paper`
+- [ ] 全ユーザー共通で重複排除されたpaperはログイン中の非uploadユーザーも未設定書誌情報を補完できる`authenticated_non_uploader_can_complete_globally_deduplicated_paper`
 - [x] 補完後にDOIまたはtitleが存在すれば`requires_bibliographic_input=false`になる`completion_clears_bibliographic_input_requirement`
 - [x] 実PostgreSQLでも未設定項目だけを更新し、既存値を原子的に保持する`repository_completes_only_missing_bibliographic_metadata`
 
@@ -401,8 +402,9 @@
 - [x] Garage PUT失敗はHTTP 502を返しGROBID・DBへ進まない`garage_put_failure_returns_502_without_grobid_or_database_row`
 - [x] GROBIDがDOI・titleを取得できないPDFは201と`metadata_required`を返してDBに保存する`paper_import_without_minimum_metadata_returns_metadata_required`
 - [x] 書誌情報未設定の重複PDFは副作用を再実行せず200と`metadata_required`を返す`duplicate_pdf_without_metadata_returns_metadata_required_ok`
-- [x] `PATCH /papers/{paper_id}/bibliographic-metadata`は所有者のDOIまたはtitleを補完して200を返す`owner_can_complete_bibliographic_metadata_through_app`
-- [x] 補完APIは未ログイン401、不正UUID・空入力400、存在しないpaper・他人所有paper 404を返す`bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests`
+- [ ] `PATCH /papers/{paper_id}/bibliographic-metadata`はログインユーザーのDOIまたはtitle補完を200で返す`authenticated_user_can_complete_bibliographic_metadata_through_app`
+- [ ] 補完APIは未ログイン401、不正UUID・空入力400、存在しないpaper 404を返す`bibliographic_metadata_route_rejects_invalid_requests`
+- [ ] ログイン中の非uploadユーザーも全ユーザー共通paperの未設定書誌情報を補完できる`authenticated_non_uploader_can_complete_bibliographic_metadata_through_app`
 - [x] 補完APIは既存GROBID値を上書きしない`bibliographic_metadata_route_preserves_existing_values`
 - [x] 補完処理のDB失敗を500へmappingする`bibliographic_metadata_database_failure_maps_to_500`
 

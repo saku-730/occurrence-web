@@ -74,7 +74,6 @@ pub struct ImportPaperPdfOutput {
 #[derive(Debug, Clone)]
 pub struct CompleteBibliographicMetadataInput {
     pub paper_id: Uuid,
-    pub requested_by: Uuid,
     pub doi: Option<String>,
     pub title: Option<String>,
 }
@@ -288,13 +287,11 @@ impl PaperImportService {
             return Err(PaperImportServiceError::InvalidInput);
         }
 
-        // Ownership is part of the UPDATE predicate. A missing row and a row
-        // owned by someone else intentionally produce the same result so the
-        // endpoint does not disclose another user's paper identifiers.
+        // paperはSHA-256で全ユーザー共通のため、認証済みユーザーなら補完できる。
+        // repository側の原子的なUPDATEが既存値の上書きを防止する。
         let metadata = PaperRepository::complete_missing_bibliographic_metadata(
             db,
             input.paper_id,
-            input.requested_by,
             doi.as_deref(),
             title.as_deref(),
         )

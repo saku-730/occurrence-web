@@ -156,12 +156,12 @@ impl IntoResponse for PaperImportHandlerError {
     responses(
         (
             status = 201,
-            description = "New PDF stored in Garage, bibliographic metadata extracted by GROBID, and paper registered in PostgreSQL",
+            description = "New PDF stored in Garage, GROBID metadata saved when available, and paper registered in PostgreSQL. If both DOI and title are missing, status is metadata_required.",
             body = ReceivePaperPdfResponse
         ),
         (
             status = 200,
-            description = "The identical PDF has already been imported; no new Garage object or GROBID request is created",
+            description = "The identical PDF has already been imported; no new Garage object or GROBID request is created. If both DOI and title are missing, status is metadata_required.",
             body = ReceivePaperPdfResponse
         ),
         (
@@ -291,7 +291,11 @@ pub async fn receive_pdf(
                 StatusCode::CREATED
             },
             "metadata_required",
-            "paper PDF imported; DOI or title must be supplied",
+            if output.already_imported {
+                "paper PDF already imported; DOI or title must be supplied"
+            } else {
+                "paper PDF imported; DOI or title must be supplied"
+            },
         ),
         ImportPaperPdfStatus::AlreadyImported => (
             StatusCode::OK,
@@ -335,7 +339,7 @@ pub async fn receive_pdf(
         (status = 200, description = "Missing DOI or title completed", body = CompleteBibliographicMetadataResponse),
         (status = 400, description = "Invalid paper UUID or empty bibliographic input", body = ErrorResponse),
         (status = 401, description = "Authentication required", body = ErrorResponse),
-        (status = 404, description = "Paper not found or not owned by the current user", body = ErrorResponse),
+        (status = 404, description = "Paper not found", body = ErrorResponse),
         (status = 500, description = "PostgreSQL operation failed", body = ErrorResponse)
     ),
     tag = "paper-import"
@@ -349,13 +353,12 @@ pub async fn complete_bibliographic_metadata(
     // Authenticate before parsing or looking up the identifier. Unauthenticated
     // callers therefore cannot use validation differences to probe papers.
     let session_token = extract_session_token(&headers)?;
-    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    AuthService::current_user(&state.posgre, session_token).await?;
     let paper_id = Uuid::parse_str(&paper_id).map_err(|_| PaperImportHandlerError::InvalidInput)?;
 
     let output = PaperImportService::complete_bibliographic_metadata(
         CompleteBibliographicMetadataInput {
             paper_id,
-            requested_by: current_user.user_id,
             doi: request.doi,
             title: request.title,
         },
