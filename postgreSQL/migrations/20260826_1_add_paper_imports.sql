@@ -1,3 +1,6 @@
+-- +goose Up
+-- +goose StatementBegin
+
 CREATE TABLE paper_imports (
     id UUID PRIMARY KEY,
     reserved_paper_id UUID NOT NULL UNIQUE,
@@ -42,3 +45,5 @@ CREATE TABLE paper_imports (
 CREATE INDEX idx_paper_imports_uploaded_by ON paper_imports(uploaded_by);
 CREATE INDEX idx_paper_imports_sha256 ON paper_imports(sha256);
 CREATE INDEX idx_paper_imports_status ON paper_imports(status);
+
+-- +goose StatementEnd
