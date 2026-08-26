@@ -6,9 +6,11 @@ use axum::{
 };
 
 pub mod dto;
+pub mod fulltext;
 pub mod grobid;
 mod grobid_client_api;
 pub mod handler;
+pub mod preprocess;
 pub mod repository;
 pub mod service;
 pub mod staging;
