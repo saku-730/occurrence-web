@@ -6,10 +6,7 @@ use std::{
 use tempfile::TempDir;
 use tokio::process::Command;
 
-use super::{
-    fulltext::GrobidFulltextClient,
-    grobid::GrobidError,
-};
+use super::{fulltext::GrobidFulltextClient, grobid::GrobidError};
 
 pub const PAPER_PAGE_IMAGE_MEDIA_TYPE: &str = "image/jpeg";
 pub const PAPER_PAGE_RENDER_DPI: u32 = 150;
@@ -179,21 +176,52 @@ fn tei_to_llm_text(tei: &str) -> String {
         selected.push(body);
     }
 
-    let source = if selected.is_empty() {
-        tei.to_string()
-    } else {
-        selected.join("\n")
-    };
-    normalize_structured_text(&strip_xml_preserving_structure(&source))
+    // Do not fall back to the complete TEI document. A TEI containing only a
+    // bibliography would otherwise feed cited taxa and locations into the
+    // occurrence extractor. Page images remain available for such PDFs.
+    normalize_structured_text(&strip_xml_preserving_structure(&selected.join("\n")))
 }
 
 fn tei_section<'a>(tei: &'a str, name: &str) -> Option<&'a str> {
-    let open = format!("<{name}");
-    let close = format!("</{name}>");
-    let start = tei.find(&open)?;
-    let content_start = start + tei[start..].find('>')? + 1;
-    let content_end = content_start + tei[content_start..].find(&close)?;
+    let (content_start, _) = find_tei_tag(tei, name, false, 0)?;
+    let (content_end, _) = find_tei_tag(tei, name, true, content_start)?;
     Some(&tei[content_start..content_end])
+}
+
+/// GROBID normally uses the default TEI namespace, but valid TEI can also use
+/// a prefix such as `tei:body`. Match the local name so both forms preserve
+/// the front/body-only extraction rule.
+fn find_tei_tag(
+    xml: &str,
+    expected_name: &str,
+    closing: bool,
+    from: usize,
+) -> Option<(usize, usize)> {
+    let mut cursor = from;
+
+    while let Some(relative_start) = xml[cursor..].find('<') {
+        let start = cursor + relative_start;
+        let tag_end = start + xml[start..].find('>')?;
+        let tag = &xml[start + 1..tag_end];
+        let tag = tag.trim();
+        let is_closing = tag.starts_with('/');
+        let token = tag
+            .trim_start_matches('/')
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        let local_name = token.rsplit(':').next().unwrap_or(token);
+
+        if is_closing == closing && local_name == expected_name {
+            return Some((start, tag_end + 1));
+        }
+
+        cursor = tag_end + 1;
+    }
+
+    None
 }
 
 fn strip_xml_preserving_structure(xml: &str) -> String {
@@ -259,8 +287,8 @@ fn append_tag_separator(tag: &str, output: &mut String) {
 
     match name {
         "cell" => output.push('\t'),
-        "head" | "p" | "div" | "ab" | "list" | "item" | "figure" | "figDesc"
-        | "table" | "row" | "note" | "quote" | "pb" | "lb" => output.push('\n'),
+        "head" | "p" | "div" | "ab" | "list" | "item" | "figure" | "figDesc" | "table" | "row"
+        | "note" | "quote" | "pb" | "lb" => output.push('\n'),
         _ => {}
     }
 }
@@ -272,9 +300,9 @@ fn decode_xml_entity(entity: &str) -> Option<char> {
         "gt" => Some('>'),
         "quot" => Some('"'),
         "apos" => Some('\''),
-        _ if entity.starts_with("#x") => {
-            u32::from_str_radix(&entity[2..], 16).ok().and_then(char::from_u32)
-        }
+        _ if entity.starts_with("#x") => u32::from_str_radix(&entity[2..], 16)
+            .ok()
+            .and_then(char::from_u32),
         _ if entity.starts_with('#') => entity[1..].parse().ok().and_then(char::from_u32),
         _ => None,
     }
@@ -303,7 +331,68 @@ fn collapse_whitespace(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        sync::{Mutex, OnceLock},
+    };
+
+    use axum::{Router, body::Bytes, http::StatusCode, response::IntoResponse, routing::post};
+
     use super::*;
+
+    static ENVIRONMENT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENVIRONMENT_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            // A failed assertion must not prevent later tests from restoring
+            // the process environment and exercising their own case.
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn write_fake_renderer(script: &str) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().expect("fake renderer directory should be created");
+        let path = directory.path().join("pdftoppm");
+        std::fs::write(&path, script).expect("fake renderer should be written");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("fake renderer metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("fake renderer should be executable");
+        directory
+    }
+
+    async fn start_grobid(
+        status: StatusCode,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        async fn handler(
+            axum::extract::State((status, body)): axum::extract::State<(StatusCode, &'static str)>,
+            _body: Bytes,
+        ) -> impl IntoResponse {
+            (status, body)
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock GROBID listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("mock GROBID address should exist");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/api/processFulltextDocument", post(handler))
+                    .with_state((status, body)),
+            )
+            .await
+            .expect("mock GROBID server should run");
+        });
+
+        (format!("http://{address}"), server)
+    }
 
     #[test]
     fn extracts_front_and_body_without_bibliography() {
@@ -328,6 +417,30 @@ mod tests {
     }
 
     #[test]
+    fn extracts_namespaced_front_and_body_without_bibliography() {
+        let tei = r#"<tei:TEI xmlns:tei="http://www.tei-c.org/ns/1.0">
+  <tei:text>
+    <tei:front><tei:p>Article title</tei:p></tei:front>
+    <tei:body><tei:p>Observed in Kyoto.</tei:p></tei:body>
+    <tei:back><tei:p>Cited-only occurrence in Osaka.</tei:p></tei:back>
+  </tei:text>
+</tei:TEI>"#;
+
+        let text = tei_to_llm_text(tei);
+
+        assert!(text.contains("Article title"));
+        assert!(text.contains("Observed in Kyoto."));
+        assert!(!text.contains("Cited-only"));
+    }
+
+    #[test]
+    fn does_not_fall_back_to_bibliography_when_front_and_body_are_missing() {
+        let tei = r#"<TEI><text><back><p>Cited-only occurrence in Osaka.</p></back></text></TEI>"#;
+
+        assert!(tei_to_llm_text(tei).is_empty());
+    }
+
+    #[test]
     fn decodes_numeric_xml_entities() {
         let tei = "<TEI><text><body><p>35&#176; N &#x26; 139&#176; E</p></body></text></TEI>";
         assert_eq!(tei_to_llm_text(tei), "35° N & 139° E");
@@ -336,8 +449,161 @@ mod tests {
     #[test]
     fn recognizes_pdftoppm_page_images() {
         assert_eq!(rendered_page_number(Path::new("/tmp/page-1.jpg")), Some(1));
-        assert_eq!(rendered_page_number(Path::new("/tmp/page-023.jpeg")), Some(23));
+        assert_eq!(
+            rendered_page_number(Path::new("/tmp/page-023.jpeg")),
+            Some(23)
+        );
         assert_eq!(rendered_page_number(Path::new("/tmp/other-1.jpg")), None);
         assert_eq!(rendered_page_number(Path::new("/tmp/page-1.png")), None);
+    }
+
+    #[tokio::test]
+    async fn preprocess_keeps_tei_text_and_sorts_all_rendered_page_images() {
+        let _guard = environment_lock();
+        let (grobid_base_url, server) = start_grobid(
+            StatusCode::OK,
+            "<TEI><text><front><p>Paper title</p></front><body><p>Observed in Kyoto.</p></body><back><p>Cited-only</p></back></text></TEI>",
+        )
+        .await;
+        let renderer = write_fake_renderer(
+            "#!/bin/sh\n\
+             prefix=\"$5\"\n\
+             : > \"$prefix-10.jpg\"\n\
+             : > \"$prefix-2.jpeg\"\n\
+             : > \"$prefix-1.jpg\"\n\
+             : > \"$prefix-not-a-page.png\"\n",
+        );
+        let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
+        std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
+
+        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
+        let old_renderer = env::var_os("PDFTOPPM_BIN");
+        // The environment-driven dependencies are restored before the lock is
+        // released so other unit tests cannot inherit this mock configuration.
+        unsafe {
+            env::set_var("GROBID_BASE_URL", grobid_base_url);
+            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
+        }
+        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
+        match old_grobid_base_url {
+            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
+            None => unsafe { env::remove_var("GROBID_BASE_URL") },
+        }
+        match old_renderer {
+            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
+            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
+        }
+        server.abort();
+
+        let output = output.expect("text and rendered pages should be returned");
+        assert!(output.text.contains("Paper title"));
+        assert!(output.text.contains("Observed in Kyoto."));
+        assert!(!output.text.contains("Cited-only"));
+        assert_eq!(output.text_non_whitespace_chars, 26);
+        assert_eq!(output.page_count(), 3);
+        assert_eq!(
+            output
+                .page_images
+                .iter()
+                .map(|page| page.page_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 10]
+        );
+        assert!(
+            output
+                .page_images
+                .iter()
+                .all(|page| page.media_type == PAPER_PAGE_IMAGE_MEDIA_TYPE)
+        );
+        let workspace_path = output.workspace_path().to_path_buf();
+        assert!(workspace_path.is_dir());
+        drop(output);
+        assert!(
+            !workspace_path.exists(),
+            "the temporary renderer workspace must be removed when preprocessing output is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn preprocess_rejects_renderer_failure_and_empty_output() {
+        let _guard = environment_lock();
+        let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
+        std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
+        let old_renderer = env::var_os("PDFTOPPM_BIN");
+
+        let failing_renderer =
+            write_fake_renderer("#!/bin/sh\necho rendering failed >&2\nexit 4\n");
+        unsafe { env::set_var("PDFTOPPM_BIN", failing_renderer.path().join("pdftoppm")) };
+        let failed = render_all_pages(
+            pdf.path(),
+            tempfile::tempdir()
+                .expect("render output directory should be created")
+                .path(),
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(PaperPreprocessError::RenderFailed(message)) if message == "rendering failed")
+        );
+
+        let empty_renderer = write_fake_renderer("#!/bin/sh\nexit 0\n");
+        unsafe { env::set_var("PDFTOPPM_BIN", empty_renderer.path().join("pdftoppm")) };
+        let empty = render_all_pages(
+            pdf.path(),
+            tempfile::tempdir()
+                .expect("render output directory should be created")
+                .path(),
+        )
+        .await;
+        match old_renderer {
+            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
+            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
+        }
+
+        assert!(matches!(empty, Err(PaperPreprocessError::NoPageImages)));
+    }
+
+    #[tokio::test]
+    async fn preprocess_continues_with_page_images_when_grobid_has_no_content() {
+        let _guard = environment_lock();
+        let (grobid_base_url, server) = start_grobid(StatusCode::NO_CONTENT, "").await;
+        let renderer = write_fake_renderer(
+            "#!/bin/sh\n\
+             prefix=\"$5\"\n\
+             : > \"$prefix-2.jpg\"\n\
+             : > \"$prefix-1.jpg\"\n",
+        );
+        let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
+        std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
+
+        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
+        let old_renderer = env::var_os("PDFTOPPM_BIN");
+        unsafe {
+            env::set_var("GROBID_BASE_URL", grobid_base_url);
+            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
+        }
+        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
+        match old_grobid_base_url {
+            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
+            None => unsafe { env::remove_var("GROBID_BASE_URL") },
+        }
+        match old_renderer {
+            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
+            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
+        }
+        server.abort();
+
+        let output = output.expect("image-only preprocessing should succeed");
+        assert!(output.text.is_empty());
+        assert_eq!(output.text_non_whitespace_chars, 0);
+        assert_eq!(output.page_count(), 2);
+        assert_eq!(
+            output
+                .page_images
+                .iter()
+                .map(|page| page.page_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(output.page_images.iter().all(|page| page.path.is_file()));
     }
 }

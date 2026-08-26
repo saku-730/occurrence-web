@@ -373,6 +373,14 @@
 
 ### GROBID client / parser
 
+- [x] fulltext clientは`processFulltextDocument`へPDF、`consolidateHeader=0`、`consolidateCitations=0`、XML Acceptを送信し、TEIを返す`grobid_fulltext_client_sends_expected_request_and_returns_tei`
+- [x] fulltext clientは204を`NoContent`、不正または空TEIを`InvalidResponse`として返す`grobid_fulltext_client_handles_no_content_and_invalid_tei`
+- [x] TEIの`front`と`body`だけをLLMテキストにし、名前空間付き要素でも`back`の参考文献を除外する`extracts_namespaced_front_and_body_without_bibliography`
+- [x] `front`と`body`がないTEIは`back`だけへフォールバックせず、LLMテキストを空にする`does_not_fall_back_to_bibliography_when_front_and_body_are_missing`
+- [x] PDF前処理はGROBIDテキストと全JPEGページをページ番号順に保持し、非ページ出力を除外する`preprocess_keeps_tei_text_and_sorts_all_rendered_page_images`
+- [x] GROBIDが204でもPDF前処理は空テキストと全ページ画像で成功する`preprocess_continues_with_page_images_when_grobid_has_no_content`
+- [x] `pdftoppm`が失敗またはJPEGを出力しない場合、PDF前処理は失敗として返す`preprocess_rejects_renderer_failure_and_empty_output`
+
 - [x] multipart、Accept、consolidateHeaderを正しく送り全書誌metadataを解析する`grobid_client_sends_expected_request_and_parses_all_metadata`
 - [x] DOI URL、authors、pagesを正規化し、article numberをpagesから推測しない
 - [x] optional field欠落と不正BibTeXを処理する

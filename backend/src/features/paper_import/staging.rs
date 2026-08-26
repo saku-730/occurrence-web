@@ -8,7 +8,7 @@ use crate::features::media::service::{
 };
 
 use super::{
-    grobid::{GrobidClient, GrobidError, GrobidPaperMetadata, PaperMetadataExtractor},
+    grobid::{GrobidClient, GrobidError, GrobidPaperMetadata},
     repository::{PaperMetadata, PaperRepository},
     service::PAPER_PDF_FILE_SIZE_LIMIT_BYTES,
 };

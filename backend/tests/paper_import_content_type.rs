@@ -11,6 +11,7 @@ use backend::features::{
     },
     paper_import::service::{ImportPaperPdfInput, ImportPaperPdfStatus, PaperImportService},
 };
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -66,6 +67,9 @@ async fn start_mock_grobid() -> (String, tokio::task::JoinHandle<()>) {
             .await
             .expect("mock GROBID failed");
     });
+    // Give the server task one scheduling opportunity before the caller
+    // constructs the HTTP client and begins the multipart request.
+    tokio::task::yield_now().await;
     (format!("http://{address}"), handle)
 }
 
@@ -123,7 +127,10 @@ async fn service_accepts_case_insensitive_pdf_mime_and_stores_canonical_value() 
         .await
         .expect("failed to create test user");
 
-    let sha256 = "d".repeat(64);
+    // Integration tests share PostgreSQL with the other paper-import test
+    // binaries. A UUID-derived digest prevents this test from accidentally
+    // reusing a paper seeded by another test with a fixed SHA-256 value.
+    let sha256 = hex::encode(Sha256::digest(user_id.as_bytes()));
     sqlx::query("DELETE FROM papers WHERE sha256 = $1")
         .bind(&sha256)
         .execute(&db)
@@ -132,6 +139,10 @@ async fn service_accepts_case_insensitive_pdf_mime_and_stores_canonical_value() 
 
     let (grobid_url, server) = start_mock_grobid().await;
     let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    // This test must reach its loopback mock even when a developer or CI
+    // environment configures an HTTP proxy for external GROBID traffic.
+    let _no_proxy = EnvGuard::set("NO_PROXY", "127.0.0.1,localhost");
+    let _no_proxy_lowercase = EnvGuard::set("no_proxy", "127.0.0.1,localhost");
     let pdf = tempfile::Builder::new()
         .suffix(".pdf")
         .tempfile()
