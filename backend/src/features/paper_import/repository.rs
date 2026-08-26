@@ -122,4 +122,44 @@ impl PaperRepository {
 
         Ok(result.rows_affected() == 1)
     }
+
+    pub async fn complete_missing_bibliographic_metadata(
+        db: &PgPool,
+        paper_id: Uuid,
+        uploaded_by: Uuid,
+        doi: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<Option<PaperMetadata>, sqlx::Error> {
+        // Preserve metadata extracted by GROBID. CASE is evaluated by
+        // PostgreSQL during the UPDATE, so concurrent completion requests can
+        // never replace a value that another request has already supplied.
+        // Ownership belongs in the same predicate to prevent a check/update
+        // race and to hide other users' paper identifiers.
+        sqlx::query_as::<_, PaperMetadata>(
+            r#"
+            UPDATE papers
+            SET doi = CASE
+                    WHEN doi IS NULL OR BTRIM(doi) = '' THEN $3
+                    ELSE doi
+                END,
+                title = CASE
+                    WHEN title IS NULL OR BTRIM(title) = '' THEN $4
+                    ELSE title
+                END
+            WHERE id = $1
+              AND uploaded_by = $2
+            RETURNING id, bucket, object_key, content_type, size_bytes,
+                      original_filename, sha256,
+                      doi, title, authors, publication_year, journal,
+                      volume, issue, pages, article_number,
+                      uploaded_by
+            "#,
+        )
+        .bind(paper_id)
+        .bind(uploaded_by)
+        .bind(doi)
+        .bind(title)
+        .fetch_optional(db)
+        .await
+    }
 }

@@ -337,3 +337,77 @@
 ### app
 
 - [ ] `GET /users/{user_id}`で既存ユーザーのuser_nameを返す`user_summary_route_returns_user_name_for_existing_user`
+
+## Paper Import
+
+### service
+
+- [x] 同一SHA-256のPDFはGarage PUT・GROBID・DB INSERTを行わず既存paperを返す`duplicate_pdf_stops_before_garage_and_grobid`
+- [x] 新規PDFはGarage保存、GROBID抽出、全書誌metadataのDB登録を行う`new_pdf_is_stored_extracted_and_inserted_with_metadata`
+- [x] Garage PUT失敗時はGROBIDとDB登録を行わない`garage_put_failure_stops_before_grobid_and_insert`
+- [x] GROBID失敗時はGarage objectを削除してDB登録しない`grobid_failure_rolls_back_garage_and_does_not_insert`
+- [x] DB登録失敗時はGarage objectを削除する`database_failure_after_grobid_rolls_back_garage`
+- [x] 実PostgreSQLへの同時同一SHA-256 importは1行だけ保存し、競合側objectを削除する`concurrent_imports_persist_one_global_paper_and_rollback_loser`
+- [x] 同時重複でINSERT競合した側は自分のGarage objectを削除して既存paperを返す`concurrent_duplicate_removes_own_object_and_returns_winner`
+- [x] 重複PDFは`GROBID_BASE_URL`が不正でもGROBID clientを生成せず`AlreadyImported`を返す`duplicate_pdf_returns_existing_before_invalid_grobid_configuration`
+- [x] 初回のDB重複検索が失敗した場合はGarage・GROBIDを呼ばずDB errorを返す`initial_duplicate_lookup_failure_stops_before_external_dependencies`
+- [x] 同時重複の競合後に勝者paperが見つからない場合は`ConflictResolutionFailed`を返す`concurrent_duplicate_without_winner_returns_conflict_resolution_failed`
+- [x] rollbackのGarage DELETE自体が失敗した場合は`ObjectStoreFailed`を返す`rollback_delete_failure_is_reported_as_object_store_failure`
+- [x] `i64`へ安全に保存できないsizeは外部依存を呼ばず拒否する`oversized_service_input_stops_before_external_dependencies`
+- [x] 空bucket、0 byte、不正SHA-256を外部依存より前に拒否する`invalid_service_inputs_stop_before_external_dependencies`
+- [x] serviceは100 MiBちょうどを受理し、100 MiB + 1 byteを外部依存より前に拒否する`service_enforces_100_mib_pdf_limit`
+- [x] GROBIDがDOI・titleを両方取得できなくてもPDFとpaper rowを保存し`MetadataRequired`を返す`new_pdf_without_doi_and_title_is_saved_as_metadata_required`
+- [x] DOIまたはtitleの一方でも取得できれば通常の`Imported`を返す`new_pdf_with_minimum_bibliographic_metadata_is_imported`
+- [x] 書誌情報未設定の重複PDFは副作用を再実行せず`MetadataRequired`を返す`duplicate_pdf_without_doi_and_title_requires_metadata`
+
+### bibliographic metadata completion
+
+- [x] paper所有者は未設定のDOIだけを正規化して補完できる`owner_can_complete_missing_doi_with_normalization`
+- [x] paper所有者は未設定のtitleだけをtrimして補完できる`owner_can_complete_missing_title`
+- [x] DOI・titleを同時入力しても既存値を上書きせず未設定項目だけ補完する`completion_preserves_existing_grobid_metadata`
+- [x] DOI・titleが空または空白だけなら補完を拒否する`completion_rejects_empty_bibliographic_input`
+- [x] 存在しないpaperと他人所有paperはいずれも存在を秘匿して`NotFound`になる`completion_enforces_paper_existence_and_ownership`
+- [x] 補完後にDOIまたはtitleが存在すれば`requires_bibliographic_input=false`になる`completion_clears_bibliographic_input_requirement`
+- [x] 実PostgreSQLでも未設定項目だけを更新し、既存値を原子的に保持する`repository_completes_only_missing_bibliographic_metadata`
+
+### GROBID client / parser
+
+- [x] multipart、Accept、consolidateHeaderを正しく送り全書誌metadataを解析する`grobid_client_sends_expected_request_and_parses_all_metadata`
+- [x] DOI URL、authors、pagesを正規化し、article numberをpagesから推測しない
+- [x] optional field欠落と不正BibTeXを処理する
+- [x] GROBIDの204を`NoContent`として返す`grobid_client_maps_no_content_response`
+- [x] GROBIDの500をstatus付き`Upstream`として返す`grobid_client_maps_upstream_error_response`
+- [x] GROBIDの200＋不正BibTeXを`InvalidResponse`として返す`grobid_client_rejects_invalid_bibtex_response`
+- [x] GROBID接続不能を`RequestFailed`として返す`grobid_client_maps_connection_failure`
+- [x] GROBID応答timeoutを`RequestFailed`として返す`grobid_client_times_out_slow_response`
+- [x] 書誌項目が空の正しいBibTeXは空metadataとして処理する`parses_valid_bibtex_with_no_metadata_fields`
+- [x] 不正URL、HTTP以外のURL、0秒timeoutをGROBID設定エラーとして拒否する`grobid_client_rejects_invalid_configuration`
+- [x] 閉じ括弧が欠けたBibTeXを不正responseとして拒否する`rejects_truncated_bibtex`
+
+### HTTP
+
+- [x] 有効sessionとPDFで201を返しPostgreSQLへmetadataを保存する`authenticated_pdf_request_returns_created_and_persists_grobid_metadata`
+- [x] 未ログイン401、拡張子不正415、MIME不正415、PDF signature不正415、Content-Length超過413を副作用なしで返す
+- [x] Content-Lengthなしでも実データが100 MiBを超えた時点で413を返し副作用を残さない`streamed_pdf_over_limit_returns_413_without_side_effects`
+- [x] file fieldなしは400でGarage・GROBID・DBに副作用を残さない`missing_file_field_returns_400_without_side_effects`
+- [x] filenameがないfile fieldは400でGarage・GROBID・DBに副作用を残さない`missing_filename_returns_400_without_side_effects`
+- [x] 壊れたmultipart bodyは400でGarage・GROBID・DBに副作用を残さない`malformed_multipart_returns_400_without_side_effects`
+- [x] 未知のmultipart fieldは無視し、後続のfile fieldを処理する`unknown_multipart_field_is_ignored_before_pdf_file`
+- [x] 空PDFは400でGarage・GROBID・DBに副作用を残さない`empty_pdf_returns_400_without_side_effects`
+- [x] file fieldが複数なら400でGarage・GROBID・DBに副作用を残さない`multiple_file_fields_return_400_without_side_effects`
+- [x] `.PDF`拡張子と大文字小文字を含むPDF MIMEを受理する`uppercase_pdf_extension_and_mime_are_accepted`
+- [x] HTTP経由の重複PDFは200を返しGarage PUT・GROBIDを再実行しない`duplicate_pdf_request_returns_ok_without_repeating_side_effects`
+- [x] GROBID 204・500・不正BibTeXは502を返しGarage objectとDB rowを残さない`grobid_http_failures_return_502_and_rollback`
+- [x] Garage PUT失敗はHTTP 502を返しGROBID・DBへ進まない`garage_put_failure_returns_502_without_grobid_or_database_row`
+- [x] GROBIDがDOI・titleを取得できないPDFは201と`metadata_required`を返してDBに保存する`paper_import_without_minimum_metadata_returns_metadata_required`
+- [x] 書誌情報未設定の重複PDFは副作用を再実行せず200と`metadata_required`を返す`duplicate_pdf_without_metadata_returns_metadata_required_ok`
+- [x] `PATCH /papers/{paper_id}/bibliographic-metadata`は所有者のDOIまたはtitleを補完して200を返す`owner_can_complete_bibliographic_metadata_through_app`
+- [x] 補完APIは未ログイン401、不正UUID・空入力400、存在しないpaper・他人所有paper 404を返す`bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests`
+- [x] 補完APIは既存GROBID値を上書きしない`bibliographic_metadata_route_preserves_existing_values`
+- [x] 補完処理のDB失敗を500へmappingする`bibliographic_metadata_database_failure_maps_to_500`
+
+### real services
+
+- [x] 構造的に有効な生成PDFを実GROBIDへ送りtitleを抽出できる（ignored）`real_grobid_extracts_header_from_valid_pdf`
+- [x] repositoryに同梱した実在研究論文PDF群から期待するtitle・DOI等を抽出できる（ignored）`real_grobid_extracts_metadata_from_research_paper_fixtures`
+- [x] real HTTP・PostgreSQL・Garage・GROBIDで新規PDFを201登録しGarage objectとpapers rowを確認する（ignored）`paper_import_route_works_with_real_postgresql_garage_and_grobid`

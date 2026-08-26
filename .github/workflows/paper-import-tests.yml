@@ -63,6 +63,14 @@ jobs:
         working-directory: backend
         run: cargo test grobid::tests --lib -- --test-threads=1
 
+      - name: Run paper import service unit tests
+        working-directory: backend
+        run: cargo test features::paper_import::service::tests --lib -- --test-threads=1
+
+      - name: Run GROBID HTTP error mapping tests
+        working-directory: backend
+        run: cargo test --test paper_import_grobid_http -- --test-threads=1
+
       - name: Set up Go for goose
         uses: actions/setup-go@v5
         with:

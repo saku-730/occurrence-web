@@ -37,7 +37,9 @@ struct EnvGuard {
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let old_value = std::env::var_os(key);
-        unsafe { std::env::set_var(key, value); }
+        unsafe {
+            std::env::set_var(key, value);
+        }
         Self { key, old_value }
     }
 }
@@ -57,7 +59,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("environment lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 async fn start_counting_grobid() -> (String, Arc<Mutex<usize>>, tokio::task::JoinHandle<()>) {
@@ -78,7 +80,9 @@ async fn start_counting_grobid() -> (String, Arc<Mutex<usize>>, tokio::task::Joi
         .expect("failed to bind mock GROBID");
     let address = listener.local_addr().expect("mock GROBID address");
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("mock GROBID failed");
+        axum::serve(listener, app)
+            .await
+            .expect("mock GROBID failed");
     });
     (format!("http://{address}"), count, handle)
 }
@@ -86,6 +90,7 @@ async fn start_counting_grobid() -> (String, Arc<Mutex<usize>>, tokio::task::Joi
 #[derive(Clone, Default)]
 struct RecordingObjectStore {
     puts: Arc<Mutex<usize>>,
+    fail_put: bool,
 }
 
 impl RecordingObjectStore {
@@ -97,6 +102,9 @@ impl RecordingObjectStore {
 #[async_trait::async_trait]
 impl MediaObjectStore for RecordingObjectStore {
     async fn put_object(&self, _input: PutMediaObjectInput) -> Result<(), MediaServiceError> {
+        if self.fail_put {
+            return Err(MediaServiceError::ObjectStoreFailed);
+        }
         *self.puts.lock().expect("puts lock poisoned") += 1;
         Ok(())
     }
@@ -158,7 +166,9 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
                 environment: "test".to_string(),
                 cookie_secure: false,
             },
-            posgre: PosgreConfig { url: database_url() },
+            posgre: PosgreConfig {
+                url: database_url(),
+            },
             smtp: SmtpConfig {
                 host: "127.0.0.1".to_string(),
                 port: 1025,
@@ -184,16 +194,14 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
 
 async fn create_test_user_and_session(db: &PgPool) -> (Uuid, String) {
     let user_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO users (id, email, user_name, password_hash) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(user_id)
-    .bind(format!("paper-error-{user_id}@example.com"))
-    .bind(format!("paper-error-{user_id}"))
-    .bind("test-password-hash")
-    .execute(db)
-    .await
-    .expect("failed to create test user");
+    sqlx::query("INSERT INTO users (id, email, user_name, password_hash) VALUES ($1, $2, $3, $4)")
+        .bind(user_id)
+        .bind(format!("paper-error-{user_id}@example.com"))
+        .bind(format!("paper-error-{user_id}"))
+        .bind("test-password-hash")
+        .execute(db)
+        .await
+        .expect("failed to create test user");
 
     let token = Uuid::new_v4().to_string();
     sqlx::query(
@@ -246,7 +254,10 @@ async fn missing_session_returns_401_without_side_effects() {
             Request::builder()
                 .method("POST")
                 .uri("/paper-import")
-                .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+                .header(
+                    CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
                 .body(Body::from(body))
                 .expect("failed to build request"),
         )
@@ -276,7 +287,10 @@ async fn non_pdf_filename_is_rejected_before_side_effects() {
             Request::builder()
                 .method("POST")
                 .uri("/paper-import")
-                .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+                .header(
+                    CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
                 .header(COOKIE, format!("session={token}"))
                 .body(Body::from(body))
                 .expect("failed to build request"),
@@ -308,7 +322,10 @@ async fn non_pdf_declared_mime_is_rejected_before_side_effects() {
             Request::builder()
                 .method("POST")
                 .uri("/paper-import")
-                .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+                .header(
+                    CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
                 .header(COOKIE, format!("session={token}"))
                 .body(Body::from(body))
                 .expect("failed to build request"),
@@ -340,7 +357,10 @@ async fn oversized_content_length_returns_413_before_side_effects() {
             Request::builder()
                 .method("POST")
                 .uri("/paper-import")
-                .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+                .header(
+                    CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
                 .header(COOKIE, format!("session={token}"))
                 .header(
                     CONTENT_LENGTH,
@@ -358,4 +378,366 @@ async fn oversized_content_length_returns_413_before_side_effects() {
     assert_eq!(*grobid_count.lock().expect("GROBID count lock poisoned"), 0);
     cleanup_user(&db, user_id).await;
     server.abort();
+}
+
+fn authenticated_multipart_request(boundary: &str, token: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/paper-import")
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(COOKIE, format!("session={token}"))
+        .body(body)
+        .expect("failed to build request")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_file_field_returns_400_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "missing-file-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nignored\r\n--{boundary}--\r\n"
+    );
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_filename_returns_400_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "missing-filename-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.7\r\n--{boundary}--\r\n"
+    );
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_multipart_returns_400_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "malformed-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"paper.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.7\ntruncated"
+    );
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unknown_multipart_field_is_ignored_before_pdf_file() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "unknown-field-boundary";
+    let mut body =
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nignored\r\n")
+            .into_bytes();
+    body.extend_from_slice(&multipart_body(
+        boundary,
+        "unknown-field.pdf",
+        "application/pdf",
+        b"%PDF-1.7\nunknown field then PDF\n",
+    ));
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let response_body = String::from_utf8_lossy(&response_body).to_string();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "puts={puts}, grobid_calls={grobid_calls}, response={response_body}"
+    );
+    assert_eq!(puts, 1);
+    assert_eq!(grobid_calls, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn empty_pdf_returns_400_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "empty-pdf-boundary";
+    let body = multipart_body(boundary, "empty.pdf", "application/pdf", b"");
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multiple_file_fields_return_400_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "multiple-files-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"first.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.7\nfirst\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&multipart_body(
+        boundary,
+        "second.pdf",
+        "application/pdf",
+        b"%PDF-1.7\nsecond\n",
+    ));
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn uppercase_pdf_extension_and_mime_are_accepted() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "uppercase-pdf-boundary";
+    let body = multipart_body(
+        boundary,
+        "PAPER.PDF",
+        "Application/PDF",
+        b"%PDF-1.7\nuppercase metadata\n",
+    );
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "puts={puts}, grobid_calls={grobid_calls}"
+    );
+    assert_eq!(puts, 1);
+    assert_eq!(grobid_calls, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streamed_pdf_over_limit_returns_413_without_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "streamed-over-limit-boundary";
+    let prefix = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"large.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-"
+    );
+    let suffix = format!("\r\n--{boundary}--\r\n");
+    let one_mib = axum::body::Bytes::from(vec![b'x'; 1024 * 1024]);
+    let mut chunks = vec![Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(
+        prefix,
+    ))];
+    for _ in 0..100 {
+        chunks.push(Ok(one_mib.clone()));
+    }
+    chunks.push(Ok(axum::body::Bytes::from(suffix)));
+    let body = Body::from_stream(futures_util::stream::iter(chunks));
+
+    let response = app
+        .oneshot(authenticated_multipart_request(boundary, &token, body))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let puts = store.put_count();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(puts, 0);
+    assert_eq!(grobid_calls, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn garage_put_failure_returns_502_without_grobid_or_database_row() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, grobid_count, server) = start_counting_grobid().await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore {
+        fail_put: true,
+        ..Default::default()
+    };
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let boundary = "garage-failure-boundary";
+    let body = multipart_body(
+        boundary,
+        "garage-failure.pdf",
+        "application/pdf",
+        b"%PDF-1.7\nGarage failure\n",
+    );
+
+    let response = app
+        .oneshot(authenticated_multipart_request(
+            boundary,
+            &token,
+            Body::from(body),
+        ))
+        .await
+        .expect("request failed");
+    let status = response.status();
+    let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count papers");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(store.put_count(), 0);
+    assert_eq!(grobid_calls, 0);
+    assert_eq!(paper_count.0, 0);
 }

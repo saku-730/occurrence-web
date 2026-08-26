@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Multipart, State, multipart::Field},
+    extract::{Multipart, Path, State, multipart::Field},
     http::{
         HeaderMap, StatusCode,
         header::{CONTENT_LENGTH, COOKIE},
@@ -10,6 +10,7 @@ use axum::{
 use sha2::{Digest, Sha256};
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 use crate::{
     features::auth::{
@@ -20,13 +21,17 @@ use crate::{
 };
 
 use super::{
-    dto::{ReceivePaperPdfRequest, ReceivePaperPdfResponse},
+    dto::{
+        CompleteBibliographicMetadataRequest, CompleteBibliographicMetadataResponse,
+        ReceivePaperPdfRequest, ReceivePaperPdfResponse,
+    },
     service::{
-        ImportPaperPdfInput, ImportPaperPdfStatus, PaperImportService, PaperImportServiceError,
+        CompleteBibliographicMetadataInput, ImportPaperPdfInput, ImportPaperPdfStatus,
+        PaperImportService, PaperImportServiceError,
     },
 };
 
-pub const PAPER_PDF_FILE_SIZE_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
+pub const PAPER_PDF_FILE_SIZE_LIMIT_BYTES: u64 = super::service::PAPER_PDF_FILE_SIZE_LIMIT_BYTES;
 const MULTIPART_OVERHEAD_ALLOWANCE_BYTES: usize = 1024 * 1024;
 pub const PAPER_PDF_REQUEST_BODY_LIMIT_BYTES: usize =
     PAPER_PDF_FILE_SIZE_LIMIT_BYTES as usize + MULTIPART_OVERHEAD_ALLOWANCE_BYTES;
@@ -36,6 +41,7 @@ const PDF_SIGNATURE: &[u8] = b"%PDF-";
 pub enum PaperImportHandlerError {
     InvalidSession,
     InvalidInput,
+    NotFound,
     UnsupportedMediaType,
     PayloadTooLarge,
     ObjectStoreFailed,
@@ -59,6 +65,7 @@ impl From<PaperImportServiceError> for PaperImportHandlerError {
     fn from(error: PaperImportServiceError) -> Self {
         match error {
             PaperImportServiceError::InvalidInput => Self::InvalidInput,
+            PaperImportServiceError::NotFound => Self::NotFound,
             PaperImportServiceError::ObjectStoreFailed => Self::ObjectStoreFailed,
             PaperImportServiceError::Grobid(_) => Self::GrobidFailed,
             PaperImportServiceError::Database(error) => Self::Database(error),
@@ -83,6 +90,14 @@ impl IntoResponse for PaperImportHandlerError {
                 Json(ErrorResponse {
                     error: "invalid_pdf".to_string(),
                     message: "Invalid PDF upload".to_string(),
+                }),
+            )
+                .into_response(),
+            Self::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "paper_not_found".to_string(),
+                    message: "Paper not found".to_string(),
                 }),
             )
                 .into_response(),
@@ -203,6 +218,13 @@ pub async fn receive_pdf(
             continue;
         }
 
+        // The API accepts exactly one PDF. Continue parsing after staging it so
+        // duplicate file fields and malformed trailing multipart data cannot be
+        // silently ignored.
+        if received_pdf.is_some() {
+            return Err(PaperImportHandlerError::InvalidInput);
+        }
+
         let original_filename = field.file_name().map(ToString::to_string);
         validate_filename(original_filename.as_deref())?;
 
@@ -216,7 +238,6 @@ pub async fn receive_pdf(
 
         let staged = stage_pdf_to_temporary_file(&mut field).await?;
         received_pdf = Some((original_filename, content_type, staged));
-        break;
     }
 
     let (original_filename, content_type, staged) =
@@ -263,6 +284,15 @@ pub async fn receive_pdf(
             "imported",
             "paper PDF imported and metadata extracted",
         ),
+        ImportPaperPdfStatus::MetadataRequired => (
+            if output.already_imported {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            },
+            "metadata_required",
+            "paper PDF imported; DOI or title must be supplied",
+        ),
         ImportPaperPdfStatus::AlreadyImported => (
             StatusCode::OK,
             "already_imported",
@@ -288,9 +318,59 @@ pub async fn receive_pdf(
             issue: output.issue,
             pages: output.pages,
             article_number: output.article_number,
+            requires_bibliographic_input: output.requires_bibliographic_input,
             message: message.to_string(),
         }),
     ))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/papers/{paper_id}/bibliographic-metadata",
+    params(
+        ("paper_id" = String, Path, description = "Paper UUID")
+    ),
+    request_body = CompleteBibliographicMetadataRequest,
+    responses(
+        (status = 200, description = "Missing DOI or title completed", body = CompleteBibliographicMetadataResponse),
+        (status = 400, description = "Invalid paper UUID or empty bibliographic input", body = ErrorResponse),
+        (status = 401, description = "Authentication required", body = ErrorResponse),
+        (status = 404, description = "Paper not found or not owned by the current user", body = ErrorResponse),
+        (status = 500, description = "PostgreSQL operation failed", body = ErrorResponse)
+    ),
+    tag = "paper-import"
+)]
+pub async fn complete_bibliographic_metadata(
+    State(state): State<AppState>,
+    Path(paper_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CompleteBibliographicMetadataRequest>,
+) -> Result<Json<CompleteBibliographicMetadataResponse>, PaperImportHandlerError> {
+    // Authenticate before parsing or looking up the identifier. Unauthenticated
+    // callers therefore cannot use validation differences to probe papers.
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    let paper_id = Uuid::parse_str(&paper_id).map_err(|_| PaperImportHandlerError::InvalidInput)?;
+
+    let output = PaperImportService::complete_bibliographic_metadata(
+        CompleteBibliographicMetadataInput {
+            paper_id,
+            requested_by: current_user.user_id,
+            doi: request.doi,
+            title: request.title,
+        },
+        &state.posgre,
+    )
+    .await?;
+
+    Ok(Json(CompleteBibliographicMetadataResponse {
+        status: "completed".to_string(),
+        paper_id: output.paper_id,
+        doi: output.doi,
+        title: output.title,
+        requires_bibliographic_input: output.requires_bibliographic_input,
+        message: "bibliographic metadata completed".to_string(),
+    }))
 }
 
 struct StagedPaperPdf {
@@ -418,4 +498,19 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, PaperImportHandl
     }
 
     Err(PaperImportHandlerError::InvalidSession)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bibliographic_metadata_database_failure_maps_to_500() {
+        let response = PaperImportHandlerError::from(PaperImportServiceError::Database(
+            sqlx::Error::RowNotFound,
+        ))
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

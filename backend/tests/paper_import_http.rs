@@ -132,7 +132,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("environment lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Clone, Default)]
@@ -144,6 +144,10 @@ struct RecordingObjectStore {
 impl RecordingObjectStore {
     fn put_count(&self) -> usize {
         *self.puts.lock().expect("puts lock poisoned")
+    }
+
+    fn delete_count(&self) -> usize {
+        *self.deletes.lock().expect("deletes lock poisoned")
     }
 }
 
@@ -248,7 +252,9 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
             environment: "test".to_string(),
             cookie_secure: false,
         },
-        posgre: PosgreConfig { url: database_url() },
+        posgre: PosgreConfig {
+            url: database_url(),
+        },
         smtp: SmtpConfig {
             host: "127.0.0.1".to_string(),
             port: 1025,
@@ -273,6 +279,56 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
         Arc::new(NoopOccurrenceRdfStore),
         Arc::new(store),
     )
+}
+
+async fn insert_test_paper(
+    db: &PgPool,
+    uploaded_by: Uuid,
+    doi: Option<&str>,
+    title: Option<&str>,
+) -> Uuid {
+    let paper_id = Uuid::new_v4();
+    let sha256 = format!("{}{}", paper_id.simple(), paper_id.simple());
+    sqlx::query(
+        r#"
+        INSERT INTO papers (
+            id, bucket, object_key, content_type, size_bytes,
+            original_filename, sha256, doi, title, uploaded_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind(paper_id)
+    .bind("occurrence-media")
+    .bind(format!("papers/{paper_id}/original.pdf"))
+    .bind("application/pdf")
+    .bind(123_i64)
+    .bind("bibliographic-http-test.pdf")
+    .bind(sha256)
+    .bind(doi)
+    .bind(title)
+    .bind(uploaded_by)
+    .execute(db)
+    .await
+    .expect("failed to insert test paper");
+    paper_id
+}
+
+fn bibliographic_patch_request(
+    paper_id: &str,
+    token: Option<&str>,
+    body: serde_json::Value,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method("PATCH")
+        .uri(format!("/papers/{paper_id}/bibliographic-metadata"))
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(token) = token {
+        request = request.header(COOKIE, format!("session={token}"));
+    }
+    request
+        .body(Body::from(body.to_string()))
+        .expect("failed to build bibliographic PATCH request")
 }
 
 fn multipart_body(
@@ -320,7 +376,10 @@ async fn authenticated_pdf_request_returns_created_and_persists_grobid_metadata(
     let request = Request::builder()
         .method("POST")
         .uri("/paper-import")
-        .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .header(COOKIE, format!("session={session_token}"))
         .body(Body::from(body))
         .expect("failed to build request");
@@ -337,17 +396,19 @@ async fn authenticated_pdf_request_returns_created_and_persists_grobid_metadata(
     assert_eq!(json["title"], "A study of earthworms");
     assert_eq!(json["publication_year"], 2025);
     assert_eq!(store.put_count(), 1);
-    assert_eq!(*request_count.lock().expect("request count lock poisoned"), 1);
+    assert_eq!(
+        *request_count.lock().expect("request count lock poisoned"),
+        1
+    );
 
     let paper_id = Uuid::parse_str(json["paper_id"].as_str().expect("paper_id string"))
         .expect("paper_id UUID");
-    let row: (Option<String>, Option<String>, Option<i32>) = sqlx::query_as(
-        "SELECT doi, title, publication_year FROM papers WHERE id = $1",
-    )
-    .bind(paper_id)
-    .fetch_one(&db)
-    .await
-    .expect("failed to load saved paper");
+    let row: (Option<String>, Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT doi, title, publication_year FROM papers WHERE id = $1")
+            .bind(paper_id)
+            .fetch_one(&db)
+            .await
+            .expect("failed to load saved paper");
     assert_eq!(row.0.as_deref(), Some("10.1234/example.1"));
     assert_eq!(row.1.as_deref(), Some("A study of earthworms"));
     assert_eq!(row.2, Some(2025));
@@ -377,7 +438,10 @@ async fn fake_pdf_is_rejected_before_garage_or_grobid() {
     let request = Request::builder()
         .method("POST")
         .uri("/paper-import")
-        .header(CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .header(COOKIE, format!("session={session_token}"))
         .body(Body::from(body))
         .expect("failed to build request");
@@ -389,6 +453,386 @@ async fn fake_pdf_is_rejected_before_garage_or_grobid() {
         *request_count.lock().expect("request count lock poisoned"),
         0,
         "fake PDF must not reach GROBID"
+    );
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+}
+
+async fn send_pdf_request(
+    app: Router,
+    session_token: &str,
+    boundary: &str,
+    filename: &str,
+    pdf: &[u8],
+) -> Response {
+    let body = multipart_body(boundary, filename, "application/pdf", pdf);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/paper-import")
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(COOKIE, format!("session={session_token}"))
+        .body(Body::from(body))
+        .expect("failed to build request");
+
+    app.oneshot(request).await.expect("paper import response")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_pdf_request_returns_ok_without_repeating_side_effects() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, session_token) = create_test_user_and_session(&db).await;
+    let (grobid_url, request_count, server) =
+        start_mock_grobid(vec![(StatusCode::OK, BIBTEX.to_string())]).await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let pdf = b"%PDF-1.7\nHTTP duplicate paper\n";
+
+    let first = send_pdf_request(
+        app.clone(),
+        &session_token,
+        "http-duplicate-first",
+        "paper.pdf",
+        pdf,
+    )
+    .await;
+    let second = send_pdf_request(
+        app,
+        &session_token,
+        "http-duplicate-second",
+        "renamed-paper.pdf",
+        pdf,
+    )
+    .await;
+
+    let first_status = first.status();
+    let second_status = second.status();
+    let second_body = to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("failed to read duplicate response");
+    let second_json: serde_json::Value =
+        serde_json::from_slice(&second_body).expect("response should be JSON");
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count papers");
+    let puts = store.put_count();
+    let deletes = store.delete_count();
+    let grobid_calls = *request_count.lock().expect("request count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(first_status, StatusCode::CREATED);
+    assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(second_json["status"], "already_imported");
+    assert_eq!(paper_count.0, 1);
+    assert_eq!(puts, 1);
+    assert_eq!(deletes, 0);
+    assert_eq!(grobid_calls, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn grobid_http_failures_return_502_and_rollback() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, session_token) = create_test_user_and_session(&db).await;
+    let (grobid_url, request_count, server) = start_mock_grobid(vec![
+        (StatusCode::NO_CONTENT, String::new()),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GROBID unavailable".to_string(),
+        ),
+        (StatusCode::OK, "not BibTeX".to_string()),
+    ])
+    .await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+
+    let cases = [
+        (
+            "grobid-no-content",
+            "no-content.pdf",
+            b"%PDF-1.7\nno content response\n".as_slice(),
+        ),
+        (
+            "grobid-server-error",
+            "server-error.pdf",
+            b"%PDF-1.7\nserver error response\n".as_slice(),
+        ),
+        (
+            "grobid-invalid-bibtex",
+            "invalid-bibtex.pdf",
+            b"%PDF-1.7\ninvalid BibTeX response\n".as_slice(),
+        ),
+    ];
+
+    let mut statuses = Vec::new();
+    let mut error_codes = Vec::new();
+    for (boundary, filename, pdf) in cases {
+        let response = send_pdf_request(app.clone(), &session_token, boundary, filename, pdf).await;
+        statuses.push(response.status());
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read error response");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("error response should be JSON");
+        error_codes.push(json["error"].as_str().map(ToString::to_string));
+    }
+
+    let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
+        .bind(user_id)
+        .fetch_one(&db)
+        .await
+        .expect("failed to count papers");
+    let puts = store.put_count();
+    let deletes = store.delete_count();
+    let grobid_calls = *request_count.lock().expect("request count lock poisoned");
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+
+    assert_eq!(statuses, vec![StatusCode::BAD_GATEWAY; 3]);
+    assert_eq!(error_codes, vec![Some("grobid_error".to_string()); 3]);
+    assert_eq!(paper_count.0, 0);
+    assert_eq!(puts, 3);
+    assert_eq!(deletes, 3);
+    assert_eq!(grobid_calls, 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn paper_import_without_minimum_metadata_returns_metadata_required() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, session_token) = create_test_user_and_session(&db).await;
+    let empty_bibtex = "@misc{metadata_missing,\n}";
+    let (grobid_url, request_count, server) =
+        start_mock_grobid(vec![(StatusCode::OK, empty_bibtex.to_string())]).await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+
+    let response = send_pdf_request(
+        app,
+        &session_token,
+        "metadata-required-boundary",
+        "metadata-missing.pdf",
+        b"%PDF-1.7\nmetadata missing paper\n",
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
+    assert_eq!(json["status"], "metadata_required");
+    assert_eq!(json["requires_bibliographic_input"], true);
+    assert!(json["doi"].is_null());
+    assert!(json["title"].is_null());
+
+    let paper_id = Uuid::parse_str(json["paper_id"].as_str().expect("paper_id string"))
+        .expect("paper_id UUID");
+    let saved: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT doi, title FROM papers WHERE id = $1")
+            .bind(paper_id)
+            .fetch_one(&db)
+            .await
+            .expect("metadata-required paper must be saved");
+    assert_eq!(saved, (None, None));
+    assert_eq!(store.put_count(), 1);
+    assert_eq!(
+        *request_count.lock().expect("request count lock poisoned"),
+        1
+    );
+
+    cleanup_user(&db, user_id).await;
+    server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn owner_can_complete_bibliographic_metadata_through_app() {
+    let db = test_db_pool().await;
+    let (owner, token) = create_test_user_and_session(&db).await;
+    let paper_id = insert_test_paper(&db, owner, None, None).await;
+    let app = paper_import::router(test_state(db.clone(), RecordingObjectStore::default()));
+
+    let response = app
+        .oneshot(bibliographic_patch_request(
+            &paper_id.to_string(),
+            Some(&token),
+            serde_json::json!({
+                "doi": " https://doi.org/10.7777/http.example ",
+                "title": null
+            }),
+        ))
+        .await
+        .expect("bibliographic PATCH response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
+    assert_eq!(json["paper_id"], paper_id.to_string());
+    assert_eq!(json["doi"], "10.7777/http.example");
+    assert!(json["title"].is_null());
+    assert_eq!(json["requires_bibliographic_input"], false);
+
+    let saved: (Option<String>,) = sqlx::query_as("SELECT doi FROM papers WHERE id = $1")
+        .bind(paper_id)
+        .fetch_one(&db)
+        .await
+        .expect("completed DOI should be saved");
+    assert_eq!(saved.0.as_deref(), Some("10.7777/http.example"));
+    cleanup_user(&db, owner).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bibliographic_metadata_route_rejects_invalid_or_unauthorized_requests() {
+    let db = test_db_pool().await;
+    let (owner, owner_token) = create_test_user_and_session(&db).await;
+    let (other_user, other_token) = create_test_user_and_session(&db).await;
+    let paper_id = insert_test_paper(&db, owner, None, None).await;
+    let app = paper_import::router(test_state(db.clone(), RecordingObjectStore::default()));
+
+    let cases = [
+        (
+            paper_id.to_string(),
+            None,
+            serde_json::json!({"title": "No session"}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "not-a-uuid".to_string(),
+            Some(owner_token.as_str()),
+            serde_json::json!({"title": "Invalid UUID"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            paper_id.to_string(),
+            Some(owner_token.as_str()),
+            serde_json::json!({}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Uuid::new_v4().to_string(),
+            Some(owner_token.as_str()),
+            serde_json::json!({"title": "Missing paper"}),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            paper_id.to_string(),
+            Some(other_token.as_str()),
+            serde_json::json!({"title": "Other owner"}),
+            StatusCode::NOT_FOUND,
+        ),
+    ];
+
+    for (requested_id, token, body, expected_status) in cases {
+        let response = app
+            .clone()
+            .oneshot(bibliographic_patch_request(&requested_id, token, body))
+            .await
+            .expect("bibliographic error response");
+        assert_eq!(response.status(), expected_status);
+    }
+
+    let saved: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT doi, title FROM papers WHERE id = $1")
+            .bind(paper_id)
+            .fetch_one(&db)
+            .await
+            .expect("paper should remain unchanged");
+    assert_eq!(saved, (None, None));
+    cleanup_user(&db, owner).await;
+    cleanup_user(&db, other_user).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bibliographic_metadata_route_preserves_existing_values() {
+    let db = test_db_pool().await;
+    let (owner, token) = create_test_user_and_session(&db).await;
+    let paper_id =
+        insert_test_paper(&db, owner, Some("10.1000/grobid"), Some("GROBID title")).await;
+    let app = paper_import::router(test_state(db.clone(), RecordingObjectStore::default()));
+
+    let response = app
+        .oneshot(bibliographic_patch_request(
+            &paper_id.to_string(),
+            Some(&token),
+            serde_json::json!({
+                "doi": "10.1000/replacement",
+                "title": "Replacement title"
+            }),
+        ))
+        .await
+        .expect("bibliographic PATCH response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
+    assert_eq!(json["doi"], "10.1000/grobid");
+    assert_eq!(json["title"], "GROBID title");
+    let saved: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT doi, title FROM papers WHERE id = $1")
+            .bind(paper_id)
+            .fetch_one(&db)
+            .await
+            .expect("saved metadata should be queryable");
+    assert_eq!(saved.0.as_deref(), Some("10.1000/grobid"));
+    assert_eq!(saved.1.as_deref(), Some("GROBID title"));
+
+    cleanup_user(&db, owner).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_pdf_without_metadata_returns_metadata_required_ok() {
+    let _env_lock = env_lock();
+    let db = test_db_pool().await;
+    let (user_id, token) = create_test_user_and_session(&db).await;
+    let (grobid_url, request_count, server) = start_mock_grobid(vec![(
+        StatusCode::OK,
+        "@misc{metadata_missing,\n}".to_string(),
+    )])
+    .await;
+    let _guard = EnvGuard::set("GROBID_BASE_URL", &grobid_url);
+    let store = RecordingObjectStore::default();
+    let app = paper_import::router(test_state(db.clone(), store.clone()));
+    let pdf = format!("%PDF-1.7\nmetadata-required duplicate {user_id}\n").into_bytes();
+
+    let first = send_pdf_request(
+        app.clone(),
+        &token,
+        "metadata-required-first",
+        "paper.pdf",
+        &pdf,
+    )
+    .await;
+    let second =
+        send_pdf_request(app, &token, "metadata-required-second", "renamed.pdf", &pdf).await;
+
+    assert_eq!(first.status(), StatusCode::CREATED);
+    assert_eq!(second.status(), StatusCode::OK);
+    let body = to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("failed to read duplicate response");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be JSON");
+    assert_eq!(json["status"], "metadata_required");
+    assert_eq!(json["requires_bibliographic_input"], true);
+    assert_eq!(store.put_count(), 1);
+    assert_eq!(
+        *request_count.lock().expect("request count lock poisoned"),
+        1
     );
 
     cleanup_user(&db, user_id).await;

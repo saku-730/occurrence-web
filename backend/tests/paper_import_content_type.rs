@@ -1,4 +1,7 @@
-use std::{ffi::OsString, sync::{Arc, Mutex, MutexGuard, OnceLock}};
+use std::{
+    ffi::OsString,
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
+};
 
 use axum::{Router, http::StatusCode, response::IntoResponse, routing::post};
 use backend::features::{
@@ -24,7 +27,9 @@ struct EnvGuard {
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let old_value = std::env::var_os(key);
-        unsafe { std::env::set_var(key, value); }
+        unsafe {
+            std::env::set_var(key, value);
+        }
         Self { key, old_value }
     }
 }
@@ -44,7 +49,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("environment lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 async fn start_mock_grobid() -> (String, tokio::task::JoinHandle<()>) {
@@ -57,7 +62,9 @@ async fn start_mock_grobid() -> (String, tokio::task::JoinHandle<()>) {
         .expect("failed to bind mock GROBID");
     let address = listener.local_addr().expect("mock GROBID address");
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("mock GROBID failed");
+        axum::serve(listener, app)
+            .await
+            .expect("mock GROBID failed");
     });
     (format!("http://{address}"), handle)
 }
@@ -107,16 +114,14 @@ async fn service_accepts_case_insensitive_pdf_mime_and_stores_canonical_value() 
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let user_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO users (id, email, user_name, password_hash) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(user_id)
-    .bind(format!("mime-{user_id}@example.com"))
-    .bind(format!("mime-{user_id}"))
-    .bind("test-password-hash")
-    .execute(&db)
-    .await
-    .expect("failed to create test user");
+    sqlx::query("INSERT INTO users (id, email, user_name, password_hash) VALUES ($1, $2, $3, $4)")
+        .bind(user_id)
+        .bind(format!("mime-{user_id}@example.com"))
+        .bind(format!("mime-{user_id}"))
+        .bind("test-password-hash")
+        .execute(&db)
+        .await
+        .expect("failed to create test user");
 
     let sha256 = "d".repeat(64);
     sqlx::query("DELETE FROM papers WHERE sha256 = $1")
@@ -131,8 +136,7 @@ async fn service_accepts_case_insensitive_pdf_mime_and_stores_canonical_value() 
         .suffix(".pdf")
         .tempfile()
         .expect("failed to create PDF");
-    std::fs::write(pdf.path(), b"%PDF-1.7\ncase insensitive MIME\n")
-        .expect("failed to write PDF");
+    std::fs::write(pdf.path(), b"%PDF-1.7\ncase insensitive MIME\n").expect("failed to write PDF");
     let size_bytes = std::fs::metadata(pdf.path()).expect("PDF metadata").len();
     let store = RecordingObjectStore::default();
 

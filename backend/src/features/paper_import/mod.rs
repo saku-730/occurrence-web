@@ -1,4 +1,8 @@
-use axum::{Router, extract::DefaultBodyLimit, routing::post};
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    routing::{patch, post},
+};
 
 use crate::state::AppState;
 
@@ -15,8 +19,13 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
             "/paper-import",
-            post(handler::receive_pdf)
-                .layer(DefaultBodyLimit::max(handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES)),
+            post(handler::receive_pdf).layer(DefaultBodyLimit::max(
+                handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES,
+            )),
+        )
+        .route(
+            "/papers/{paper_id}/bibliographic-metadata",
+            patch(handler::complete_bibliographic_metadata),
         )
         .with_state(state)
 }

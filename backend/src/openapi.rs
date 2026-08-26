@@ -8,7 +8,10 @@ use crate::features::auth::dto::{
 };
 
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
-use crate::features::paper_import::dto::{ReceivePaperPdfRequest, ReceivePaperPdfResponse};
+use crate::features::paper_import::dto::{
+    CompleteBibliographicMetadataRequest, CompleteBibliographicMetadataResponse,
+    ReceivePaperPdfRequest, ReceivePaperPdfResponse,
+};
 
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -37,6 +40,7 @@ use crate::features::occurrences::dto::{
         crate::features::media::handler::get_media,
         crate::features::media::handler::delete_media,
         crate::features::paper_import::handler::receive_pdf,
+        crate::features::paper_import::handler::complete_bibliographic_metadata,
     ),
     components(
         schemas(
@@ -67,6 +71,8 @@ use crate::features::occurrences::dto::{
             DeleteMediaResponse,
             ReceivePaperPdfRequest,
             ReceivePaperPdfResponse,
+            CompleteBibliographicMetadataRequest,
+            CompleteBibliographicMetadataResponse,
         )
     ),
     tags(

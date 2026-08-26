@@ -2,7 +2,10 @@ use std::{collections::HashMap, env, path::Path, time::Duration};
 
 use axum::body::Bytes;
 use futures_util::{StreamExt, stream};
-use reqwest::{Client, StatusCode, header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE}};
+use reqwest::{
+    Client, StatusCode,
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE},
+};
 use tokio_util::io::ReaderStream;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -44,15 +47,30 @@ pub struct GrobidClient {
 
 impl GrobidClient {
     pub fn from_env() -> Result<Self, GrobidError> {
-        let base_url = env::var("GROBID_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8070".to_string());
+        let base_url =
+            env::var("GROBID_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8070".to_string());
+        Self::from_base_url_with_timeout(&base_url, Duration::from_secs(120))
+    }
+
+    pub fn from_base_url_with_timeout(
+        base_url: &str,
+        timeout: Duration,
+    ) -> Result<Self, GrobidError> {
         let base_url = base_url.trim().trim_end_matches('/').to_string();
-        if base_url.is_empty() || reqwest::Url::parse(&base_url).is_err() {
+        let parsed_url =
+            reqwest::Url::parse(&base_url).map_err(|_| GrobidError::InvalidConfiguration)?;
+        if base_url.is_empty()
+            || !matches!(parsed_url.scheme(), "http" | "https")
+            || timeout.is_zero()
+        {
             return Err(GrobidError::InvalidConfiguration);
         }
 
+        // Keep one timeout for connection, upload, and response parsing. GROBID
+        // processing can be slow, so production uses 120 seconds while tests
+        // inject a short duration to exercise timeout handling deterministically.
         let http = Client::builder()
-            .timeout(Duration::from_secs(120))
+            .timeout(timeout)
             .build()
             .map_err(|_| GrobidError::InvalidConfiguration)?;
 
@@ -84,12 +102,10 @@ impl PaperMetadataExtractor for GrobidClient {
             .await
             .map_err(GrobidError::FileSystem)?;
         let file_stream = ReaderStream::new(file);
-        let prefix_stream = stream::once(async move {
-            Ok::<Bytes, std::io::Error>(Bytes::from(prefix))
-        });
-        let suffix_stream = stream::once(async move {
-            Ok::<Bytes, std::io::Error>(Bytes::from(suffix))
-        });
+        let prefix_stream =
+            stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(prefix)) });
+        let suffix_stream =
+            stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(suffix)) });
         let body_stream = prefix_stream.chain(file_stream).chain(suffix_stream);
         let body = reqwest::Body::wrap_stream(body_stream);
 
@@ -129,8 +145,7 @@ fn parse_grobid_bibtex(input: &str) -> Result<GrobidPaperMetadata, GrobidError> 
     let doi = field(&fields, &["doi"]).map(normalize_doi);
     let title = field(&fields, &["title"]);
     let authors = field(&fields, &["author"]).map(normalize_authors);
-    let publication_year = field(&fields, &["year"])
-        .and_then(|value| extract_year(&value));
+    let publication_year = field(&fields, &["year"]).and_then(|value| extract_year(&value));
     let journal = field(&fields, &["journal"]);
     let volume = field(&fields, &["volume"]);
     let issue = field(&fields, &["number", "issue"]);
@@ -162,6 +177,13 @@ fn field(fields: &HashMap<String, String>, names: &[&str]) -> Option<String> {
 }
 
 fn parse_bibtex_fields(input: &str) -> Option<HashMap<String, String>> {
+    // GROBID promises a BibTeX entry, not merely arbitrary text containing
+    // braces. Requiring the entry marker prevents malformed 200 responses from
+    // being accepted as empty metadata.
+    if !input.trim_start().starts_with('@') {
+        return None;
+    }
+
     let bytes = input.as_bytes();
     let entry_open = bytes.iter().position(|byte| *byte == b'{')?;
 
@@ -185,10 +207,15 @@ fn parse_bibtex_fields(input: &str) -> Option<HashMap<String, String>> {
     }
 
     let mut fields = HashMap::new();
+    let mut entry_closed = false;
 
     while index < bytes.len() {
         skip_separators(bytes, &mut index);
-        if index >= bytes.len() || bytes[index] == b'}' {
+        if index >= bytes.len() {
+            break;
+        }
+        if bytes[index] == b'}' {
+            entry_closed = true;
             break;
         }
 
@@ -217,13 +244,11 @@ fn parse_bibtex_fields(input: &str) -> Option<HashMap<String, String>> {
         }
     }
 
-    Some(fields)
+    entry_closed.then_some(fields)
 }
 
 fn skip_separators(bytes: &[u8], index: &mut usize) {
-    while *index < bytes.len()
-        && (bytes[*index].is_ascii_whitespace() || bytes[*index] == b',')
-    {
+    while *index < bytes.len() && (bytes[*index].is_ascii_whitespace() || bytes[*index] == b',') {
         *index += 1;
     }
 }
@@ -310,7 +335,7 @@ fn normalize_authors(value: String) -> String {
         .join("; ")
 }
 
-fn normalize_doi(value: String) -> String {
+pub(crate) fn normalize_doi(value: String) -> String {
     let value = value.trim();
     let value = value
         .strip_prefix("https://doi.org/")
@@ -358,8 +383,14 @@ mod tests {
         let metadata = parse_grobid_bibtex(bibtex).expect("BibTeX should parse");
 
         assert_eq!(metadata.doi.as_deref(), Some("10.1234/example.1"));
-        assert_eq!(metadata.title.as_deref(), Some("A study of DNA in earthworms"));
-        assert_eq!(metadata.authors.as_deref(), Some("Doe, Jane; Smith, John Q."));
+        assert_eq!(
+            metadata.title.as_deref(),
+            Some("A study of DNA in earthworms")
+        );
+        assert_eq!(
+            metadata.authors.as_deref(),
+            Some("Doe, Jane; Smith, John Q.")
+        );
         assert_eq!(metadata.publication_year, Some(2025));
         assert_eq!(metadata.journal.as_deref(), Some("Example Journal"));
         assert_eq!(metadata.volume.as_deref(), Some("12"));
@@ -413,6 +444,21 @@ mod tests {
 
         assert_eq!(metadata.pages.as_deref(), Some("055406"));
         assert_eq!(metadata.article_number, None);
+    }
+
+    #[test]
+    fn parses_valid_bibtex_with_no_metadata_fields() {
+        let metadata =
+            parse_grobid_bibtex("@article{sample,\n}").expect("empty BibTeX entry should parse");
+
+        assert_eq!(metadata, GrobidPaperMetadata::default());
+    }
+
+    #[test]
+    fn rejects_truncated_bibtex() {
+        let result = parse_grobid_bibtex("@article{sample, title={Incomplete}");
+
+        assert!(matches!(result, Err(GrobidError::InvalidResponse)));
     }
 
     #[test]

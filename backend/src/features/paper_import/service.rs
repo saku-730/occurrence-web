@@ -7,6 +7,8 @@ use crate::features::media::service::{
     DeleteMediaObjectInput, MediaObjectStore, PutMediaObjectInput,
 };
 
+pub const PAPER_PDF_FILE_SIZE_LIMIT_BYTES: u64 = 100 * 1024 * 1024;
+
 use super::{
     grobid::{GrobidClient, GrobidError, GrobidPaperMetadata, PaperMetadataExtractor},
     repository::{InsertPaperMetadata, PaperMetadata, PaperRepository},
@@ -19,6 +21,7 @@ pub enum PaperImportServiceError {
     Database(sqlx::Error),
     Grobid(GrobidError),
     ConflictResolutionFailed,
+    NotFound,
 }
 
 impl From<sqlx::Error> for PaperImportServiceError {
@@ -42,6 +45,7 @@ pub struct ImportPaperPdfInput {
 pub enum ImportPaperPdfStatus {
     Imported,
     AlreadyImported,
+    MetadataRequired,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +67,24 @@ pub struct ImportPaperPdfOutput {
     pub issue: Option<String>,
     pub pages: Option<String>,
     pub article_number: Option<String>,
+    pub requires_bibliographic_input: bool,
+    pub already_imported: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompleteBibliographicMetadataInput {
+    pub paper_id: Uuid,
+    pub requested_by: Uuid,
+    pub doi: Option<String>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompleteBibliographicMetadataOutput {
+    pub paper_id: Uuid,
+    pub doi: Option<String>,
+    pub title: Option<String>,
+    pub requires_bibliographic_input: bool,
 }
 
 #[async_trait::async_trait]
@@ -103,11 +125,23 @@ impl PaperImportService {
     where
         S: MediaObjectStore + ?Sized,
     {
-        let grobid = GrobidClient::from_env().map_err(PaperImportServiceError::Grobid)?;
+        let input = normalize_import_input(input)?;
         let repository = PgPaperImportRepository { db };
-        Self::import_pdf_with_dependencies(input, store, &repository, &grobid).await
+
+        // PostgreSQL alone can answer duplicate imports. Delay GROBID client
+        // construction so a duplicate does not depend on external configuration.
+        if let Some(existing) = repository.find_by_sha256(&input.payload_sha256).await? {
+            return Ok(output_from_metadata(
+                ImportPaperPdfStatus::AlreadyImported,
+                existing,
+            ));
+        }
+
+        let grobid = GrobidClient::from_env().map_err(PaperImportServiceError::Grobid)?;
+        Self::import_new_pdf_with_dependencies(input, store, &repository, &grobid).await
     }
 
+    #[cfg(test)]
     async fn import_pdf_with_dependencies<S, R, E>(
         input: ImportPaperPdfInput,
         store: &S,
@@ -119,47 +153,59 @@ impl PaperImportService {
         R: PaperImportRepository + ?Sized,
         E: PaperMetadataExtractor + ?Sized,
     {
-        let bucket = input.bucket.trim();
-        let content_type = input.content_type.trim().to_ascii_lowercase();
-        let sha256 = input.payload_sha256.trim().to_ascii_lowercase();
+        let input = normalize_import_input(input)?;
 
-        if bucket.is_empty()
-            || content_type != "application/pdf"
-            || input.size_bytes == 0
-            || !is_valid_sha256_hex(&sha256)
-        {
-            return Err(PaperImportServiceError::InvalidInput);
-        }
-
-        if let Some(existing) = repository.find_by_sha256(&sha256).await? {
+        if let Some(existing) = repository.find_by_sha256(&input.payload_sha256).await? {
             return Ok(output_from_metadata(
                 ImportPaperPdfStatus::AlreadyImported,
                 existing,
             ));
         }
 
+        Self::import_new_pdf_with_dependencies(input, store, repository, extractor).await
+    }
+
+    async fn import_new_pdf_with_dependencies<S, R, E>(
+        input: ImportPaperPdfInput,
+        store: &S,
+        repository: &R,
+        extractor: &E,
+    ) -> Result<ImportPaperPdfOutput, PaperImportServiceError>
+    where
+        S: MediaObjectStore + ?Sized,
+        R: PaperImportRepository + ?Sized,
+        E: PaperMetadataExtractor + ?Sized,
+    {
+        let ImportPaperPdfInput {
+            bucket,
+            uploaded_by,
+            original_filename,
+            content_type,
+            file_path,
+            size_bytes: file_size_bytes,
+            payload_sha256: sha256,
+        } = input;
+        let database_size_bytes =
+            i64::try_from(file_size_bytes).expect("paper size was validated before side effects");
         let paper_id = Uuid::new_v4();
         let object_key = format!("papers/{paper_id}/original.pdf");
 
         store
             .put_object(PutMediaObjectInput {
-                bucket: bucket.to_string(),
+                bucket: bucket.clone(),
                 object_key: object_key.clone(),
                 content_type: content_type.clone(),
-                file_path: input.file_path.clone(),
-                size_bytes: input.size_bytes,
+                file_path: file_path.clone(),
+                size_bytes: file_size_bytes,
                 payload_sha256: sha256.clone(),
             })
             .await
             .map_err(|_| PaperImportServiceError::ObjectStoreFailed)?;
 
-        let grobid_metadata = match extractor
-            .extract_header(&input.file_path, input.size_bytes)
-            .await
-        {
+        let grobid_metadata = match extractor.extract_header(&file_path, file_size_bytes).await {
             Ok(metadata) => metadata,
             Err(error) => {
-                rollback_object(store, bucket, &object_key).await?;
+                rollback_object(store, &bucket, &object_key).await?;
                 return Err(PaperImportServiceError::Grobid(error));
             }
         };
@@ -167,11 +213,11 @@ impl PaperImportService {
         let insert_result = repository
             .insert_if_sha256_absent(InsertPaperMetadata {
                 id: paper_id,
-                bucket,
+                bucket: &bucket,
                 object_key: &object_key,
                 content_type: &content_type,
-                size_bytes: input.size_bytes as i64,
-                original_filename: input.original_filename.as_deref(),
+                size_bytes: database_size_bytes,
+                original_filename: original_filename.as_deref(),
                 sha256: &sha256,
                 doi: grobid_metadata.doi.as_deref(),
                 title: grobid_metadata.title.as_deref(),
@@ -182,14 +228,14 @@ impl PaperImportService {
                 issue: grobid_metadata.issue.as_deref(),
                 pages: grobid_metadata.pages.as_deref(),
                 article_number: grobid_metadata.article_number.as_deref(),
-                uploaded_by: input.uploaded_by,
+                uploaded_by,
             })
             .await;
 
         let inserted = match insert_result {
             Ok(inserted) => inserted,
             Err(database_error) => {
-                rollback_object(store, bucket, &object_key).await?;
+                rollback_object(store, &bucket, &object_key).await?;
                 return Err(PaperImportServiceError::Database(database_error));
             }
         };
@@ -197,17 +243,19 @@ impl PaperImportService {
         if inserted {
             return Ok(output_from_new_import(
                 paper_id,
-                bucket,
+                &bucket,
                 object_key,
                 &content_type,
-                input.size_bytes as i64,
-                input.original_filename,
+                database_size_bytes,
+                original_filename,
                 sha256,
                 grobid_metadata,
             ));
         }
 
-        rollback_object(store, bucket, &object_key).await?;
+        // The UNIQUE constraint resolved a concurrent upload first. Remove this
+        // request's object and return the row that won the database race.
+        rollback_object(store, &bucket, &object_key).await?;
 
         let existing = repository
             .find_by_sha256(&sha256)
@@ -219,6 +267,72 @@ impl PaperImportService {
             existing,
         ))
     }
+
+    pub async fn complete_bibliographic_metadata(
+        input: CompleteBibliographicMetadataInput,
+        db: &PgPool,
+    ) -> Result<CompleteBibliographicMetadataOutput, PaperImportServiceError> {
+        let doi = input
+            .doi
+            .map(super::grobid::normalize_doi)
+            .filter(|value| !value.is_empty());
+        let title = input
+            .title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        // At least one user-provided value is required even when the paper
+        // already has metadata. This prevents an empty PATCH from looking like
+        // a successful completion.
+        if doi.is_none() && title.is_none() {
+            return Err(PaperImportServiceError::InvalidInput);
+        }
+
+        // Ownership is part of the UPDATE predicate. A missing row and a row
+        // owned by someone else intentionally produce the same result so the
+        // endpoint does not disclose another user's paper identifiers.
+        let metadata = PaperRepository::complete_missing_bibliographic_metadata(
+            db,
+            input.paper_id,
+            input.requested_by,
+            doi.as_deref(),
+            title.as_deref(),
+        )
+        .await?
+        .ok_or(PaperImportServiceError::NotFound)?;
+
+        Ok(CompleteBibliographicMetadataOutput {
+            paper_id: metadata.id,
+            requires_bibliographic_input: requires_bibliographic_input(
+                metadata.doi.as_deref(),
+                metadata.title.as_deref(),
+            ),
+            doi: metadata.doi,
+            title: metadata.title,
+        })
+    }
+}
+
+fn normalize_import_input(
+    mut input: ImportPaperPdfInput,
+) -> Result<ImportPaperPdfInput, PaperImportServiceError> {
+    input.bucket = input.bucket.trim().to_string();
+    input.content_type = input.content_type.trim().to_ascii_lowercase();
+    input.payload_sha256 = input.payload_sha256.trim().to_ascii_lowercase();
+
+    // PostgreSQL stores the byte count as BIGINT. Reject values that cannot be
+    // represented instead of allowing a wrapping u64-to-i64 cast.
+    if input.bucket.is_empty()
+        || input.content_type != "application/pdf"
+        || input.size_bytes == 0
+        || input.size_bytes > PAPER_PDF_FILE_SIZE_LIMIT_BYTES
+        || input.size_bytes > i64::MAX as u64
+        || !is_valid_sha256_hex(&input.payload_sha256)
+    {
+        return Err(PaperImportServiceError::InvalidInput);
+    }
+
+    Ok(input)
 }
 
 async fn rollback_object<S>(
@@ -248,8 +362,14 @@ fn output_from_new_import(
     sha256: String,
     metadata: GrobidPaperMetadata,
 ) -> ImportPaperPdfOutput {
+    let requires_bibliographic_input =
+        requires_bibliographic_input(metadata.doi.as_deref(), metadata.title.as_deref());
     ImportPaperPdfOutput {
-        status: ImportPaperPdfStatus::Imported,
+        status: if requires_bibliographic_input {
+            ImportPaperPdfStatus::MetadataRequired
+        } else {
+            ImportPaperPdfStatus::Imported
+        },
         paper_id,
         bucket: bucket.to_string(),
         object_key,
@@ -266,6 +386,8 @@ fn output_from_new_import(
         issue: metadata.issue,
         pages: metadata.pages,
         article_number: metadata.article_number,
+        requires_bibliographic_input,
+        already_imported: false,
     }
 }
 
@@ -273,8 +395,14 @@ fn output_from_metadata(
     status: ImportPaperPdfStatus,
     metadata: PaperMetadata,
 ) -> ImportPaperPdfOutput {
+    let requires_bibliographic_input =
+        requires_bibliographic_input(metadata.doi.as_deref(), metadata.title.as_deref());
     ImportPaperPdfOutput {
-        status,
+        status: if requires_bibliographic_input {
+            ImportPaperPdfStatus::MetadataRequired
+        } else {
+            status
+        },
         paper_id: metadata.id,
         bucket: metadata.bucket,
         object_key: metadata.object_key,
@@ -291,7 +419,15 @@ fn output_from_metadata(
         issue: metadata.issue,
         pages: metadata.pages,
         article_number: metadata.article_number,
+        requires_bibliographic_input,
+        already_imported: true,
     }
+}
+
+fn requires_bibliographic_input(doi: Option<&str>, title: Option<&str>) -> bool {
+    let has_doi = doi.is_some_and(|value| !value.trim().is_empty());
+    let has_title = title.is_some_and(|value| !value.trim().is_empty());
+    !has_doi && !has_title
 }
 
 fn is_valid_sha256_hex(value: &str) -> bool {
@@ -439,19 +575,22 @@ mod tests {
             &self,
             metadata: InsertPaperMetadata<'_>,
         ) -> Result<bool, sqlx::Error> {
-            self.inserted.lock().unwrap().push(OwnedInsertPaperMetadata {
-                id: metadata.id,
-                sha256: metadata.sha256.to_string(),
-                doi: metadata.doi.map(ToString::to_string),
-                title: metadata.title.map(ToString::to_string),
-                authors: metadata.authors.map(ToString::to_string),
-                publication_year: metadata.publication_year,
-                journal: metadata.journal.map(ToString::to_string),
-                volume: metadata.volume.map(ToString::to_string),
-                issue: metadata.issue.map(ToString::to_string),
-                pages: metadata.pages.map(ToString::to_string),
-                article_number: metadata.article_number.map(ToString::to_string),
-            });
+            self.inserted
+                .lock()
+                .unwrap()
+                .push(OwnedInsertPaperMetadata {
+                    id: metadata.id,
+                    sha256: metadata.sha256.to_string(),
+                    doi: metadata.doi.map(ToString::to_string),
+                    title: metadata.title.map(ToString::to_string),
+                    authors: metadata.authors.map(ToString::to_string),
+                    publication_year: metadata.publication_year,
+                    journal: metadata.journal.map(ToString::to_string),
+                    volume: metadata.volume.map(ToString::to_string),
+                    issue: metadata.issue.map(ToString::to_string),
+                    pages: metadata.pages.map(ToString::to_string),
+                    article_number: metadata.article_number.map(ToString::to_string),
+                });
             Ok(matches!(self.insert_behavior, InsertBehavior::Inserted))
         }
     }
@@ -558,7 +697,10 @@ mod tests {
         assert_eq!(inserted[0].sha256, "a".repeat(64));
         assert_eq!(inserted[0].doi.as_deref(), Some("10.1234/test"));
         assert_eq!(inserted[0].title.as_deref(), Some("Test paper"));
-        assert_eq!(inserted[0].authors.as_deref(), Some("Doe, Jane; Smith, John"));
+        assert_eq!(
+            inserted[0].authors.as_deref(),
+            Some("Doe, Jane; Smith, John")
+        );
         assert_eq!(inserted[0].publication_year, Some(2026));
         assert_eq!(inserted[0].journal.as_deref(), Some("Test Journal"));
         assert_eq!(inserted[0].volume.as_deref(), Some("12"));
@@ -676,6 +818,282 @@ mod tests {
         .expect("MIME type should be case-insensitive");
 
         assert_eq!(output.content_type, "application/pdf");
-        assert_eq!(store.puts.lock().unwrap()[0].content_type, "application/pdf");
+        assert_eq!(
+            store.puts.lock().unwrap()[0].content_type,
+            "application/pdf"
+        );
+    }
+
+    struct FailingFindRepository;
+
+    #[async_trait::async_trait]
+    impl PaperImportRepository for FailingFindRepository {
+        async fn find_by_sha256(
+            &self,
+            _sha256: &str,
+        ) -> Result<Option<PaperMetadata>, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
+        async fn insert_if_sha256_absent(
+            &self,
+            _metadata: InsertPaperMetadata<'_>,
+        ) -> Result<bool, sqlx::Error> {
+            panic!("insert must not run after initial lookup failure")
+        }
+    }
+
+    #[tokio::test]
+    async fn initial_duplicate_lookup_failure_stops_before_external_dependencies() {
+        let repository = FailingFindRepository;
+        let store = FakeObjectStore::default();
+        let extractor = FakeExtractor::success(extracted_metadata());
+
+        let result = PaperImportService::import_pdf_with_dependencies(
+            input(),
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await;
+
+        assert!(matches!(result, Err(PaperImportServiceError::Database(_))));
+        assert!(store.puts.lock().unwrap().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        assert_eq!(*extractor.calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_duplicate_without_winner_returns_conflict_resolution_failed() {
+        let repository = FakeRepository::new(vec![None, None], InsertBehavior::Conflict);
+        let store = FakeObjectStore::default();
+        let extractor = FakeExtractor::success(extracted_metadata());
+
+        let result = PaperImportService::import_pdf_with_dependencies(
+            input(),
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PaperImportServiceError::ConflictResolutionFailed)
+        ));
+        assert_eq!(store.puts.lock().unwrap().len(), 1);
+        assert_eq!(store.deletes.lock().unwrap().len(), 1);
+        assert_eq!(*extractor.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn rollback_delete_failure_is_reported_as_object_store_failure() {
+        let repository = FakeRepository::new(vec![None], InsertBehavior::Inserted);
+        let store = FakeObjectStore {
+            fail_delete: true,
+            ..Default::default()
+        };
+        let extractor = FakeExtractor::failure();
+
+        let result = PaperImportService::import_pdf_with_dependencies(
+            input(),
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PaperImportServiceError::ObjectStoreFailed)
+        ));
+        assert_eq!(store.puts.lock().unwrap().len(), 1);
+        assert!(repository.inserted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_service_input_stops_before_external_dependencies() {
+        let repository = FakeRepository::new(vec![], InsertBehavior::Inserted);
+        let store = FakeObjectStore::default();
+        let extractor = FakeExtractor::success(extracted_metadata());
+        let mut oversized = input();
+        oversized.size_bytes = i64::MAX as u64 + 1;
+
+        let result = PaperImportService::import_pdf_with_dependencies(
+            oversized,
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await;
+
+        assert!(matches!(result, Err(PaperImportServiceError::InvalidInput)));
+        assert!(store.puts.lock().unwrap().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        assert_eq!(*extractor.calls.lock().unwrap(), 0);
+        assert!(repository.inserted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_service_inputs_stop_before_external_dependencies() {
+        let mut cases = Vec::new();
+
+        let mut empty_bucket = input();
+        empty_bucket.bucket = "   ".to_string();
+        cases.push(empty_bucket);
+
+        let mut empty_file = input();
+        empty_file.size_bytes = 0;
+        cases.push(empty_file);
+
+        let mut short_sha = input();
+        short_sha.payload_sha256 = "a".repeat(63);
+        cases.push(short_sha);
+
+        let mut non_hex_sha = input();
+        non_hex_sha.payload_sha256 = "z".repeat(64);
+        cases.push(non_hex_sha);
+
+        for invalid in cases {
+            let repository = FakeRepository::new(vec![], InsertBehavior::Inserted);
+            let store = FakeObjectStore::default();
+            let extractor = FakeExtractor::success(extracted_metadata());
+
+            let result = PaperImportService::import_pdf_with_dependencies(
+                invalid,
+                &store,
+                &repository,
+                &extractor,
+            )
+            .await;
+
+            assert!(matches!(result, Err(PaperImportServiceError::InvalidInput)));
+            assert!(store.puts.lock().unwrap().is_empty());
+            assert!(store.deletes.lock().unwrap().is_empty());
+            assert_eq!(*extractor.calls.lock().unwrap(), 0);
+            assert!(repository.inserted.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn service_enforces_100_mib_pdf_limit() {
+        let exact_repository = FakeRepository::new(vec![None], InsertBehavior::Inserted);
+        let exact_store = FakeObjectStore::default();
+        let exact_extractor = FakeExtractor::success(extracted_metadata());
+        let mut exact_limit = input();
+        exact_limit.size_bytes = PAPER_PDF_FILE_SIZE_LIMIT_BYTES;
+
+        let exact_result = PaperImportService::import_pdf_with_dependencies(
+            exact_limit,
+            &exact_store,
+            &exact_repository,
+            &exact_extractor,
+        )
+        .await;
+
+        assert!(exact_result.is_ok(), "100 MiB must remain valid");
+        assert_eq!(exact_store.puts.lock().unwrap().len(), 1);
+        assert_eq!(*exact_extractor.calls.lock().unwrap(), 1);
+
+        let over_repository = FakeRepository::new(vec![], InsertBehavior::Inserted);
+        let over_store = FakeObjectStore::default();
+        let over_extractor = FakeExtractor::success(extracted_metadata());
+        let mut over_limit = input();
+        over_limit.size_bytes = PAPER_PDF_FILE_SIZE_LIMIT_BYTES + 1;
+
+        let over_result = PaperImportService::import_pdf_with_dependencies(
+            over_limit,
+            &over_store,
+            &over_repository,
+            &over_extractor,
+        )
+        .await;
+
+        assert!(matches!(
+            over_result,
+            Err(PaperImportServiceError::InvalidInput)
+        ));
+        assert!(over_store.puts.lock().unwrap().is_empty());
+        assert_eq!(*over_extractor.calls.lock().unwrap(), 0);
+        assert!(over_repository.inserted.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn new_pdf_without_doi_and_title_is_saved_as_metadata_required() {
+        let repository = FakeRepository::new(vec![None], InsertBehavior::Inserted);
+        let store = FakeObjectStore::default();
+        let mut metadata = extracted_metadata();
+        metadata.doi = None;
+        metadata.title = None;
+        let extractor = FakeExtractor::success(metadata);
+
+        let output = PaperImportService::import_pdf_with_dependencies(
+            input(),
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await
+        .expect("a PDF without minimum metadata must still be saved");
+
+        assert_eq!(output.status, ImportPaperPdfStatus::MetadataRequired);
+        assert!(output.requires_bibliographic_input);
+        assert_eq!(store.puts.lock().unwrap().len(), 1);
+        let inserted = repository.inserted.lock().unwrap();
+        assert_eq!(inserted.len(), 1);
+        assert!(inserted[0].doi.is_none());
+        assert!(inserted[0].title.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_pdf_with_minimum_bibliographic_metadata_is_imported() {
+        for (doi, title) in [
+            (Some("10.1234/doi-only".to_string()), None),
+            (None, Some("Title only".to_string())),
+        ] {
+            let repository = FakeRepository::new(vec![None], InsertBehavior::Inserted);
+            let store = FakeObjectStore::default();
+            let mut metadata = extracted_metadata();
+            metadata.doi = doi;
+            metadata.title = title;
+            let extractor = FakeExtractor::success(metadata);
+
+            let output = PaperImportService::import_pdf_with_dependencies(
+                input(),
+                &store,
+                &repository,
+                &extractor,
+            )
+            .await
+            .expect("one minimum metadata value is enough");
+
+            assert_eq!(output.status, ImportPaperPdfStatus::Imported);
+            assert!(!output.requires_bibliographic_input);
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_pdf_without_doi_and_title_requires_metadata() {
+        let mut existing = existing_paper();
+        let existing_id = existing.id;
+        existing.doi = None;
+        existing.title = None;
+        let repository = FakeRepository::new(vec![Some(existing)], InsertBehavior::Inserted);
+        let store = FakeObjectStore::default();
+        let extractor = FakeExtractor::success(extracted_metadata());
+
+        let output = PaperImportService::import_pdf_with_dependencies(
+            input(),
+            &store,
+            &repository,
+            &extractor,
+        )
+        .await
+        .expect("duplicate without metadata must request completion");
+
+        assert_eq!(output.paper_id, existing_id);
+        assert_eq!(output.status, ImportPaperPdfStatus::MetadataRequired);
+        assert!(output.requires_bibliographic_input);
+        assert!(store.puts.lock().unwrap().is_empty());
+        assert_eq!(*extractor.calls.lock().unwrap(), 0);
     }
 }

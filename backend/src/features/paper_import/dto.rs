@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -25,5 +25,22 @@ pub struct ReceivePaperPdfResponse {
     pub issue: Option<String>,
     pub pages: Option<String>,
     pub article_number: Option<String>,
+    pub requires_bibliographic_input: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CompleteBibliographicMetadataRequest {
+    pub doi: Option<String>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompleteBibliographicMetadataResponse {
+    pub status: String,
+    pub paper_id: Uuid,
+    pub doi: Option<String>,
+    pub title: Option<String>,
+    pub requires_bibliographic_input: bool,
     pub message: String,
 }
