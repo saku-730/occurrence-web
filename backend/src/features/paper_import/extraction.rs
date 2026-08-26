@@ -92,15 +92,13 @@ impl PaperOccurrenceExtractionService {
     {
         // Ownership and state are checked in the same UPDATE so another request
         // cannot start extraction for the same staged import concurrently.
-        // failed is accepted to allow an explicit retry after a transient
-        // Garage/GROBID/llama failure.
         let source = sqlx::query_as::<_, ExtractionSourceRow>(
             r#"
             UPDATE paper_imports
             SET status = 'extracting_occurrences', updated_at = now()
             WHERE id = $1
               AND uploaded_by = $2
-              AND status IN ('staged', 'failed')
+              AND status = 'staged'
             RETURNING bucket, object_key, size_bytes, sha256
             "#,
         )
@@ -135,12 +133,14 @@ impl PaperOccurrenceExtractionService {
                 Ok(ExtractPaperOccurrencesOutput { import_id, result })
             }
             Err(error) => {
-                // Preserve a visible retryable state instead of leaving the
-                // import permanently stuck in extracting_occurrences.
+                // A handled extraction failure returns the import to staged so
+                // the same endpoint can be retried and the existing cancel path
+                // remains valid. A process crash is intentionally different and
+                // may leave extracting_occurrences for later reconciliation.
                 sqlx::query(
                     r#"
                     UPDATE paper_imports
-                    SET status = 'failed', updated_at = now()
+                    SET status = 'staged', updated_at = now()
                     WHERE id = $1
                       AND uploaded_by = $2
                       AND status = 'extracting_occurrences'
