@@ -12,6 +12,9 @@ use crate::features::paper_import::dto::{
     CompleteBibliographicMetadataRequest, CompleteBibliographicMetadataResponse,
     ReceivePaperPdfRequest, ReceivePaperPdfResponse,
 };
+use crate::features::paper_import::extraction_handler::{
+    ExtractOccurrencesResponse, ExtractedOccurrenceCandidate,
+};
 
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -41,6 +44,7 @@ use crate::features::occurrences::dto::{
         crate::features::media::handler::delete_media,
         crate::features::paper_import::handler::receive_pdf,
         crate::features::paper_import::handler::complete_bibliographic_metadata,
+        crate::features::paper_import::extraction_handler::extract_occurrences,
     ),
     components(
         schemas(
@@ -73,6 +77,8 @@ use crate::features::occurrences::dto::{
             ReceivePaperPdfResponse,
             CompleteBibliographicMetadataRequest,
             CompleteBibliographicMetadataResponse,
+            ExtractedOccurrenceCandidate,
+            ExtractOccurrencesResponse,
         )
     ),
     tags(
