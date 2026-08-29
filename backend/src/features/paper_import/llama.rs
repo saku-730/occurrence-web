@@ -29,12 +29,11 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
 - 種まで分かる場合は種を使用してください。
 - 種まで分からない場合は、属・科など読み取れる最も具体的な分類群を使用してください。
 - 情報を推測して、論文に書かれているより細かい分類群へ補完しないでください。
+- 学名について省略名は使用しないでください。
 
 2. 位置情報
 - その分類群が実際に記録、採集、観察された地点を抽出してください。
 - 地名は locality に記録してください。
-- 緯度経度が明示されている場合は decimalLatitude と decimalLongitude に記録してください。
-- 地名から緯度経度を推測しないでください。
 
 3. 分類群と位置情報
 - 分類群と、その分類群が記録された位置情報を必ず対応付けてください。
@@ -54,6 +53,14 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
 - 推測や創作をしないでください。
 - 情報が存在しない項目には null を使用してください。
 
+6. 重複禁止と終了
+- scientificName と locality の組み合わせが同一のOccurrenceは、情報源や表現箇所が異なっても1件だけ出力してください。
+- 出力前に全レコードを照合し、同一のOccurrenceを統合してください。
+- 同じOccurrenceを繰り返し出力しないでください。
+- 抽出した重複のないOccurrenceをすべて1回ずつ出力したら、occurrences配列とJSONオブジェクトを直ちに閉じて生成を終了してください。
+- occurrences配列を最初から作り直したり、同じJSONを複数回出力したりしないでください。
+- JSONの前後に説明、注釈、Markdownのコードブロックを出力しないでください。
+
 ## 出力形式
 
 以下のJSONだけを出力してください。
@@ -62,9 +69,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
   "occurrences": [
     {
       "scientificName": "分類群名",
-      "locality": "地点名",
-      "decimalLatitude": 35.1234,
-      "decimalLongitude": 135.1234
+      "locality": "地点名"
     }
   ]
 }
@@ -281,7 +286,7 @@ async fn build_request_parts(
         "top_p": 0.8,
         "top_k": 20,
         "min_p": 0.0,
-        "presence_penalty": 1.0,
+        "presence_penalty": 2.0,
         "repeat_penalty": 1.0,
         "max_tokens": 8192,
         "stream": false,
@@ -305,17 +310,10 @@ fn occurrence_response_format() -> Value {
                     "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": [
-                            "scientificName",
-                            "locality",
-                            "decimalLatitude",
-                            "decimalLongitude"
-                        ],
+                        "required": ["scientificName", "locality"],
                         "properties": {
                             "scientificName": { "type": "string", "minLength": 1 },
-                            "locality": { "type": ["string", "null"] },
-                            "decimalLatitude": { "type": ["number", "null"], "minimum": -90, "maximum": 90 },
-                            "decimalLongitude": { "type": ["number", "null"], "minimum": -180, "maximum": 180 }
+                            "locality": { "type": ["string", "null"] }
                         }
                     }
                 }
@@ -450,7 +448,7 @@ mod tests {
         json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","decimalLatitude":35.0,"decimalLongitude":139.0}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo"}]}"#
                 }
             }]
         })
@@ -482,6 +480,8 @@ mod tests {
             .expect("message content should be an array");
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], OCCURRENCE_EXTRACTION_PROMPT);
+        assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("同じOccurrenceを繰り返し出力しない"));
+        assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("直ちに閉じて生成を終了"));
         assert_eq!(content[1]["type"], "text");
         assert!(
             content[1]["text"]
@@ -498,6 +498,22 @@ mod tests {
                 .starts_with("data:image/jpeg;base64,")
         );
         assert_eq!(request["response_format"]["type"], "json_schema");
+        let occurrence_schema = &request["response_format"]["schema"]["properties"]
+            ["occurrences"]["items"];
+        assert_eq!(
+            occurrence_schema["required"],
+            json!(["scientificName", "locality"])
+        );
+        assert!(
+            occurrence_schema["properties"]
+                .get("decimalLatitude")
+                .is_none()
+        );
+        assert!(
+            occurrence_schema["properties"]
+                .get("decimalLongitude")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -523,7 +539,7 @@ mod tests {
         assert_eq!(requests[0]["top_p"], 0.8);
         assert_eq!(requests[0]["top_k"], 20);
         assert_eq!(requests[0]["min_p"], 0.0);
-        assert_eq!(requests[0]["presence_penalty"], 1.0);
+        assert_eq!(requests[0]["presence_penalty"], 2.0);
         assert_eq!(requests[0]["repeat_penalty"], 1.0);
         assert_eq!(requests[0]["max_tokens"], 8192);
         assert_eq!(requests[0]["stream"], false);
