@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -5,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -112,13 +115,34 @@ impl IntoResponse for ExtractOccurrencesHandlerError {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedOccurrenceCandidate {
+    pub scientific_name: String,
+    pub locality: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ExtractOccurrencesResponse {
     pub status: String,
     pub import_id: Uuid,
-    pub occurrences: Vec<OccurrenceCandidate>,
+    pub occurrences: Vec<ExtractedOccurrenceCandidate>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/paper-imports/{import_id}/extract-occurrences",
+    params(("import_id" = String, Path, description = "Paper import UUID")),
+    responses(
+        (status = 200, description = "Occurrence candidates extracted for browser-side review", body = ExtractOccurrencesResponse),
+        (status = 400, description = "Invalid paper import UUID", body = ErrorResponse),
+        (status = 401, description = "Authentication required", body = ErrorResponse),
+        (status = 404, description = "Paper import not found or not ready", body = ErrorResponse),
+        (status = 500, description = "Database or temporary file operation failed", body = ErrorResponse),
+        (status = 502, description = "Garage read or llama.cpp extraction failed", body = ErrorResponse)
+    ),
+    tag = "paper-import"
+)]
 pub async fn extract_occurrences(
     State(state): State<AppState>,
     Path(import_id): Path<String>,
@@ -141,8 +165,35 @@ pub async fn extract_occurrences(
     Ok(Json(ExtractOccurrencesResponse {
         status: "reviewing".to_string(),
         import_id: output.import_id,
-        occurrences: output.result.occurrences,
+        occurrences: frontend_occurrence_candidates(output.result.occurrences),
     }))
+}
+
+fn frontend_occurrence_candidates(
+    candidates: Vec<OccurrenceCandidate>,
+) -> Vec<ExtractedOccurrenceCandidate> {
+    let mut seen = HashSet::new();
+
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let scientific_name = candidate.scientific_name.trim().to_string();
+            if scientific_name.is_empty() {
+                return None;
+            }
+
+            let locality = candidate
+                .locality
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let key = (scientific_name.clone(), locality.clone());
+
+            seen.insert(key).then_some(ExtractedOccurrenceCandidate {
+                scientific_name,
+                locality,
+            })
+        })
+        .collect()
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, ExtractOccurrencesHandlerError> {
@@ -163,4 +214,67 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, ExtractOccurrenc
     }
 
     Err(ExtractOccurrencesHandlerError::InvalidSession)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn candidate(scientific_name: &str, locality: Option<&str>) -> OccurrenceCandidate {
+        OccurrenceCandidate {
+            scientific_name: scientific_name.to_string(),
+            locality: locality.map(ToString::to_string),
+            decimal_latitude: None,
+            decimal_longitude: None,
+        }
+    }
+
+    #[test]
+    fn frontend_candidates_are_trimmed_deduplicated_and_keep_first_order() {
+        let candidates = frontend_occurrence_candidates(vec![
+            candidate(" Metaphire hilgendorfi ", Some(" Tokyo ")),
+            candidate("Metaphire hilgendorfi", Some("Tokyo")),
+            candidate("Amynthas agrestis", Some("")),
+            candidate("   ", Some("ignored")),
+        ]);
+
+        assert_eq!(
+            candidates,
+            vec![
+                ExtractedOccurrenceCandidate {
+                    scientific_name: "Metaphire hilgendorfi".to_string(),
+                    locality: Some("Tokyo".to_string()),
+                },
+                ExtractedOccurrenceCandidate {
+                    scientific_name: "Amynthas agrestis".to_string(),
+                    locality: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extraction_response_serializes_only_frontend_candidate_fields() {
+        let response = ExtractOccurrencesResponse {
+            status: "reviewing".to_string(),
+            import_id: Uuid::nil(),
+            occurrences: vec![ExtractedOccurrenceCandidate {
+                scientific_name: "Metaphire hilgendorfi".to_string(),
+                locality: Some("Tokyo".to_string()),
+            }],
+        };
+
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value["occurrences"][0],
+            json!({
+                "scientificName": "Metaphire hilgendorfi",
+                "locality": "Tokyo"
+            })
+        );
+        assert!(value["occurrences"][0].get("decimalLatitude").is_none());
+        assert!(value["occurrences"][0].get("decimalLongitude").is_none());
+    }
 }
