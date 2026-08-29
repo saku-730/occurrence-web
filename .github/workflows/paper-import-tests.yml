@@ -67,6 +67,10 @@ jobs:
         working-directory: backend
         run: cargo test features::paper_import::service::tests --lib -- --test-threads=1
 
+      - name: Run frontend extraction contract tests
+        working-directory: backend
+        run: cargo test features::paper_import::extraction_handler::tests --lib -- --test-threads=1
+
       - name: Run GROBID HTTP error mapping tests
         working-directory: backend
         run: cargo test --test paper_import_grobid_http -- --test-threads=1
