@@ -277,8 +277,17 @@ async fn build_request_parts(
                 "content": content
             }
         ],
-        "temperature": 0,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.0,
+        "repeat_penalty": 1.0,
+        "max_tokens": 8192,
         "stream": false,
+        "chat_template_kwargs": {
+            "enable_thinking": false
+        },
         "response_format": occurrence_response_format(),
     }))
 }
@@ -510,8 +519,18 @@ mod tests {
             .expect("mock llama request lock should not be poisoned");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["model"], "test-model");
-        assert_eq!(requests[0]["temperature"], 0);
+        assert_eq!(requests[0]["temperature"], 0.7);
+        assert_eq!(requests[0]["top_p"], 0.8);
+        assert_eq!(requests[0]["top_k"], 20);
+        assert_eq!(requests[0]["min_p"], 0.0);
+        assert_eq!(requests[0]["presence_penalty"], 1.0);
+        assert_eq!(requests[0]["repeat_penalty"], 1.0);
+        assert_eq!(requests[0]["max_tokens"], 8192);
         assert_eq!(requests[0]["stream"], false);
+        assert_eq!(
+            requests[0]["chat_template_kwargs"]["enable_thinking"],
+            false
+        );
         let content = requests[0]["messages"][0]["content"]
             .as_array()
             .expect("multimodal content should be an array");
