@@ -108,8 +108,25 @@ jobs:
 
   real-grobid-smoke:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: occurrence_password
+          POSTGRES_DB: occurrence_web_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d occurrence_web_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       GROBID_BASE_URL: http://127.0.0.1:8070
+      DATABASE_URL: postgres://admin:occurrence_password@127.0.0.1:5432/occurrence_web_test
 
     steps:
       - name: Checkout
@@ -122,6 +139,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+
+      - name: Set up Go for goose
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
+
+      - name: Apply PostgreSQL migrations
+        run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
 
       - name: Start real GROBID 0.9.1 CRF server
         run: >-
