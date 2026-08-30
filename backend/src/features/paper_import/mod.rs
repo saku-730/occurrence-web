@@ -16,20 +16,30 @@ pub mod llama;
 pub mod preprocess;
 pub mod repository;
 pub mod service;
+pub mod source_handler;
 pub mod staging;
 pub mod staging_dto;
 pub mod staging_handler;
 
-// PDF受信からユーザー確認まではpaper_imports + Garage上の仮PDFとして保持する。
-// papersへの正式登録はOccurrenceの確定処理と同じタイミングで行う。
-// 旧handler/serviceは既存テストと既に正式登録済みpaperの補完互換のため一旦残す。
+// 新しいpaper importフローではpaper_importsを処理状態のstate machineとして扱わない。
+// PDFが初回ならGarage + paper_importsへ1度だけ保存し、同一PDFが既に存在する場合は
+// SHA-256で既存sourceを返して再利用する。Occurrence抽出可否はstatus列で判定しない。
+// 旧paper-imports endpointは既存互換のため一旦残す。
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
             "/paper-import",
-            post(staging_handler::receive_pdf).layer(DefaultBodyLimit::max(
-                staging_handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES,
+            post(source_handler::receive_pdf).layer(DefaultBodyLimit::max(
+                source_handler::PAPER_SOURCE_PDF_REQUEST_BODY_LIMIT_BYTES,
             )),
+        )
+        .route(
+            "/paper-sources/{source_kind}/{source_id}/bibliographic-metadata",
+            patch(source_handler::update_bibliographic_metadata),
+        )
+        .route(
+            "/paper-sources/{source_kind}/{source_id}/extract-occurrences",
+            post(source_handler::extract_occurrences),
         )
         .route(
             "/paper-imports/{import_id}/bibliographic-metadata",
