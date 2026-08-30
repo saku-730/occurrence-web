@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -281,9 +282,6 @@ function getUploadErrorMessage(error: unknown): string {
     return "PDFの送信に失敗しました。通信状態を確認してもう一度お試しください。";
   }
 
-  const backendMessage = getBackendMessage(error.body);
-  if (backendMessage) return backendMessage;
-
   switch (error.status) {
     case 400:
       return "PDFのアップロード内容が不正です。";
@@ -296,7 +294,7 @@ function getUploadErrorMessage(error: unknown): string {
     case 502:
       return "PDFの保存または書誌情報抽出に失敗しました。";
     default:
-      return `PDFの送信に失敗しました（HTTP ${error.status}）。`;
+      return getBackendMessage(error.body) ?? `PDFの送信に失敗しました（HTTP ${error.status}）。`;
   }
 }
 
