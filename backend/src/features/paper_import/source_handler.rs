@@ -1,9 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::{
     Json,
     extract::{Multipart, Path as AxumPath, State, multipart::Field},
-    http::{HeaderMap, StatusCode, header::{CONTENT_LENGTH, COOKIE}},
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_LENGTH, COOKIE},
+    },
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
@@ -18,7 +21,7 @@ use crate::{
     features::{
         auth::{
             dto::ErrorResponse,
-            service::{AuthService, AuthServiceError},
+            service::{AuthService, AuthServiceError, CurrentUserOutput},
         },
         media::service::{
             DeleteMediaObjectInput, GetMediaObjectInput, MediaObjectStore, PutMediaObjectInput,
@@ -29,7 +32,7 @@ use crate::{
 
 use super::{
     extraction::{LlamaPaperOccurrenceExtractor, PaperOccurrenceExtractor},
-    grobid::{GrobidClient, GrobidError, normalize_doi},
+    grobid::{GrobidClient, normalize_doi},
     llama::PaperLlmExtractionError,
     repository::{PaperMetadata, PaperRepository},
     service::PAPER_PDF_FILE_SIZE_LIMIT_BYTES,
@@ -64,18 +67,60 @@ impl From<AuthServiceError> for PaperSourceHandlerError {
     }
 }
 
+impl From<sqlx::Error> for PaperSourceHandlerError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
 impl IntoResponse for PaperSourceHandlerError {
     fn into_response(self) -> Response {
         let (status, error, message) = match self {
-            Self::InvalidSession => (StatusCode::UNAUTHORIZED, "invalid_session", "Invalid session"),
-            Self::InvalidInput => (StatusCode::BAD_REQUEST, "invalid_paper_source", "Invalid paper source request"),
-            Self::NotFound => (StatusCode::NOT_FOUND, "paper_source_not_found", "Paper source not found"),
-            Self::UnsupportedMediaType => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type", "Only PDF files are accepted"),
-            Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", "PDF file exceeds the 100MB limit"),
-            Self::ObjectStoreFailed => (StatusCode::BAD_GATEWAY, "object_store_error", "Failed to read or store the paper PDF"),
-            Self::GrobidFailed => (StatusCode::BAD_GATEWAY, "grobid_error", "Failed to extract paper metadata with GROBID"),
-            Self::ExtractionFailed => (StatusCode::BAD_GATEWAY, "occurrence_extraction_error", "Failed to extract occurrences from the paper"),
-            Self::Database(_) | Self::FileSystem(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error", "Internal server error"),
+            Self::InvalidSession => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_session",
+                "Invalid session",
+            ),
+            Self::InvalidInput => (
+                StatusCode::BAD_REQUEST,
+                "invalid_paper_source",
+                "Invalid paper source request",
+            ),
+            Self::NotFound => (
+                StatusCode::NOT_FOUND,
+                "paper_source_not_found",
+                "Paper source not found",
+            ),
+            Self::UnsupportedMediaType => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                "Only PDF files are accepted",
+            ),
+            Self::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "PDF file exceeds the 100MB limit",
+            ),
+            Self::ObjectStoreFailed => (
+                StatusCode::BAD_GATEWAY,
+                "object_store_error",
+                "Failed to read or store the paper PDF",
+            ),
+            Self::GrobidFailed => (
+                StatusCode::BAD_GATEWAY,
+                "grobid_error",
+                "Failed to extract paper metadata with GROBID",
+            ),
+            Self::ExtractionFailed => (
+                StatusCode::BAD_GATEWAY,
+                "occurrence_extraction_error",
+                "Failed to extract occurrences from the paper",
+            ),
+            Self::Database(_) | Self::FileSystem(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_server_error",
+                "Internal server error",
+            ),
         };
 
         (
@@ -150,8 +195,6 @@ struct ReceivedPdf {
 #[derive(Debug, sqlx::FromRow)]
 struct ExistingImportRow {
     id: Uuid,
-    bucket: String,
-    object_key: String,
     original_filename: Option<String>,
     content_type: String,
     size_bytes: i64,
@@ -211,7 +254,10 @@ pub async fn receive_pdf(
             .content_type()
             .map(ToString::to_string)
             .ok_or(PaperSourceHandlerError::UnsupportedMediaType)?;
-        if !field_content_type.trim().eq_ignore_ascii_case("application/pdf") {
+        if !field_content_type
+            .trim()
+            .eq_ignore_ascii_case("application/pdf")
+        {
             return Err(PaperSourceHandlerError::UnsupportedMediaType);
         }
 
@@ -254,48 +300,56 @@ async fn receive_pdf_inner(
 ) -> Result<(StatusCode, Json<ReceivePaperSourceResponse>), PaperSourceHandlerError> {
     // A formally registered paper is reusable by SHA-256. Do not create another
     // Garage object or PostgreSQL row; the browser decides whether to continue.
-    if let Some(existing) = PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await? {
-        return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
+    if let Some(existing) =
+        PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_paper(existing, true)),
+        ));
     }
 
     // Before formal registration, only reuse the current user's own source row.
     // This avoids exposing another user's uncommitted import by UUID.
-    if let Some(existing) = find_existing_import(
-        &state.posgre,
-        uploaded_by,
-        &received.sha256,
-    )
-    .await?
+    if let Some(existing) =
+        find_existing_import(&state.posgre, uploaded_by, &received.sha256).await?
     {
-        return Ok((StatusCode::OK, Json(response_from_import(existing, true))));
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_import(existing, true)),
+        ));
     }
 
     let grobid = GrobidClient::from_env().map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
     let metadata = grobid
-        .extract_header(&received.temp_path, received.size_bytes)
+        .extract_header(received.temp_path.as_ref(), received.size_bytes)
         .await
         .map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
 
     // Recheck after GROBID because a concurrent request may have completed while
     // metadata extraction was running.
-    if let Some(existing) = PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await? {
-        return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
-    }
-    if let Some(existing) = find_existing_import(
-        &state.posgre,
-        uploaded_by,
-        &received.sha256,
-    )
-    .await?
+    if let Some(existing) =
+        PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
     {
-        return Ok((StatusCode::OK, Json(response_from_import(existing, true))));
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_paper(existing, true)),
+        ));
+    }
+    if let Some(existing) =
+        find_existing_import(&state.posgre, uploaded_by, &received.sha256).await?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_import(existing, true)),
+        ));
     }
 
     let import_id = Uuid::new_v4();
     let reserved_paper_id = Uuid::new_v4();
     let object_key = format!("papers/{reserved_paper_id}/original.pdf");
-    let size_bytes = i64::try_from(received.size_bytes)
-        .map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let size_bytes =
+        i64::try_from(received.size_bytes).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
 
     state
         .media_object_store
@@ -310,8 +364,8 @@ async fn receive_pdf_inner(
         .await
         .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)?;
 
-    // status remains only as a legacy schema value. New source/extraction flows do
-    // not read it and do not use it as a state machine.
+    // `status` is retained only because the existing schema still requires it.
+    // New upload/extraction code does not read it and does not use it as a state machine.
     let insert = sqlx::query(
         r#"
         INSERT INTO paper_imports (
@@ -365,6 +419,11 @@ async fn receive_pdf_inner(
         return Err(PaperSourceHandlerError::Database(error));
     }
 
+    let requires_bibliographic_input = requires_bibliographic_input(
+        metadata.doi.as_deref(),
+        metadata.title.as_deref(),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(ReceivePaperSourceResponse {
@@ -377,10 +436,7 @@ async fn receive_pdf_inner(
             sha256: received.sha256.clone(),
             doi: metadata.doi,
             title: metadata.title,
-            requires_bibliographic_input: requires_bibliographic_input(
-                metadata.doi.as_deref(),
-                metadata.title.as_deref(),
-            ),
+            requires_bibliographic_input,
             authors: metadata.authors,
             publication_year: metadata.publication_year,
             journal: metadata.journal,
@@ -400,7 +456,8 @@ pub async fn update_bibliographic_metadata(
     Json(request): Json<UpdatePaperSourceMetadataRequest>,
 ) -> Result<Json<UpdatePaperSourceMetadataResponse>, PaperSourceHandlerError> {
     let user = authenticated_user(&state, &headers).await?;
-    let source_id = Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let source_id =
+        Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
     let doi = request
         .doi
         .map(normalize_doi)
@@ -414,25 +471,23 @@ pub async fn update_bibliographic_metadata(
     }
 
     let row = match source_kind.as_str() {
-        "import" => {
-            sqlx::query_as::<_, MetadataRow>(
-                r#"
-                UPDATE paper_imports
-                SET doi = CASE WHEN doi IS NULL OR BTRIM(doi) = '' THEN $3 ELSE doi END,
-                    title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $4 ELSE title END,
-                    updated_at = now()
-                WHERE id = $1 AND uploaded_by = $2
-                RETURNING doi, title
-                "#,
-            )
-            .bind(source_id)
-            .bind(user.user_id)
-            .bind(doi.as_deref())
-            .bind(title.as_deref())
-            .fetch_optional(&state.posgre)
-            .await?
-            .ok_or(PaperSourceHandlerError::NotFound)?
-        }
+        "import" => sqlx::query_as::<_, MetadataRow>(
+            r#"
+            UPDATE paper_imports
+            SET doi = CASE WHEN doi IS NULL OR BTRIM(doi) = '' THEN $3 ELSE doi END,
+                title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $4 ELSE title END,
+                updated_at = now()
+            WHERE id = $1 AND uploaded_by = $2
+            RETURNING doi, title
+            "#,
+        )
+        .bind(source_id)
+        .bind(user.user_id)
+        .bind(doi.as_deref())
+        .bind(title.as_deref())
+        .fetch_optional(&state.posgre)
+        .await?
+        .ok_or(PaperSourceHandlerError::NotFound)?,
         "paper" => {
             let paper = PaperRepository::complete_missing_bibliographic_metadata(
                 &state.posgre,
@@ -442,7 +497,10 @@ pub async fn update_bibliographic_metadata(
             )
             .await?
             .ok_or(PaperSourceHandlerError::NotFound)?;
-            MetadataRow { doi: paper.doi, title: paper.title }
+            MetadataRow {
+                doi: paper.doi,
+                title: paper.title,
+            }
         }
         _ => return Err(PaperSourceHandlerError::InvalidInput),
     };
@@ -465,8 +523,11 @@ pub async fn extract_occurrences(
     headers: HeaderMap,
 ) -> Result<Json<ExtractPaperSourceOccurrencesResponse>, PaperSourceHandlerError> {
     let user = authenticated_user(&state, &headers).await?;
-    let source_id = Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let source_id =
+        Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
 
+    // No workflow status is checked or changed here. The existence of a reusable
+    // PDF source is the only precondition for running extraction.
     let source = match source_kind.as_str() {
         "import" => sqlx::query_as::<_, SourceObjectRow>(
             r#"
@@ -494,11 +555,8 @@ pub async fn extract_occurrences(
         _ => return Err(PaperSourceHandlerError::InvalidInput),
     };
 
-    let temporary_path = download_verified_pdf(
-        &source,
-        state.media_object_store.as_ref(),
-    )
-    .await?;
+    let temporary_path =
+        download_verified_pdf(&source, state.media_object_store.as_ref()).await?;
 
     let extractor = LlamaPaperOccurrenceExtractor;
     let result = extractor
@@ -538,7 +596,7 @@ async fn find_existing_import(
 ) -> Result<Option<ExistingImportRow>, sqlx::Error> {
     sqlx::query_as::<_, ExistingImportRow>(
         r#"
-        SELECT id, bucket, object_key, original_filename, content_type,
+        SELECT id, original_filename, content_type,
                size_bytes, sha256, doi, title, authors, publication_year,
                journal, volume, issue, pages, article_number
         FROM paper_imports
@@ -556,6 +614,9 @@ async fn find_existing_import(
 }
 
 fn response_from_import(row: ExistingImportRow, duplicate: bool) -> ReceivePaperSourceResponse {
+    let requires_bibliographic_input =
+        requires_bibliographic_input(row.doi.as_deref(), row.title.as_deref());
+
     ReceivePaperSourceResponse {
         duplicate,
         source_kind: "import".to_string(),
@@ -564,12 +625,9 @@ fn response_from_import(row: ExistingImportRow, duplicate: bool) -> ReceivePaper
         content_type: row.content_type,
         size_bytes: row.size_bytes,
         sha256: row.sha256,
-        requires_bibliographic_input: requires_bibliographic_input(
-            row.doi.as_deref(),
-            row.title.as_deref(),
-        ),
         doi: row.doi,
         title: row.title,
+        requires_bibliographic_input,
         authors: row.authors,
         publication_year: row.publication_year,
         journal: row.journal,
@@ -582,6 +640,9 @@ fn response_from_import(row: ExistingImportRow, duplicate: bool) -> ReceivePaper
 }
 
 fn response_from_paper(row: PaperMetadata, duplicate: bool) -> ReceivePaperSourceResponse {
+    let requires_bibliographic_input =
+        requires_bibliographic_input(row.doi.as_deref(), row.title.as_deref());
+
     ReceivePaperSourceResponse {
         duplicate,
         source_kind: "paper".to_string(),
@@ -590,12 +651,9 @@ fn response_from_paper(row: PaperMetadata, duplicate: bool) -> ReceivePaperSourc
         content_type: row.content_type,
         size_bytes: row.size_bytes,
         sha256: row.sha256,
-        requires_bibliographic_input: requires_bibliographic_input(
-            row.doi.as_deref(),
-            row.title.as_deref(),
-        ),
         doi: row.doi,
         title: row.title,
+        requires_bibliographic_input,
         authors: row.authors,
         publication_year: row.publication_year,
         journal: row.journal,
@@ -609,14 +667,18 @@ fn response_from_paper(row: PaperMetadata, duplicate: bool) -> ReceivePaperSourc
 
 async fn download_verified_pdf(
     source: &SourceObjectRow,
-    store: &(dyn MediaObjectStore),
-) -> Result<tempfile::TempPath, PaperSourceHandlerError> {
+    store: &dyn MediaObjectStore,
+) -> Result<TempPath, PaperSourceHandlerError> {
     let expected_size = u64::try_from(source.size_bytes)
         .ok()
         .filter(|size| *size > 0 && *size <= PAPER_PDF_FILE_SIZE_LIMIT_BYTES)
         .ok_or(PaperSourceHandlerError::InvalidInput)?;
     let expected_sha256 = source.sha256.trim().to_ascii_lowercase();
-    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err(PaperSourceHandlerError::InvalidInput);
     }
 
@@ -662,7 +724,10 @@ async fn download_verified_pdf(
             .await
             .map_err(PaperSourceHandlerError::FileSystem)?;
     }
-    output.flush().await.map_err(PaperSourceHandlerError::FileSystem)?;
+    output
+        .flush()
+        .await
+        .map_err(PaperSourceHandlerError::FileSystem)?;
     drop(output);
 
     if size_bytes != expected_size
@@ -675,7 +740,9 @@ async fn download_verified_pdf(
     Ok(temporary_path)
 }
 
-async fn receive_to_temporary_file(field: &mut Field<'_>) -> Result<ReceivedPdf, PaperSourceHandlerError> {
+async fn receive_to_temporary_file(
+    field: &mut Field<'_>,
+) -> Result<ReceivedPdf, PaperSourceHandlerError> {
     let temp_path = tempfile::Builder::new()
         .prefix("paper-source-upload-")
         .suffix(".pdf")
@@ -713,7 +780,10 @@ async fn receive_to_temporary_file(field: &mut Field<'_>) -> Result<ReceivedPdf,
             .await
             .map_err(PaperSourceHandlerError::FileSystem)?;
     }
-    output.flush().await.map_err(PaperSourceHandlerError::FileSystem)?;
+    output
+        .flush()
+        .await
+        .map_err(PaperSourceHandlerError::FileSystem)?;
     drop(output);
 
     if size_bytes == 0 {
@@ -730,12 +800,18 @@ async fn receive_to_temporary_file(field: &mut Field<'_>) -> Result<ReceivedPdf,
     })
 }
 
-fn reject_oversized_request_by_content_length(headers: &HeaderMap) -> Result<(), PaperSourceHandlerError> {
+fn reject_oversized_request_by_content_length(
+    headers: &HeaderMap,
+) -> Result<(), PaperSourceHandlerError> {
     let Some(value) = headers.get(CONTENT_LENGTH) else {
         return Ok(());
     };
-    let value = value.to_str().map_err(|_| PaperSourceHandlerError::InvalidInput)?;
-    let length = value.parse::<u64>().map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let value = value
+        .to_str()
+        .map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let length = value
+        .parse::<u64>()
+        .map_err(|_| PaperSourceHandlerError::InvalidInput)?;
     if length > PAPER_SOURCE_PDF_REQUEST_BODY_LIMIT_BYTES as u64 {
         return Err(PaperSourceHandlerError::PayloadTooLarge);
     }
@@ -757,9 +833,11 @@ fn validate_filename(filename: Option<&str>) -> Result<(), PaperSourceHandlerErr
 async fn authenticated_user(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<crate::features::auth::dto::UserResponse, PaperSourceHandlerError> {
+) -> Result<CurrentUserOutput, PaperSourceHandlerError> {
     let token = extract_session_token(headers)?;
-    AuthService::current_user(&state.posgre, token).await.map_err(Into::into)
+    AuthService::current_user(&state.posgre, token)
+        .await
+        .map_err(Into::into)
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Result<String, PaperSourceHandlerError> {
