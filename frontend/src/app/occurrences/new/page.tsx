@@ -69,16 +69,13 @@ type AuthStatus =
   | "error";
 
 const initialRows: StatementRow[] = [
-  // 最初に分類と位置情報を提示し、よく使うオカレンス項目の入力を始めやすくする。
   { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" },
-  { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
-  { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
 ];
 
 export default function NewOccurrencePage() {
   const [rows, setRows] = useState(initialRows);
   const [sourcePaperId, setSourcePaperId] = useState<string | null>(null);
-  const nextId = useRef(4);
+  const nextId = useRef(2);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -168,14 +165,12 @@ export default function NewOccurrencePage() {
     setTermsStatus("loading");
     try {
       const terms = await apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core");
-      // 特別表示する語彙はバックエンド候補から除外し、候補の重複を防ぐ。
       const visibleTerms = terms.filter(
         (term) =>
           term.uri !== DWCIRI_TO_TAXON_URI &&
           term.uri !== DWC_DECIMAL_LONGITUDE_URI &&
           term.uri !== DWC_DECIMAL_LATITUDE_URI,
       );
-      // UI上の日本語候補と保存するDarwin Core URIをここで対応付ける。
       setDarwinCoreTerms([
         { uri: DWCIRI_TO_TAXON_URI, local_name: DWCIRI_TO_TAXON_LABEL },
         {
@@ -224,7 +219,6 @@ export default function NewOccurrencePage() {
       return [...currentFiles, ...addedFiles];
     });
 
-    // Clearing the native input allows a removed file to be selected again.
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -291,7 +285,7 @@ export default function NewOccurrencePage() {
       setSelectedFiles([]);
       setTaxonScientificNames({});
       setIsPublic(true);
-      nextId.current = 4;
+      nextId.current = 2;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         setAuthStatus("unauthenticated");
@@ -851,8 +845,6 @@ function validateStatementRows(rows: StatementRow[]): StatementRow[] {
   return statements;
 }
 
-// 分類の入力は、URIならtoTaxon、任意テキストならscientificNameとして保存する。
-// テキストをtoTaxonへ保存するとIRI専用語彙の意味を壊すため、送信直前に述語を正規化する。
 function normalizeTaxonStatements(
   statements: StatementRow[],
   scientificNamesByRowId: Record<number, string>,
@@ -867,7 +859,6 @@ function normalizeTaxonStatements(
     }
 
     if (!isAbsoluteHttpUri(row.object)) {
-      // 手入力の分類名はtoTaxonを作らず、学名リテラルとして保存する。
       normalizedStatements.push({
         ...row,
         predicate: DWC_SCIENTIFIC_NAME_URI,
@@ -877,7 +868,6 @@ function normalizeTaxonStatements(
 
     normalizedStatements.push(row);
 
-    // GBIF候補を選んだURIには、候補表示から得た学名を非表示で補完する。
     const scientificName = scientificNamesByRowId[row.id];
     if (scientificName?.trim()) {
       generatedScientificNames.push({
@@ -905,7 +895,7 @@ function buildOccurrenceNQuads(
   const lines = statements.map((statement) => {
     const object = isAbsoluteHttpUri(statement.object)
       ? `<${statement.object}>`
-      : `"${escapeRdfLiteral(statement.object)}"`;
+      : `\"${escapeRdfLiteral(statement.object)}\"`;
 
     return `_:occurrence <${statement.predicate}> ${object} <${OCCURRENCE_GRAPH_URI}> .`;
   });
@@ -933,13 +923,13 @@ function isAbsoluteHttpUri(value: string): boolean {
 }
 
 function hasUnsafeIriCharacter(value: string): boolean {
-  return /[<>"{}|^`\\\s]/u.test(value);
+  return /[<>\"{}|^`\\\s]/u.test(value);
 }
 
 function escapeRdfLiteral(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
+    .replaceAll('\"', '\\\"')
     .replaceAll("\n", "\\n")
     .replaceAll("\r", "\\r")
     .replaceAll("\t", "\\t");
