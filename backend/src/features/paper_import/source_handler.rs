@@ -364,8 +364,6 @@ async fn receive_pdf_inner(
         .await
         .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)?;
 
-    // `status` is retained only because the existing schema still requires it.
-    // New upload/extraction code does not read it and does not use it as a state machine.
     let insert = sqlx::query(
         r#"
         INSERT INTO paper_imports (
@@ -373,14 +371,14 @@ async fn receive_pdf_inner(
             size_bytes, original_filename, sha256,
             doi, title, authors, publication_year, journal,
             volume, issue, pages, article_number,
-            uploaded_by, status
+            uploaded_by
         )
         VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8,
             $9, $10, $11, $12, $13,
             $14, $15, $16, $17,
-            $18, 'staged'
+            $18
         )
         "#,
     )
@@ -602,7 +600,6 @@ async fn find_existing_import(
         FROM paper_imports
         WHERE uploaded_by = $1
           AND sha256 = $2
-          AND status <> 'cancelling'
         ORDER BY created_at DESC
         LIMIT 1
         "#,
