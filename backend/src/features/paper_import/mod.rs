@@ -39,5 +39,9 @@ pub fn router(state: AppState) -> Router {
             "/papers/{paper_id}/occurrences",
             post(registration_handler::register_occurrence),
         )
+        .route(
+            "/papers/{paper_id}/occurrences/batch",
+            post(registration_handler::register_occurrences_batch),
+        )
         .with_state(state)
 }
