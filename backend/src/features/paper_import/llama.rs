@@ -32,16 +32,18 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
 - 論文から明示的に読み取れる範囲で、最も下位の特定可能な分類群を使用してください。
 - 種まで分かる場合は種を使用してください。
 - 種まで分からない場合は、属・科など読み取れる最も具体的な分類群を使用してください。
-- 情報を推測して、論文に書かれているより細かい分類群へ補完しないでください。
-- scientificName には、論文中で使われている分類群名を保持してください。外部知識を使って現在のaccepted nameや別のsynonymへ置き換えないでください。
+- Occurrenceそのものの存在や、論文に書かれていない種を創作してはいけません。ただし、論文中の省略学名を完全形へ戻すための合理的な推定は積極的に行ってください。
+- scientificName には、論文中で意図されている分類群名を保持してください。accepted nameや別のsynonymへの置換が目的ではありません。
 
 ### 学名の省略を必ず展開する
 - `P. agrestis`、`M. hilgendorfi` のような属名を頭文字だけにした省略形を scientificName に出力してはいけません。
-- 略記を見つけたら、同じ論文内の文脈から属名の完全形を確認してください。
-- 属名の復元には、直前・周辺の完全学名、同じ節や分類群見出し、表の見出し・行、図表キャプション、種リスト、論文内の別ページを参照してください。
-- 例えば同じ文脈で属が `Pheretima` だと一意に確認でき、本文に `P. agrestis` とある場合、scientificName は必ず `Pheretima agrestis` としてください。
-- `P.` がどの属を指すか論文内の情報だけでは一意に確定できない場合、推測して展開してはいけません。その略記を scientificName として出力することも禁止します。そのOccurrenceは出力対象から除外してください。
-- 属名だけの分類群が `P.` のように省略されている場合も同様に、完全形を一意に復元できる場合だけ出力してください。
+- 略記を見つけたら、同じ論文内の文脈を使って属名の完全形を推定してください。学名展開では「完全な確証がないから略記を残す」より「文脈から最も妥当な完全形へ展開する」ことを優先してください。
+- 属名の復元には、直前・周辺の完全学名、同じ節や分類群見出し、表の見出し・行、図表キャプション、種リスト、論文タイトル、論文内の別ページ、その論文で繰り返し扱われている属を参照してください。
+- 例えば周辺文脈や論文全体から属が `Pheretima` と判断でき、本文に `P. agrestis` とある場合、scientificName は必ず `Pheretima agrestis` としてください。
+- `P.` に複数の候補が考えられる場合でも、論文内の文脈から最も可能性が高い属を選んで展開してください。候補が完全に一意である必要はありません。
+- 論文内の情報だけで判断が難しい場合は、一般的な分類学的知識を補助的に使って最も妥当な完全学名を選んでも構いません。ただし、種小名や分類群そのものを新しく創作してはいけません。
+- 属名だけの分類群が `P.` のように省略されている場合も、同様に最も妥当な完全形へ展開してください。
+- scientificName に `A.`、`P.`、`M.` のような属名頭文字＋ピリオドを残すことは最終出力では禁止です。
 
 2. locality / 位置情報
 - その分類群が実際に記録、採集、観察された個々の地点を locality に記録してください。
@@ -85,7 +87,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
 - 本文に分類群があり、対応する地点が表や図にある場合など、テキストと画像を組み合わせて対応関係を判断してください。
 - 同じ分類群が複数地点に存在する場合は、必ず地点数と同じだけ別レコードにしてください。
 - 同じ地点に複数分類群が存在する場合は分類群ごとに別レコードにしてください。
-- 対応関係が確認できない場合は推測して組み合わせないでください。
+- 分類群と地点の対応関係そのものは、論文内の根拠を優先し、根拠なく別地点へ割り当てないでください。
 - 1つのレコードの locality に2地点以上が含まれていないか、出力直前に必ず再確認してください。
 
 4. 情報源の統合
@@ -93,18 +95,18 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = r#"入力として、論文PDFか
 - テキストでは不足している情報を表や図から補える場合は、それらを統合してください。
 - 画像では不足している情報を本文やキャプションから補える場合も統合してください。
 - 表の行・列、図中のラベル、キャプションの対応関係を崩さないでください。
-- 略記学名の属名を復元するときも、論文全体のテキストと画像を相互参照してください。
+- 略記学名の属名を復元するときは、論文全体のテキストと画像を相互参照し、必要なら文脈上の推定を行ってください。
 
 5. 正確性
-- 論文に明示された情報のみを使用してください。
-- 推測や創作をしないでください。
-- 外部の分類学知識だけを根拠に略記学名を展開しないでください。
+- Occurrenceの存在、種小名、地点は論文にある情報を根拠にしてください。
+- 存在しないOccurrenceや地点を創作しないでください。
+- ただし学名の省略展開は例外であり、文脈からの推定を許可します。多少の不確実性があっても、略記を残さず最も妥当な完全形を出してください。
 - 情報が存在しない locality には null を使用してください。
 
 6. 出力前の必須チェック
 JSONを出力する直前に、各Occurrenceについて次を確認してください。
 - scientificName が `P. agrestis` のような属名頭文字の省略形になっていないこと。
-- scientificName の属名を展開した場合、その完全形が論文内の情報から一意に確認できること。
+- scientificName の属名を展開した場合、論文全体の文脈から最も妥当な属名を選んでいること。
 - locality がちょうど1地点だけであること。
 - locality に `4か所(...)` のような複数地点の集約文字列が残っていないこと。
 - 同じ分類群に複数地点がある場合、それぞれ独立したOccurrenceになっていること。
@@ -505,7 +507,7 @@ mod tests {
         json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo"}]}"#
+                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\"}]}"#
                 }
             }]
         })
@@ -633,7 +635,7 @@ mod tests {
         assert!(content[1]["text"]
             .as_str()
             .is_some_and(|text| text.contains("テキストは抽出できませんでした")));
-        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
+        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZQ==");
         assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
     }
 
@@ -655,12 +657,12 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\" \",\"locality\":null,\"decimalLatitude\":null,\"decimalLongitude\":null}]}"#}}]}),
                 "invalid_occurrence",
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\"A species\",\"locality\":null,\"decimalLatitude\":91.0,\"decimalLongitude\":0.0}]}"#}}]}),
                 "invalid_occurrence",
             ),
         ];
@@ -689,7 +691,7 @@ mod tests {
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"decimalLatitude":null,"decimalLongitude":null,"inventedField":"must not be accepted"}]}"#
+                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":null,\"decimalLatitude\":null,\"decimalLongitude\":null,\"inventedField\":\"must not be accepted\"}]}"#
                 }
             }]
         });
