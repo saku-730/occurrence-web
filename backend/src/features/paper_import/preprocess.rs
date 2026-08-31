@@ -43,12 +43,13 @@ pub struct PreprocessedPageImage {
 
 #[derive(Debug)]
 pub struct PreprocessedPaper {
-    /// Text extracted from the GROBID TEI front/body. References are excluded
-    /// when GROBID returned the usual TEI structure.
+    /// Text extracted from the GROBID TEI front/body when available.
+    /// GROBID failures are non-fatal; in that case this is empty and the LLM
+    /// receives rendered page images only.
     pub text: String,
     pub text_non_whitespace_chars: usize,
     /// Every PDF page is rendered so a vision model can recover information
-    /// that is absent or structurally damaged in the extracted text.
+    /// when text extraction is unavailable or incomplete.
     pub page_images: Vec<PreprocessedPageImage>,
     workspace: TempDir,
 }
@@ -67,21 +68,21 @@ impl PreprocessedPaper {
 pub struct PaperPdfPreprocessor;
 
 impl PaperPdfPreprocessor {
-    /// Convert one local PDF into the two inputs used by the multimodal LLM:
-    /// GROBID-derived text and a JPEG image for every original page.
+    /// Convert one local PDF into the multimodal inputs used by the LLM.
+    /// GROBID fulltext extraction is best effort. Any GROBID failure falls back
+    /// to image-only extraction as long as every PDF page can still be rendered.
     pub async fn preprocess(pdf_path: &Path) -> Result<PreprocessedPaper, PaperPreprocessError> {
         let metadata = tokio::fs::metadata(pdf_path).await?;
         if !metadata.is_file() || metadata.len() == 0 {
             return Err(PaperPreprocessError::InvalidInput);
         }
 
-        let grobid = GrobidFulltextClient::from_env()?;
-        let text = match grobid.extract_tei(pdf_path, metadata.len()).await {
-            Ok(tei) => tei_to_llm_text(&tei),
-            // A text layer is not guaranteed. In this case preprocessing still
-            // succeeds because all pages are also supplied as images.
-            Err(GrobidError::NoContent) => String::new(),
-            Err(error) => return Err(PaperPreprocessError::Grobid(error)),
+        let text = match GrobidFulltextClient::from_env() {
+            Ok(grobid) => match grobid.extract_tei(pdf_path, metadata.len()).await {
+                Ok(tei) => tei_to_llm_text(&tei),
+                Err(_) => String::new(),
+            },
+            Err(_) => String::new(),
         };
         let text_non_whitespace_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
 
@@ -346,8 +347,6 @@ mod tests {
         ENVIRONMENT_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            // A failed assertion must not prevent later tests from restoring
-            // the process environment and exercising their own case.
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
@@ -478,8 +477,6 @@ mod tests {
 
         let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
         let old_renderer = env::var_os("PDFTOPPM_BIN");
-        // The environment-driven dependencies are restored before the lock is
-        // released so other unit tests cannot inherit this mock configuration.
         unsafe {
             env::set_var("GROBID_BASE_URL", grobid_base_url);
             env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
@@ -518,10 +515,7 @@ mod tests {
         let workspace_path = output.workspace_path().to_path_buf();
         assert!(workspace_path.is_dir());
         drop(output);
-        assert!(
-            !workspace_path.exists(),
-            "the temporary renderer workspace must be removed when preprocessing output is dropped"
-        );
+        assert!(!workspace_path.exists());
     }
 
     #[tokio::test]
@@ -605,5 +599,41 @@ mod tests {
             vec![1, 2]
         );
         assert!(output.page_images.iter().all(|page| page.path.is_file()));
+    }
+
+    #[tokio::test]
+    async fn preprocess_continues_with_page_images_when_grobid_returns_error() {
+        let _guard = environment_lock();
+        let (grobid_base_url, server) =
+            start_grobid(StatusCode::SERVICE_UNAVAILABLE, "GROBID unavailable").await;
+        let renderer = write_fake_renderer(
+            "#!/bin/sh\n\
+             prefix=\"$5\"\n\
+             : > \"$prefix-1.jpg\"\n",
+        );
+        let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
+        std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
+
+        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
+        let old_renderer = env::var_os("PDFTOPPM_BIN");
+        unsafe {
+            env::set_var("GROBID_BASE_URL", grobid_base_url);
+            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
+        }
+        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
+        match old_grobid_base_url {
+            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
+            None => unsafe { env::remove_var("GROBID_BASE_URL") },
+        }
+        match old_renderer {
+            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
+            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
+        }
+        server.abort();
+
+        let output = output.expect("GROBID failure must fall back to image-only preprocessing");
+        assert!(output.text.is_empty());
+        assert_eq!(output.text_non_whitespace_chars, 0);
+        assert_eq!(output.page_count(), 1);
     }
 }
