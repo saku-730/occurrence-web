@@ -930,13 +930,13 @@ function isAbsoluteHttpUri(value: string): boolean {
 }
 
 function hasUnsafeIriCharacter(value: string): boolean {
-  return /[<>\"{}|^`\\\s]/u.test(value);
+  return /[<>"{}|^\x60\\\s]/u.test(value);
 }
 
 function escapeRdfLiteral(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
-    .replaceAll('\"', '\\\"')
+    .replaceAll('"', '\\"')
     .replaceAll("\n", "\\n")
     .replaceAll("\r", "\\r")
     .replaceAll("\t", "\\t");
