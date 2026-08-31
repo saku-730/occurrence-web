@@ -8,13 +8,6 @@ use crate::features::auth::dto::{
 };
 
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
-use crate::features::paper_import::dto::{
-    CompleteBibliographicMetadataRequest, CompleteBibliographicMetadataResponse,
-    ReceivePaperPdfRequest, ReceivePaperPdfResponse,
-};
-use crate::features::paper_import::extraction_handler::{
-    ExtractOccurrencesResponse, ExtractedOccurrenceCandidate,
-};
 
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -23,6 +16,8 @@ use crate::features::occurrences::dto::{
 };
 
 // API追加時はhandlerだけでなくこのOpenAPI定義にも登録する。フロントとの契約をここで固定する。
+// paper import APIは現在source_handlerへ簡略化中のため、旧dto/handlerのOpenAPI定義は削除している。
+// source_handlerへutoipa定義を追加する段階で、新しいpaper APIだけをここへ登録する。
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -42,9 +37,6 @@ use crate::features::occurrences::dto::{
         crate::features::media::handler::upload_media,
         crate::features::media::handler::get_media,
         crate::features::media::handler::delete_media,
-        crate::features::paper_import::handler::receive_pdf,
-        crate::features::paper_import::handler::complete_bibliographic_metadata,
-        crate::features::paper_import::extraction_handler::extract_occurrences,
     ),
     components(
         schemas(
@@ -73,12 +65,6 @@ use crate::features::occurrences::dto::{
             UploadMediaRequest,
             UploadMediaResponse,
             DeleteMediaResponse,
-            ReceivePaperPdfRequest,
-            ReceivePaperPdfResponse,
-            CompleteBibliographicMetadataRequest,
-            CompleteBibliographicMetadataResponse,
-            ExtractedOccurrenceCandidate,
-            ExtractOccurrencesResponse,
         )
     ),
     tags(
