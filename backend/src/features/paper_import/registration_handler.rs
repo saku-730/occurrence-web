@@ -2,7 +2,10 @@ use axum::{
     Json,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header::{CONTENT_TYPE, COOKIE}},
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_TYPE, COOKIE},
+    },
     response::{IntoResponse, Response},
 };
 use oxrdf::{GraphName, Literal, NamedNode, Quad, Term};
@@ -134,11 +137,9 @@ pub async fn register_occurrence(
         .await?
         .ok_or(PaperRegistrationError::NotFound)?;
 
-    let associated_reference = paper_associated_reference(
-        paper.doi.as_deref(),
-        paper.title.as_deref(),
-    )
-    .ok_or(PaperRegistrationError::InvalidInput)?;
+    let associated_reference =
+        paper_associated_reference(paper.doi.as_deref(), paper.title.as_deref())
+            .ok_or(PaperRegistrationError::InvalidInput)?;
 
     ensure_referenced_media_owned_by_user(
         &body,
@@ -250,7 +251,8 @@ async fn ensure_referenced_media_owned_by_user(
         let Some(media_id) = object.as_str().strip_prefix(&media_uri_base) else {
             continue;
         };
-        let media_id = Uuid::parse_str(media_id).map_err(|_| PaperRegistrationError::ForbiddenMedia)?;
+        let media_id =
+            Uuid::parse_str(media_id).map_err(|_| PaperRegistrationError::ForbiddenMedia)?;
         media_ids.insert(media_id);
     }
 
@@ -279,20 +281,19 @@ fn add_paper_provenance(
 
     // The normal registration UI uses one temporary blank-node subject. Keep
     // provenance server-managed and reject attempts to submit those predicates.
-    if !matches!(&subject, oxrdf::NamedOrBlankNode::BlankNode(_))
+    if !subject.is_blank_node()
         || quads.iter().any(|quad| quad.subject != subject)
         || quads.iter().any(|quad| {
-            matches!(
-                quad.predicate.as_str(),
-                ASSOCIATED_REFERENCES_PREDICATE_URI | SOURCE_PAPER_PREDICATE_URI
-            )
+            let predicate = quad.predicate.as_str();
+            predicate == ASSOCIATED_REFERENCES_PREDICATE_URI
+                || predicate == SOURCE_PAPER_PREDICATE_URI
         })
     {
         return Err(PaperRegistrationError::InvalidRdf);
     }
 
-    let graph = NamedNode::new(OCCURRENCE_GRAPH_URI)
-        .map_err(|_| PaperRegistrationError::Internal)?;
+    let graph =
+        NamedNode::new(OCCURRENCE_GRAPH_URI).map_err(|_| PaperRegistrationError::Internal)?;
     let associated_references = NamedNode::new(ASSOCIATED_REFERENCES_PREDICATE_URI)
         .map_err(|_| PaperRegistrationError::Internal)?;
     let source_paper = NamedNode::new(SOURCE_PAPER_PREDICATE_URI)
@@ -319,7 +320,9 @@ fn add_paper_provenance(
             .serialize_quad(quad)
             .map_err(|_| PaperRegistrationError::Internal)?;
     }
-    serializer.finish().map_err(|_| PaperRegistrationError::Internal)
+    serializer
+        .finish()
+        .map_err(|_| PaperRegistrationError::Internal)
 }
 
 fn map_occurrence_error(error: OccurrenceServiceError) -> PaperRegistrationError {
