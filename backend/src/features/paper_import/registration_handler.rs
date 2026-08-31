@@ -10,6 +10,7 @@ use axum::{
 };
 use oxrdf::{GraphName, Literal, NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -37,6 +38,17 @@ const SCIENTIFIC_NAME_PREDICATE_URI: &str =
 const TO_TAXON_PREDICATE_URI: &str = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const SOURCE_PAPER_PREDICATE_URI: &str = "https://bio-database.net/terms/sourcePaper";
 const PAPER_URI_BASE: &str = "https://bio-database.net/papers/";
+const MAX_BATCH_OCCURRENCES: usize = 1000;
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterPaperOccurrencesBatchRequest {
+    pub occurrences: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterPaperOccurrencesBatchResponse {
+    pub occurrences: Vec<CreateOccurrenceResponse>,
+}
 
 #[derive(Debug)]
 pub enum PaperRegistrationError {
@@ -118,11 +130,6 @@ impl IntoResponse for PaperRegistrationError {
 }
 
 /// Register one user-confirmed occurrence extracted from a paper.
-///
-/// The frontend sends exactly the same N-Quads body as the normal occurrence
-/// registration screen. This endpoint enriches a final scientificName with a
-/// GBIF dwciri:toTaxon when possible, adds paper provenance, and then delegates
-/// persistence to the ordinary OccurrenceService.
 pub async fn register_occurrence(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
@@ -136,19 +143,91 @@ pub async fn register_occurrence(
 
     let session_token = extract_session_token(&headers)?;
     let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    let associated_reference = load_associated_reference(&state, paper_id).await?;
 
+    let response = register_one_occurrence(
+        &state,
+        paper_id,
+        current_user.user_id,
+        &associated_reference,
+        &body,
+    )
+    .await?;
+
+    if !PaperRepository::mark_registered(&state.posgre, paper_id).await? {
+        return Err(PaperRegistrationError::NotFound);
+    }
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Register every edited LLM candidate in one request. The paper status is
+/// changed only after every requested occurrence has reached Fuseki.
+pub async fn register_occurrences_batch(
+    State(state): State<AppState>,
+    Path(paper_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterPaperOccurrencesBatchRequest>,
+) -> Result<(StatusCode, Json<RegisterPaperOccurrencesBatchResponse>), PaperRegistrationError> {
+    if request.occurrences.is_empty() || request.occurrences.len() > MAX_BATCH_OCCURRENCES {
+        return Err(PaperRegistrationError::InvalidInput);
+    }
+
+    let session_token = extract_session_token(&headers)?;
+    let current_user = AuthService::current_user(&state.posgre, session_token).await?;
+    let associated_reference = load_associated_reference(&state, paper_id).await?;
+    let mut registered = Vec::with_capacity(request.occurrences.len());
+
+    for nquads in request.occurrences {
+        if nquads.trim().is_empty() {
+            return Err(PaperRegistrationError::InvalidInput);
+        }
+        let response = register_one_occurrence(
+            &state,
+            paper_id,
+            current_user.user_id,
+            &associated_reference,
+            nquads.as_bytes(),
+        )
+        .await?;
+        registered.push(response);
+    }
+
+    if !PaperRepository::mark_registered(&state.posgre, paper_id).await? {
+        return Err(PaperRegistrationError::NotFound);
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterPaperOccurrencesBatchResponse {
+            occurrences: registered,
+        }),
+    ))
+}
+
+async fn load_associated_reference(
+    state: &AppState,
+    paper_id: Uuid,
+) -> Result<String, PaperRegistrationError> {
     let paper = PaperRepository::find_by_id(&state.posgre, paper_id)
         .await?
         .ok_or(PaperRegistrationError::NotFound)?;
 
-    let associated_reference =
-        paper_associated_reference(paper.doi.as_deref(), paper.title.as_deref())
-            .ok_or(PaperRegistrationError::InvalidInput)?;
+    paper_associated_reference(paper.doi.as_deref(), paper.title.as_deref())
+        .ok_or(PaperRegistrationError::InvalidInput)
+}
 
+async fn register_one_occurrence(
+    state: &AppState,
+    paper_id: Uuid,
+    user_id: Uuid,
+    associated_reference: &str,
+    body: &[u8],
+) -> Result<CreateOccurrenceResponse, PaperRegistrationError> {
     ensure_referenced_media_owned_by_user(
-        &body,
+        body,
         &state.config.app.app_base_url,
-        current_user.user_id,
+        user_id,
         &state.posgre,
     )
     .await?;
@@ -156,12 +235,12 @@ pub async fn register_occurrence(
     // Resolve the final user-confirmed scientificName in Rust. GBIF lookup is
     // best effort: network failure or an uncertain match leaves scientificName
     // intact and registration continues without an automatic toTaxon.
-    let rdf_body = add_gbif_to_taxon(&body).await?;
-    let rdf_body = add_paper_provenance(&rdf_body, paper_id, &associated_reference)?;
+    let rdf_body = add_gbif_to_taxon(body).await?;
+    let rdf_body = add_paper_provenance(&rdf_body, paper_id, associated_reference)?;
 
     let output = OccurrenceService::create_occurrence(
         CreateOccurrenceInput {
-            create_user_id: current_user.user_id,
+            create_user_id: user_id,
             content_type: "application/n-quads".to_string(),
             rdf_body,
         },
@@ -170,19 +249,10 @@ pub async fn register_occurrence(
     .await
     .map_err(map_occurrence_error)?;
 
-    // `registered` means at least one occurrence from this paper has actually
-    // reached Fuseki. Never set it before OccurrenceService returns success.
-    if !PaperRepository::mark_registered(&state.posgre, paper_id).await? {
-        return Err(PaperRegistrationError::NotFound);
-    }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(CreateOccurrenceResponse {
-            occurrence_id: output.occurrence_id.to_string(),
-            occurrence_uri: output.occurrence_uri,
-        }),
-    ))
+    Ok(CreateOccurrenceResponse {
+        occurrence_id: output.occurrence_id.to_string(),
+        occurrence_uri: output.occurrence_uri,
+    })
 }
 
 fn ensure_nquads_content_type(headers: &HeaderMap) -> Result<(), PaperRegistrationError> {
@@ -282,8 +352,6 @@ async fn add_gbif_to_taxon(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| PaperRegistrationError::InvalidRdf)?;
 
-    // A manually selected GBIF taxon from the ordinary registration UI is
-    // already authoritative for this request. Do not add or replace it.
     if quads
         .iter()
         .any(|quad| quad.predicate.as_str() == TO_TAXON_PREDICATE_URI)
@@ -297,7 +365,11 @@ async fn add_gbif_to_taxon(
         .filter_map(|quad| match &quad.object {
             Term::Literal(value) => {
                 let name = value.value().trim();
-                (!name.is_empty()).then_some((name.to_string(), quad.subject.clone(), quad.graph_name.clone()))
+                (!name.is_empty()).then_some((
+                    name.to_string(),
+                    quad.subject.clone(),
+                    quad.graph_name.clone(),
+                ))
             }
             _ => None,
         })
@@ -307,9 +379,6 @@ async fn add_gbif_to_taxon(
         return Ok(frontend_nquads.to_vec());
     }
 
-    // One occurrence should represent one taxon. If the form contains multiple
-    // different scientificName values, automatic matching would be ambiguous,
-    // so leave the data untouched for explicit user correction.
     let mut unique_names = scientific_name_quads
         .iter()
         .map(|(name, _, _)| name.clone())
@@ -356,8 +425,6 @@ fn add_paper_provenance(
     let first = quads.first().ok_or(PaperRegistrationError::InvalidRdf)?;
     let subject = first.subject.clone();
 
-    // The normal registration UI uses one temporary blank-node subject. Keep
-    // provenance server-managed and reject attempts to submit those predicates.
     if !subject.is_blank_node()
         || quads.iter().any(|quad| quad.subject != subject)
         || quads.iter().any(|quad| {
