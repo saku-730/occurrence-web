@@ -12,7 +12,6 @@ use axum::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -34,7 +33,9 @@ use super::{
     extraction::{LlamaPaperOccurrenceExtractor, PaperOccurrenceExtractor},
     grobid::{GrobidClient, normalize_doi},
     llama::PaperLlmExtractionError,
-    repository::{PaperMetadata, PaperRepository},
+    repository::{
+        InsertPaperMetadata, PAPER_STATUS_REGISTERED, PaperMetadata, PaperRepository,
+    },
     service::PAPER_PDF_FILE_SIZE_LIMIT_BYTES,
 };
 
@@ -88,8 +89,8 @@ impl IntoResponse for PaperSourceHandlerError {
             ),
             Self::NotFound => (
                 StatusCode::NOT_FOUND,
-                "paper_source_not_found",
-                "Paper source not found",
+                "paper_not_found",
+                "Paper not found",
             ),
             Self::UnsupportedMediaType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -136,9 +137,12 @@ impl IntoResponse for PaperSourceHandlerError {
 
 #[derive(Debug, Serialize)]
 pub struct ReceivePaperSourceResponse {
+    // Kept for frontend compatibility. It is true only when the PDF has already
+    // produced registered occurrence data and the user should be asked whether to continue.
     pub duplicate: bool,
     pub source_kind: String,
     pub source_id: Uuid,
+    pub status: String,
     pub original_filename: Option<String>,
     pub content_type: String,
     pub size_bytes: i64,
@@ -192,36 +196,12 @@ struct ReceivedPdf {
     sha256: String,
 }
 
-#[derive(Debug, sqlx::FromRow)]
-struct ExistingImportRow {
-    id: Uuid,
-    original_filename: Option<String>,
-    content_type: String,
-    size_bytes: i64,
-    sha256: String,
-    doi: Option<String>,
-    title: Option<String>,
-    authors: Option<String>,
-    publication_year: Option<i32>,
-    journal: Option<String>,
-    volume: Option<String>,
-    issue: Option<String>,
-    pages: Option<String>,
-    article_number: Option<String>,
-}
-
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug)]
 struct SourceObjectRow {
     bucket: String,
     object_key: String,
     size_bytes: i64,
     sha256: String,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct MetadataRow {
-    doi: Option<String>,
-    title: Option<String>,
 }
 
 pub async fn receive_pdf(
@@ -298,59 +278,35 @@ async fn receive_pdf_inner(
     content_type: String,
     received: &ReceivedPdf,
 ) -> Result<(StatusCode, Json<ReceivePaperSourceResponse>), PaperSourceHandlerError> {
-    // A formally registered paper is reusable by SHA-256. Do not create another
-    // Garage object or PostgreSQL row; the browser decides whether to continue.
+    // 1. SHA-256 duplicate check comes before any permanent write.
     if let Some(existing) =
         PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
     {
+        if existing.status == PAPER_STATUS_REGISTERED {
+            // Registered means occurrence data was successfully persisted at least once.
+            // Do not change it back to unregistered when the user reprocesses this PDF.
+            return Ok((
+                StatusCode::OK,
+                Json(response_from_paper(existing, true)),
+            ));
+        }
+
+        // An unregistered paper already has a permanent Garage object and papers row.
+        // Reuse both, but retry GROBID so a previous failed import can continue normally.
+        let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
         return Ok((
             StatusCode::OK,
-            Json(response_from_paper(existing, true)),
+            Json(response_from_paper(paper, false)),
         ));
     }
 
-    // Before formal registration, only reuse the current user's own source row.
-    // This avoids exposing another user's uncommitted import by UUID.
-    if let Some(existing) =
-        find_existing_import(&state.posgre, uploaded_by, &received.sha256).await?
-    {
-        return Ok((
-            StatusCode::OK,
-            Json(response_from_import(existing, true)),
-        ));
-    }
-
-    let grobid = GrobidClient::from_env().map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
-    let metadata = grobid
-        .extract_header(received.temp_path.as_ref(), received.size_bytes)
-        .await
-        .map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
-
-    // Recheck after GROBID because a concurrent request may have completed while
-    // metadata extraction was running.
-    if let Some(existing) =
-        PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
-    {
-        return Ok((
-            StatusCode::OK,
-            Json(response_from_paper(existing, true)),
-        ));
-    }
-    if let Some(existing) =
-        find_existing_import(&state.posgre, uploaded_by, &received.sha256).await?
-    {
-        return Ok((
-            StatusCode::OK,
-            Json(response_from_import(existing, true)),
-        ));
-    }
-
-    let import_id = Uuid::new_v4();
-    let reserved_paper_id = Uuid::new_v4();
-    let object_key = format!("papers/{reserved_paper_id}/original.pdf");
+    // 2. First upload: create the real paper UUID immediately. There is no reserved ID.
+    let paper_id = Uuid::new_v4();
+    let object_key = format!("papers/{paper_id}/original.pdf");
     let size_bytes =
         i64::try_from(received.size_bytes).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
 
+    // 3. Permanently store the PDF in Garage.
     state
         .media_object_store
         .put_object(PutMediaObjectInput {
@@ -364,87 +320,91 @@ async fn receive_pdf_inner(
         .await
         .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)?;
 
-    let insert = sqlx::query(
-        r#"
-        INSERT INTO paper_imports (
-            id, reserved_paper_id, bucket, object_key, content_type,
-            size_bytes, original_filename, sha256,
-            doi, title, authors, publication_year, journal,
-            volume, issue, pages, article_number,
-            uploaded_by
-        )
-        VALUES (
-            $1, $2, $3, $4, $5,
-            $6, $7, $8,
-            $9, $10, $11, $12, $13,
-            $14, $15, $16, $17,
-            $18
-        )
-        "#,
+    // 4. Insert papers(status=unregistered). If the DB write fails, remove the
+    // just-created Garage object so no orphaned PDF is left behind.
+    let inserted = PaperRepository::insert_unregistered_if_sha256_absent(
+        &state.posgre,
+        InsertPaperMetadata {
+            id: paper_id,
+            bucket: &state.config.garage.bucket,
+            object_key: &object_key,
+            content_type: &content_type,
+            size_bytes,
+            original_filename: original_filename.as_deref(),
+            sha256: &received.sha256,
+            uploaded_by,
+        },
     )
-    .bind(import_id)
-    .bind(reserved_paper_id)
-    .bind(&state.config.garage.bucket)
-    .bind(&object_key)
-    .bind(&content_type)
-    .bind(size_bytes)
-    .bind(original_filename.as_deref())
-    .bind(&received.sha256)
-    .bind(metadata.doi.as_deref())
-    .bind(metadata.title.as_deref())
-    .bind(metadata.authors.as_deref())
-    .bind(metadata.publication_year)
-    .bind(metadata.journal.as_deref())
-    .bind(metadata.volume.as_deref())
-    .bind(metadata.issue.as_deref())
-    .bind(metadata.pages.as_deref())
-    .bind(metadata.article_number.as_deref())
-    .bind(uploaded_by)
-    .execute(&state.posgre)
     .await;
 
-    if let Err(error) = insert {
-        let cleanup = state
-            .media_object_store
-            .delete_object(DeleteMediaObjectInput {
-                bucket: state.config.garage.bucket.clone(),
-                object_key,
-            })
-            .await;
-        if cleanup.is_err() {
-            return Err(PaperSourceHandlerError::ObjectStoreFailed);
+    let inserted = match inserted {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            delete_just_uploaded_pdf(state, object_key).await?;
+            return Err(PaperSourceHandlerError::Database(error));
         }
-        return Err(PaperSourceHandlerError::Database(error));
+    };
+
+    if !inserted {
+        // Another request inserted the same SHA-256 between our initial check and
+        // INSERT. Our Garage object is redundant, so delete it and reuse the winner.
+        delete_just_uploaded_pdf(state, object_key).await?;
+        let existing = PaperRepository::find_by_sha256(&state.posgre, &received.sha256)
+            .await?
+            .ok_or(PaperSourceHandlerError::NotFound)?;
+
+        if existing.status == PAPER_STATUS_REGISTERED {
+            return Ok((
+                StatusCode::OK,
+                Json(response_from_paper(existing, true)),
+            ));
+        }
+
+        let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_paper(paper, false)),
+        ));
     }
 
-    let requires_bibliographic_input = requires_bibliographic_input(
-        metadata.doi.as_deref(),
-        metadata.title.as_deref(),
-    );
+    // 5. GROBID runs only after the PDF and papers row have been permanently stored.
+    // If GROBID fails, the paper remains unregistered and the same PDF can be retried.
+    let paper = run_grobid_and_fill_metadata(state, paper_id, received).await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(ReceivePaperSourceResponse {
-            duplicate: false,
-            source_kind: "import".to_string(),
-            source_id: import_id,
-            original_filename,
-            content_type,
-            size_bytes,
-            sha256: received.sha256.clone(),
-            doi: metadata.doi,
-            title: metadata.title,
-            requires_bibliographic_input,
-            authors: metadata.authors,
-            publication_year: metadata.publication_year,
-            journal: metadata.journal,
-            volume: metadata.volume,
-            issue: metadata.issue,
-            pages: metadata.pages,
-            article_number: metadata.article_number,
-            message: "paper PDF stored for import".to_string(),
-        }),
+        Json(response_from_paper(paper, false)),
     ))
+}
+
+async fn run_grobid_and_fill_metadata(
+    state: &AppState,
+    paper_id: Uuid,
+    received: &ReceivedPdf,
+) -> Result<PaperMetadata, PaperSourceHandlerError> {
+    let grobid = GrobidClient::from_env().map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
+    let metadata = grobid
+        .extract_header(received.temp_path.as_ref(), received.size_bytes)
+        .await
+        .map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
+
+    PaperRepository::fill_missing_grobid_metadata(&state.posgre, paper_id, &metadata)
+        .await?
+        .ok_or(PaperSourceHandlerError::NotFound)
+}
+
+async fn delete_just_uploaded_pdf(
+    state: &AppState,
+    object_key: String,
+) -> Result<(), PaperSourceHandlerError> {
+    state
+        .media_object_store
+        .delete_object(DeleteMediaObjectInput {
+            bucket: state.config.garage.bucket.clone(),
+            object_key,
+        })
+        .await
+        .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)
 }
 
 pub async fn update_bibliographic_metadata(
@@ -453,8 +413,12 @@ pub async fn update_bibliographic_metadata(
     headers: HeaderMap,
     Json(request): Json<UpdatePaperSourceMetadataRequest>,
 ) -> Result<Json<UpdatePaperSourceMetadataResponse>, PaperSourceHandlerError> {
-    let user = authenticated_user(&state, &headers).await?;
-    let source_id =
+    let _user = authenticated_user(&state, &headers).await?;
+    if source_kind != "paper" {
+        return Err(PaperSourceHandlerError::InvalidInput);
+    }
+
+    let paper_id =
         Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
     let doi = request
         .doi
@@ -464,54 +428,29 @@ pub async fn update_bibliographic_metadata(
         .title
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+
     if doi.is_none() && title.is_none() {
         return Err(PaperSourceHandlerError::InvalidInput);
     }
 
-    let row = match source_kind.as_str() {
-        "import" => sqlx::query_as::<_, MetadataRow>(
-            r#"
-            UPDATE paper_imports
-            SET doi = CASE WHEN doi IS NULL OR BTRIM(doi) = '' THEN $3 ELSE doi END,
-                title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $4 ELSE title END,
-                updated_at = now()
-            WHERE id = $1 AND uploaded_by = $2
-            RETURNING doi, title
-            "#,
-        )
-        .bind(source_id)
-        .bind(user.user_id)
-        .bind(doi.as_deref())
-        .bind(title.as_deref())
-        .fetch_optional(&state.posgre)
-        .await?
-        .ok_or(PaperSourceHandlerError::NotFound)?,
-        "paper" => {
-            let paper = PaperRepository::complete_missing_bibliographic_metadata(
-                &state.posgre,
-                source_id,
-                doi.as_deref(),
-                title.as_deref(),
-            )
-            .await?
-            .ok_or(PaperSourceHandlerError::NotFound)?;
-            MetadataRow {
-                doi: paper.doi,
-                title: paper.title,
-            }
-        }
-        _ => return Err(PaperSourceHandlerError::InvalidInput),
-    };
+    let paper = PaperRepository::complete_missing_bibliographic_metadata(
+        &state.posgre,
+        paper_id,
+        doi.as_deref(),
+        title.as_deref(),
+    )
+    .await?
+    .ok_or(PaperSourceHandlerError::NotFound)?;
 
     Ok(Json(UpdatePaperSourceMetadataResponse {
-        source_kind,
-        source_id,
+        source_kind: "paper".to_string(),
+        source_id: paper.id,
         requires_bibliographic_input: requires_bibliographic_input(
-            row.doi.as_deref(),
-            row.title.as_deref(),
+            paper.doi.as_deref(),
+            paper.title.as_deref(),
         ),
-        doi: row.doi,
-        title: row.title,
+        doi: paper.doi,
+        title: paper.title,
     }))
 }
 
@@ -520,39 +459,25 @@ pub async fn extract_occurrences(
     AxumPath((source_kind, source_id)): AxumPath<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Json<ExtractPaperSourceOccurrencesResponse>, PaperSourceHandlerError> {
-    let user = authenticated_user(&state, &headers).await?;
-    let source_id =
+    let _user = authenticated_user(&state, &headers).await?;
+    if source_kind != "paper" {
+        return Err(PaperSourceHandlerError::InvalidInput);
+    }
+
+    let paper_id =
         Uuid::parse_str(&source_id).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
+    let paper = PaperRepository::find_by_id(&state.posgre, paper_id)
+        .await?
+        .ok_or(PaperSourceHandlerError::NotFound)?;
 
-    // No workflow status is checked or changed here. The existence of a reusable
-    // PDF source is the only precondition for running extraction.
-    let source = match source_kind.as_str() {
-        "import" => sqlx::query_as::<_, SourceObjectRow>(
-            r#"
-            SELECT bucket, object_key, size_bytes, sha256
-            FROM paper_imports
-            WHERE id = $1 AND uploaded_by = $2
-            "#,
-        )
-        .bind(source_id)
-        .bind(user.user_id)
-        .fetch_optional(&state.posgre)
-        .await?
-        .ok_or(PaperSourceHandlerError::NotFound)?,
-        "paper" => sqlx::query_as::<_, SourceObjectRow>(
-            r#"
-            SELECT bucket, object_key, size_bytes, sha256
-            FROM papers
-            WHERE id = $1
-            "#,
-        )
-        .bind(source_id)
-        .fetch_optional(&state.posgre)
-        .await?
-        .ok_or(PaperSourceHandlerError::NotFound)?,
-        _ => return Err(PaperSourceHandlerError::InvalidInput),
+    // Extraction never changes status. In particular, a registered paper remains
+    // registered while being reprocessed, even if this extraction later fails.
+    let source = SourceObjectRow {
+        bucket: paper.bucket,
+        object_key: paper.object_key,
+        size_bytes: paper.size_bytes,
+        sha256: paper.sha256,
     };
-
     let temporary_path =
         download_verified_pdf(&source, state.media_object_store.as_ref()).await?;
 
@@ -581,69 +506,26 @@ pub async fn extract_occurrences(
         .collect();
 
     Ok(Json(ExtractPaperSourceOccurrencesResponse {
-        source_kind,
-        source_id,
+        source_kind: "paper".to_string(),
+        source_id: paper_id,
         occurrences,
     }))
-}
-
-async fn find_existing_import(
-    db: &PgPool,
-    uploaded_by: Uuid,
-    sha256: &str,
-) -> Result<Option<ExistingImportRow>, sqlx::Error> {
-    sqlx::query_as::<_, ExistingImportRow>(
-        r#"
-        SELECT id, original_filename, content_type,
-               size_bytes, sha256, doi, title, authors, publication_year,
-               journal, volume, issue, pages, article_number
-        FROM paper_imports
-        WHERE uploaded_by = $1
-          AND sha256 = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(uploaded_by)
-    .bind(sha256)
-    .fetch_optional(db)
-    .await
-}
-
-fn response_from_import(row: ExistingImportRow, duplicate: bool) -> ReceivePaperSourceResponse {
-    let requires_bibliographic_input =
-        requires_bibliographic_input(row.doi.as_deref(), row.title.as_deref());
-
-    ReceivePaperSourceResponse {
-        duplicate,
-        source_kind: "import".to_string(),
-        source_id: row.id,
-        original_filename: row.original_filename,
-        content_type: row.content_type,
-        size_bytes: row.size_bytes,
-        sha256: row.sha256,
-        doi: row.doi,
-        title: row.title,
-        requires_bibliographic_input,
-        authors: row.authors,
-        publication_year: row.publication_year,
-        journal: row.journal,
-        volume: row.volume,
-        issue: row.issue,
-        pages: row.pages,
-        article_number: row.article_number,
-        message: "identical PDF was uploaded before; existing source reused".to_string(),
-    }
 }
 
 fn response_from_paper(row: PaperMetadata, duplicate: bool) -> ReceivePaperSourceResponse {
     let requires_bibliographic_input =
         requires_bibliographic_input(row.doi.as_deref(), row.title.as_deref());
+    let message = if duplicate {
+        "this paper already has registered occurrence data; confirm before reprocessing"
+    } else {
+        "paper PDF is stored and ready for occurrence extraction"
+    };
 
     ReceivePaperSourceResponse {
         duplicate,
         source_kind: "paper".to_string(),
         source_id: row.id,
+        status: row.status,
         original_filename: row.original_filename,
         content_type: row.content_type,
         size_bytes: row.size_bytes,
@@ -658,7 +540,7 @@ fn response_from_paper(row: PaperMetadata, duplicate: bool) -> ReceivePaperSourc
         issue: row.issue,
         pages: row.pages,
         article_number: row.article_number,
-        message: "identical PDF was imported before; existing paper reused".to_string(),
+        message: message.to_string(),
     }
 }
 
@@ -688,7 +570,7 @@ async fn download_verified_pdf(
         .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)?;
 
     let temporary_path = tempfile::Builder::new()
-        .prefix("paper-source-extraction-")
+        .prefix("paper-extraction-")
         .suffix(".pdf")
         .tempfile()
         .map_err(PaperSourceHandlerError::FileSystem)?
@@ -741,7 +623,7 @@ async fn receive_to_temporary_file(
     field: &mut Field<'_>,
 ) -> Result<ReceivedPdf, PaperSourceHandlerError> {
     let temp_path = tempfile::Builder::new()
-        .prefix("paper-source-upload-")
+        .prefix("paper-upload-")
         .suffix(".pdf")
         .tempfile()
         .map_err(PaperSourceHandlerError::FileSystem)?
