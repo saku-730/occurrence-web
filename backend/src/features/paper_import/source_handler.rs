@@ -137,8 +137,6 @@ impl IntoResponse for PaperSourceHandlerError {
 
 #[derive(Debug, Serialize)]
 pub struct ReceivePaperSourceResponse {
-    // Kept for frontend compatibility. It is true only when the PDF has already
-    // produced registered occurrence data and the user should be asked whether to continue.
     pub duplicate: bool,
     pub source_kind: String,
     pub source_id: Uuid,
@@ -180,6 +178,8 @@ pub struct UpdatePaperSourceMetadataResponse {
 pub struct PaperSourceOccurrenceCandidate {
     pub scientific_name: String,
     pub locality: Option<String>,
+    pub decimal_latitude: Option<f64>,
+    pub decimal_longitude: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,21 +278,16 @@ async fn receive_pdf_inner(
     content_type: String,
     received: &ReceivedPdf,
 ) -> Result<(StatusCode, Json<ReceivePaperSourceResponse>), PaperSourceHandlerError> {
-    // 1. SHA-256 duplicate check comes before any permanent write.
     if let Some(existing) =
         PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
     {
         if existing.status == PAPER_STATUS_REGISTERED {
-            // Registered means occurrence data was successfully persisted at least once.
-            // Do not change it back to unregistered when the user reprocesses this PDF.
             return Ok((
                 StatusCode::OK,
                 Json(response_from_paper(existing, true)),
             ));
         }
 
-        // An unregistered paper already has a permanent Garage object and papers row.
-        // Reuse both and make GROBID metadata extraction a best-effort retry.
         let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
         return Ok((
             StatusCode::OK,
@@ -300,13 +295,11 @@ async fn receive_pdf_inner(
         ));
     }
 
-    // 2. First upload: create the real paper UUID immediately. There is no reserved ID.
     let paper_id = Uuid::new_v4();
     let object_key = format!("papers/{paper_id}/original.pdf");
     let size_bytes =
         i64::try_from(received.size_bytes).map_err(|_| PaperSourceHandlerError::InvalidInput)?;
 
-    // 3. Permanently store the PDF in Garage.
     state
         .media_object_store
         .put_object(PutMediaObjectInput {
@@ -320,8 +313,6 @@ async fn receive_pdf_inner(
         .await
         .map_err(|_| PaperSourceHandlerError::ObjectStoreFailed)?;
 
-    // 4. Insert papers(status=unregistered). If the DB write fails, remove the
-    // just-created Garage object so no orphaned PDF is left behind.
     let inserted = PaperRepository::insert_unregistered_if_sha256_absent(
         &state.posgre,
         InsertPaperMetadata {
@@ -346,8 +337,6 @@ async fn receive_pdf_inner(
     };
 
     if !inserted {
-        // Another request inserted the same SHA-256 between our initial check and
-        // INSERT. Our Garage object is redundant, so delete it and reuse the winner.
         delete_just_uploaded_pdf(state, object_key).await?;
         let existing = PaperRepository::find_by_sha256(&state.posgre, &received.sha256)
             .await?
@@ -367,9 +356,6 @@ async fn receive_pdf_inner(
         ));
     }
 
-    // 5. GROBID metadata extraction is best effort. The PDF and papers row are
-    // already permanent; if GROBID is unavailable, return the paper with NULL
-    // bibliographic fields so the frontend can ask for title or DOI.
     let paper = run_grobid_and_fill_metadata(state, paper_id, received).await?;
 
     Ok((
@@ -482,8 +468,6 @@ pub async fn extract_occurrences(
         .await?
         .ok_or(PaperSourceHandlerError::NotFound)?;
 
-    // Extraction never changes status. In particular, a registered paper remains
-    // registered while being reprocessed, even if this extraction later fails.
     let source = SourceObjectRow {
         bucket: paper.bucket,
         object_key: paper.object_key,
@@ -513,6 +497,8 @@ pub async fn extract_occurrences(
                     .locality
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty()),
+                decimal_latitude: candidate.decimal_latitude,
+                decimal_longitude: candidate.decimal_longitude,
             })
         })
         .collect();
