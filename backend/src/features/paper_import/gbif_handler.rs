@@ -29,6 +29,7 @@ pub struct ResolvePaperTaxaRequest {
 pub struct ResolvedPaperTaxon {
     pub scientific_name: String,
     pub to_taxon: Option<String>,
+    pub taxon_scientific_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,11 +115,11 @@ pub async fn resolve_taxa(
     let resolved = stream::iter(unique_names.into_iter().map(|scientific_name| {
         let client = client.clone();
         async move {
-            let to_taxon = match client {
-                Some(client) => client.match_to_taxon(&scientific_name).await.ok().flatten(),
+            let matched = match client {
+                Some(client) => client.match_taxon(&scientific_name).await.ok().flatten(),
                 None => None,
             };
-            (scientific_name, to_taxon)
+            (scientific_name, matched)
         }
     }))
     .buffered(GBIF_LOOKUP_CONCURRENCY)
@@ -127,9 +128,13 @@ pub async fn resolve_taxa(
 
     let matches = normalized
         .into_iter()
-        .map(|scientific_name| ResolvedPaperTaxon {
-            to_taxon: resolved.get(&scientific_name).cloned().flatten(),
-            scientific_name,
+        .map(|scientific_name| {
+            let matched = resolved.get(&scientific_name).cloned().flatten();
+            ResolvedPaperTaxon {
+                to_taxon: matched.as_ref().map(|value| value.taxon_uri.clone()),
+                taxon_scientific_name: matched.map(|value| value.scientific_name),
+                scientific_name,
+            }
         })
         .collect();
 
