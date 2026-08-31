@@ -33,6 +33,7 @@ use super::repository::PaperRepository;
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_REFERENCES_PREDICATE_URI: &str =
     "http://rs.tdwg.org/dwc/terms/associatedReferences";
+const SCIENTIFIC_NAME_PREDICATE_URI: &str = "http://rs.tdwg.org/dwc/terms/scientificName";
 const SOURCE_PAPER_PREDICATE_URI: &str = "https://bio-database.net/terms/sourcePaper";
 const PAPER_URI_BASE: &str = "https://bio-database.net/papers/";
 const MAX_BATCH_OCCURRENCES: usize = 1000;
@@ -230,7 +231,8 @@ async fn register_one_occurrence(
     .await?;
 
     // Taxonomy has already been resolved and shown to the user before this
-    // point. Persist exactly the reviewed RDF, adding only paper provenance.
+    // point. Persist the reviewed RDF, normalizing scientificName to omit the
+    // nomenclatural publication year, then add only paper provenance.
     let rdf_body = add_paper_provenance(body, paper_id, associated_reference)?;
 
     let output = OccurrenceService::create_occurrence(
@@ -363,6 +365,8 @@ fn add_paper_provenance(
         return Err(PaperRegistrationError::InvalidRdf);
     }
 
+    normalize_scientific_name_years(&mut quads);
+
     let graph =
         NamedNode::new(OCCURRENCE_GRAPH_URI).map_err(|_| PaperRegistrationError::Internal)?;
     let associated_references = NamedNode::new(ASSOCIATED_REFERENCES_PREDICATE_URI)
@@ -386,6 +390,63 @@ fn add_paper_provenance(
     ));
 
     serialize_nquads(&quads)
+}
+
+fn normalize_scientific_name_years(quads: &mut [Quad]) {
+    for quad in quads {
+        if quad.predicate.as_str() != SCIENTIFIC_NAME_PREDICATE_URI {
+            continue;
+        }
+        let Term::Literal(literal) = &quad.object else {
+            continue;
+        };
+
+        let normalized = scientific_name_without_year(literal.value());
+        if normalized != literal.value() {
+            quad.object = Literal::new_simple_literal(normalized).into();
+        }
+    }
+}
+
+fn scientific_name_without_year(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Some(without_closing_paren) = trimmed.strip_suffix(')') {
+        if let Some(year_start) = terminal_year_start(without_closing_paren) {
+            let author = without_closing_paren[..year_start]
+                .trim_end_matches(|ch: char| ch == ',' || ch.is_whitespace());
+            if author.ends_with('(') {
+                return author.trim_end_matches('(').trim_end().to_string();
+            }
+            return format!("{author})");
+        }
+    }
+
+    if let Some(year_start) = terminal_year_start(trimmed) {
+        return trimmed[..year_start]
+            .trim_end_matches(|ch: char| ch == ',' || ch.is_whitespace())
+            .to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn terminal_year_start(value: &str) -> Option<usize> {
+    let value = value.trim_end();
+    let token_start = value
+        .rfind(char::is_whitespace)
+        .map_or(0, |index| index + 1);
+    let token = &value[token_start..];
+    let year = token.trim_end_matches(|ch: char| ch.is_ascii_alphabetic());
+
+    if year.len() == 4 && year.chars().all(|ch| ch.is_ascii_digit()) {
+        Some(token_start)
+    } else {
+        None
+    }
 }
 
 fn serialize_nquads(quads: &[Quad]) -> Result<Vec<u8>, PaperRegistrationError> {
@@ -412,5 +473,32 @@ fn map_occurrence_error(error: OccurrenceServiceError) -> PaperRegistrationError
         | OccurrenceServiceError::InvalidBlankNodeSubject
         | OccurrenceServiceError::InvalidObjectBlankNode => PaperRegistrationError::InvalidRdf,
         _ => PaperRegistrationError::Internal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scientific_name_without_year;
+
+    #[test]
+    fn removes_comma_and_terminal_year() {
+        assert_eq!(scientific_name_without_year("Eisenia Malm, 1877"), "Eisenia Malm");
+        assert_eq!(
+            scientific_name_without_year("Pheretima acincta Goto & Hatai, 1899"),
+            "Pheretima acincta Goto & Hatai"
+        );
+    }
+
+    #[test]
+    fn removes_year_inside_terminal_authorship_parentheses() {
+        assert_eq!(
+            scientific_name_without_year("Amynthas corticis (Kinberg, 1867)"),
+            "Amynthas corticis (Kinberg)"
+        );
+    }
+
+    #[test]
+    fn leaves_names_without_year_unchanged() {
+        assert_eq!(scientific_name_without_year("Eisenia Malm"), "Eisenia Malm");
     }
 }
