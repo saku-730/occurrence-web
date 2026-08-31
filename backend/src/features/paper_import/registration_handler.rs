@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header::{CONTENT_TYPE, COOKIE}},
     response::{IntoResponse, Response},
 };
-use oxrdf::{GraphName, Literal, NamedNode, Quad};
+use oxrdf::{GraphName, Literal, NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use uuid::Uuid;
 
@@ -15,6 +15,7 @@ use crate::{
             dto::ErrorResponse,
             service::{AuthService, AuthServiceError},
         },
+        media::repository::MediaRepository,
         occurrences::{
             dto::CreateOccurrenceResponse,
             service::{CreateOccurrenceInput, OccurrenceService, OccurrenceServiceError},
@@ -37,6 +38,7 @@ pub enum PaperRegistrationError {
     InvalidInput,
     NotFound,
     InvalidRdf,
+    ForbiddenMedia,
     StoreFailed,
     Database(sqlx::Error),
     Internal,
@@ -80,6 +82,11 @@ impl IntoResponse for PaperRegistrationError {
                 StatusCode::BAD_REQUEST,
                 "invalid_rdf",
                 "Invalid occurrence RDF body",
+            ),
+            Self::ForbiddenMedia => (
+                StatusCode::FORBIDDEN,
+                "forbidden_media",
+                "Occurrence media must be owned by the authenticated user",
             ),
             Self::StoreFailed => (
                 StatusCode::BAD_GATEWAY,
@@ -132,6 +139,14 @@ pub async fn register_occurrence(
         paper.title.as_deref(),
     )
     .ok_or(PaperRegistrationError::InvalidInput)?;
+
+    ensure_referenced_media_owned_by_user(
+        &body,
+        &state.config.app.app_base_url,
+        current_user.user_id,
+        &state.posgre,
+    )
+    .await?;
 
     let rdf_body = add_paper_provenance(&body, paper_id, &associated_reference)?;
 
@@ -215,6 +230,40 @@ fn paper_associated_reference(doi: Option<&str>, title: Option<&str>) -> Option<
         .map(ToString::to_string)
 }
 
+async fn ensure_referenced_media_owned_by_user(
+    nquads: &[u8],
+    app_base_url: &str,
+    user_id: Uuid,
+    db: &sqlx::PgPool,
+) -> Result<(), PaperRegistrationError> {
+    let quads = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(nquads)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| PaperRegistrationError::InvalidRdf)?;
+    let media_uri_base = format!("{}/media/", app_base_url.trim().trim_end_matches('/'));
+    let mut media_ids = std::collections::HashSet::new();
+
+    for quad in quads {
+        let Term::NamedNode(object) = quad.object else {
+            continue;
+        };
+        let Some(media_id) = object.as_str().strip_prefix(&media_uri_base) else {
+            continue;
+        };
+        let media_id = Uuid::parse_str(media_id).map_err(|_| PaperRegistrationError::ForbiddenMedia)?;
+        media_ids.insert(media_id);
+    }
+
+    for media_id in media_ids {
+        let metadata = MediaRepository::find_by_id(db, media_id).await?;
+        if !metadata.is_some_and(|metadata| metadata.uploaded_by == user_id) {
+            return Err(PaperRegistrationError::ForbiddenMedia);
+        }
+    }
+
+    Ok(())
+}
+
 fn add_paper_provenance(
     frontend_nquads: &[u8],
     paper_id: Uuid,
@@ -230,7 +279,7 @@ fn add_paper_provenance(
 
     // The normal registration UI uses one temporary blank-node subject. Keep
     // provenance server-managed and reject attempts to submit those predicates.
-    if !subject.is_blank_node()
+    if !matches!(&subject, oxrdf::NamedOrBlankNode::BlankNode(_))
         || quads.iter().any(|quad| quad.subject != subject)
         || quads.iter().any(|quad| {
             matches!(
