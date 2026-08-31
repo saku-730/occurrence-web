@@ -5,6 +5,10 @@ import type { ChangeEvent, FormEvent } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { ApiError, apiFetch } from "@/lib/api";
+import {
+  PaperOccurrenceBulkEditor,
+  type PaperOccurrenceCandidate,
+} from "./paper-occurrence-bulk-editor";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 type UploadStatus = "idle" | "uploading" | "success" | "error";
@@ -39,17 +43,10 @@ type UpdatePaperMetadataResponse = {
   requires_bibliographic_input: boolean;
 };
 
-type OccurrenceCandidate = {
-  scientificName: string;
-  locality: string | null;
-  decimalLatitude: number | null;
-  decimalLongitude: number | null;
-};
-
 type ExtractPaperOccurrencesResponse = {
   source_kind: "paper";
   source_id: string;
-  occurrences: OccurrenceCandidate[];
+  occurrences: PaperOccurrenceCandidate[];
 };
 
 const MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024;
@@ -378,59 +375,19 @@ export function PaperImportClient() {
         )}
 
         {extractionResult && (
-          <section className="mt-6 overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
+          <section className="mt-6 overflow-visible rounded-md border border-[#d8dfe2] bg-white">
             <div className="border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3">
-              <h2 className="text-sm font-medium text-[#526168]">3. LLM抽出結果</h2>
+              <h2 className="text-sm font-medium text-[#526168]">3. LLM抽出結果の確認・登録</h2>
             </div>
             <div className="px-5 py-6">
-              {extractionResult.occurrences.length === 0 ? (
-                <p className="text-sm text-[#65737a]">Occurrence候補は抽出されませんでした。</p>
-              ) : (
-                <div className="overflow-x-auto rounded-md border border-[#d8dfe2]">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <thead className="bg-[#f5f7f8] text-[#526168]">
-                      <tr>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">#</th>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">学名</th>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">Locality</th>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">緯度</th>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">経度</th>
-                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">登録</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {extractionResult.occurrences.map((occurrence, index) => (
-                        <tr key={`${occurrence.scientificName}-${occurrence.locality ?? ""}-${index}`}>
-                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#65737a]">{index + 1}</td>
-                          <td className="border-b border-[#e5eaec] px-4 py-3 font-medium text-[#344249]">
-                            {occurrence.scientificName}
-                          </td>
-                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
-                            {occurrence.locality ?? "-"}
-                          </td>
-                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
-                            {occurrence.decimalLatitude ?? "-"}
-                          </td>
-                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
-                            {occurrence.decimalLongitude ?? "-"}
-                          </td>
-                          <td className="border-b border-[#e5eaec] px-4 py-3">
-                            <a
-                              className="font-medium text-[#176b57] hover:underline"
-                              href={paperRegistrationHref(
-                                extractionResult.source_id,
-                                occurrence,
-                              )}
-                            >
-                              データ登録画面で確認
-                            </a>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <p className="mb-6 text-sm leading-6 text-[#526168]">
+                抽出された各Occurrenceを通常のデータ登録画面と同じ項目で確認・修正できます。最下部の一括登録でまとめて保存します。
+              </p>
+              <PaperOccurrenceBulkEditor
+                key={`${extractionResult.source_id}-${extractionResult.occurrences.length}`}
+                paperId={extractionResult.source_id}
+                candidates={extractionResult.occurrences}
+              />
             </div>
           </section>
         )}
@@ -458,24 +415,6 @@ async function extractPaper(paperId: string): Promise<ExtractPaperOccurrencesRes
   }
 
   return (await response.json()) as ExtractPaperOccurrencesResponse;
-}
-
-function paperRegistrationHref(
-  paperId: string,
-  occurrence: OccurrenceCandidate,
-): string {
-  const params = new URLSearchParams({
-    paperId,
-    scientificName: occurrence.scientificName,
-  });
-  if (occurrence.locality) params.set("locality", occurrence.locality);
-  if (occurrence.decimalLatitude != null) {
-    params.set("decimalLatitude", String(occurrence.decimalLatitude));
-  }
-  if (occurrence.decimalLongitude != null) {
-    params.set("decimalLongitude", String(occurrence.decimalLongitude));
-  }
-  return `/paper-import/register?${params.toString()}`;
 }
 
 function getUploadErrorMessage(error: unknown): string {
