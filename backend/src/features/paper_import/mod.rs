@@ -7,6 +7,7 @@ use axum::{
 
 pub mod extraction;
 pub mod fulltext;
+pub mod gbif;
 pub mod grobid;
 mod grobid_client_api;
 pub mod llama;
