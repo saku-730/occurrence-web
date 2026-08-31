@@ -609,12 +609,8 @@ function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): E
 function buildEmptyEditorState(key: number): EditorState {
   return {
     key,
-    rows: [
-      { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" },
-      { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
-      { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
-    ],
-    nextId: 4,
+    rows: [{ id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" }],
+    nextId: 2,
     selectedFiles: [],
     taxonLabels: {},
     isPublic: true,
@@ -914,7 +910,7 @@ function buildOccurrenceNQuads(
   const lines = statements.map((statement) => {
     const object = isAbsoluteHttpUri(statement.object)
       ? `<${statement.object}>`
-      : `"${escapeRdfLiteral(statement.object)}"`;
+      : `\"${escapeRdfLiteral(statement.object)}\"`;
     return `_:occurrence <${statement.predicate}> ${object} <${OCCURRENCE_GRAPH_URI}> .`;
   });
   lines.push(`_:occurrence <${ACCESS_RIGHTS_PREDICATE_URI}> <${accessRightsUri}> <${OCCURRENCE_GRAPH_URI}> .`);
@@ -934,13 +930,13 @@ function isAbsoluteHttpUri(value: string): boolean {
 }
 
 function hasUnsafeIriCharacter(value: string): boolean {
-  return /[<>"{}|^`\\\s]/u.test(value);
+  return /[<>\"{}|^`\\\s]/u.test(value);
 }
 
 function escapeRdfLiteral(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
+    .replaceAll('\"', '\\\"')
     .replaceAll("\n", "\\n")
     .replaceAll("\r", "\\r")
     .replaceAll("\t", "\\t");
