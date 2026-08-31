@@ -610,7 +610,7 @@ function buildEmptyEditorState(key: number): EditorState {
   return {
     key,
     rows: [
-      { id: 1, predicate: DWC_SCIENTIFIC_NAME_URI, object: "" },
+      { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" },
       { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
       { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
     ],
