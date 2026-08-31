@@ -24,6 +24,7 @@ const DWC_DECIMAL_LONGITUDE_LABEL = "経度";
 const DWC_DECIMAL_LATITUDE_URI =
   "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DWC_DECIMAL_LATITUDE_LABEL = "緯度";
+const DWC_LOCALITY_URI = "http://rs.tdwg.org/dwc/terms/locality";
 const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
 const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
 const GBIF_SUGGEST_DEBOUNCE_MS = 300;
@@ -76,6 +77,7 @@ const initialRows: StatementRow[] = [
 
 export default function NewOccurrencePage() {
   const [rows, setRows] = useState(initialRows);
+  const [sourcePaperId, setSourcePaperId] = useState<string | null>(null);
   const nextId = useRef(4);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
@@ -91,6 +93,33 @@ export default function NewOccurrencePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [createdOccurrence, setCreatedOccurrence] =
     useState<CreateOccurrenceResponse | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paperId = params.get("paperId")?.trim() ?? "";
+    if (!paperId) return;
+
+    const scientificName = params.get("scientificName")?.trim() ?? "";
+    const locality = params.get("locality")?.trim() ?? "";
+    const decimalLatitude = params.get("decimalLatitude")?.trim() ?? "";
+    const decimalLongitude = params.get("decimalLongitude")?.trim() ?? "";
+    const importedRows: StatementRow[] = [
+      { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: scientificName },
+      { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: decimalLongitude },
+      { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: decimalLatitude },
+    ];
+    if (locality) {
+      importedRows.push({
+        id: 4,
+        predicate: DWC_LOCALITY_URI,
+        object: locality,
+      });
+    }
+
+    setSourcePaperId(paperId);
+    setRows(importedRows);
+    nextId.current = importedRows.length + 1;
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -247,7 +276,10 @@ export default function NewOccurrencePage() {
       setSubmissionMessage("オカレンスデータを登録しています");
       const accessRightsUri = isPublic ? PUBLIC_ACCESS_RIGHTS_URI : PRIVATE_ACCESS_RIGHTS_URI;
       const nquads = buildOccurrenceNQuads(statements, mediaUris, accessRightsUri);
-      const created = await apiFetch<CreateOccurrenceResponse>("/occurrences", {
+      const registrationPath = sourcePaperId
+        ? `/papers/${encodeURIComponent(sourcePaperId)}/occurrences`
+        : "/occurrences";
+      const created = await apiFetch<CreateOccurrenceResponse>(registrationPath, {
         method: "POST",
         headers: { "Content-Type": "application/n-quads" },
         body: nquads,
@@ -454,6 +486,11 @@ export default function NewOccurrencePage() {
             <p className="mt-2 break-all text-sm text-[#526168]">
               {createdOccurrence.occurrence_uri}
             </p>
+            {sourcePaperId ? (
+              <p className="mt-2 text-sm text-[#526168]">
+                論文の出典情報を自動付与し、paperをregisteredに更新しました。
+              </p>
+            ) : null}
           </section>
         ) : null}
 
@@ -774,7 +811,6 @@ function PredicateCombobox({
   );
 }
 
-
 function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): string {
   if (value === DWCIRI_TO_TAXON_URI) {
     return DWCIRI_TO_TAXON_LABEL;
@@ -919,6 +955,9 @@ function registrationErrorMessage(error: unknown): string {
   }
   if (error.status === 403) {
     return "添付ファイルをこのデータへ関連付ける権限がありません";
+  }
+  if (error.status === 404) {
+    return "元論文またはデータが見つかりません";
   }
   if (error.status === 413) {
     return "添付ファイルのサイズが上限を超えています";
