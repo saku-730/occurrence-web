@@ -292,7 +292,7 @@ async fn receive_pdf_inner(
         }
 
         // An unregistered paper already has a permanent Garage object and papers row.
-        // Reuse both, but retry GROBID so a previous failed import can continue normally.
+        // Reuse both and make GROBID metadata extraction a best-effort retry.
         let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
         return Ok((
             StatusCode::OK,
@@ -367,8 +367,9 @@ async fn receive_pdf_inner(
         ));
     }
 
-    // 5. GROBID runs only after the PDF and papers row have been permanently stored.
-    // If GROBID fails, the paper remains unregistered and the same PDF can be retried.
+    // 5. GROBID metadata extraction is best effort. The PDF and papers row are
+    // already permanent; if GROBID is unavailable, return the paper with NULL
+    // bibliographic fields so the frontend can ask for title or DOI.
     let paper = run_grobid_and_fill_metadata(state, paper_id, received).await?;
 
     Ok((
@@ -382,13 +383,24 @@ async fn run_grobid_and_fill_metadata(
     paper_id: Uuid,
     received: &ReceivedPdf,
 ) -> Result<PaperMetadata, PaperSourceHandlerError> {
-    let grobid = GrobidClient::from_env().map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
-    let metadata = grobid
-        .extract_header(received.temp_path.as_ref(), received.size_bytes)
-        .await
-        .map_err(|_| PaperSourceHandlerError::GrobidFailed)?;
+    let metadata = match GrobidClient::from_env() {
+        Ok(grobid) => match grobid
+            .extract_header(received.temp_path.as_ref(), received.size_bytes)
+            .await
+        {
+            Ok(metadata) => Some(metadata),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
 
-    PaperRepository::fill_missing_grobid_metadata(&state.posgre, paper_id, &metadata)
+    if let Some(metadata) = metadata {
+        return PaperRepository::fill_missing_grobid_metadata(&state.posgre, paper_id, &metadata)
+            .await?
+            .ok_or(PaperSourceHandlerError::NotFound);
+    }
+
+    PaperRepository::find_by_id(&state.posgre, paper_id)
         .await?
         .ok_or(PaperSourceHandlerError::NotFound)
 }
