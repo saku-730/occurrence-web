@@ -1,4 +1,4 @@
-import { PaperOccurrenceRegisterClient } from "./paper-occurrence-register-client";
+import { redirect } from "next/navigation";
 
 type SearchParams = Promise<{
   paperId?: string;
@@ -14,14 +14,13 @@ export default async function PaperOccurrenceRegisterPage({
   searchParams: SearchParams;
 }) {
   const params = await searchParams;
+  const target = new URLSearchParams();
 
-  return (
-    <PaperOccurrenceRegisterClient
-      paperId={params.paperId ?? ""}
-      scientificName={params.scientificName ?? ""}
-      locality={params.locality ?? ""}
-      decimalLatitude={params.decimalLatitude ?? ""}
-      decimalLongitude={params.decimalLongitude ?? ""}
-    />
-  );
+  if (params.paperId) target.set("paperId", params.paperId);
+  if (params.scientificName) target.set("scientificName", params.scientificName);
+  if (params.locality) target.set("locality", params.locality);
+  if (params.decimalLatitude) target.set("decimalLatitude", params.decimalLatitude);
+  if (params.decimalLongitude) target.set("decimalLongitude", params.decimalLongitude);
+
+  redirect(`/occurrences/new?${target.toString()}`);
 }
