@@ -580,21 +580,9 @@ function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): E
   });
   rows.push({
     id: nextId++,
-    predicate: DWC_DECIMAL_LONGITUDE_URI,
-    object: candidate.decimalLongitude == null ? "" : String(candidate.decimalLongitude),
+    predicate: DWC_LOCALITY_URI,
+    object: candidate.locality?.trim() ?? "",
   });
-  rows.push({
-    id: nextId++,
-    predicate: DWC_DECIMAL_LATITUDE_URI,
-    object: candidate.decimalLatitude == null ? "" : String(candidate.decimalLatitude),
-  });
-  if (candidate.locality?.trim()) {
-    rows.push({
-      id: nextId++,
-      predicate: DWC_LOCALITY_URI,
-      object: candidate.locality.trim(),
-    });
-  }
 
   return {
     key: index,
