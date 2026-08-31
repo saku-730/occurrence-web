@@ -58,7 +58,7 @@ impl GbifClient {
         Ok(Self { http, endpoint })
     }
 
-    /// Resolve a paper-provided scientific name to a GBIF taxon URI.
+    /// Resolve a user-confirmed scientific name to a GBIF taxon URI.
     ///
     /// Exact matches are accepted. Fuzzy matches are accepted only when GBIF
     /// reports high confidence. HIGHERRANK is deliberately rejected because a
@@ -90,22 +90,28 @@ impl GbifClient {
             .await
             .map_err(|_| GbifMatchError::InvalidResponse)?;
 
-        let match_type = matched
-            .match_type
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_uppercase();
-        let accepted = match_type == "EXACT"
-            || (match_type == "FUZZY"
-                && matched.confidence.unwrap_or(0) >= MIN_FUZZY_CONFIDENCE);
-        if !accepted {
-            return Ok(None);
-        }
-
-        let usage_key = matched.accepted_usage_key.or(matched.usage_key);
-        Ok(usage_key.map(|key| format!("{GBIF_TAXON_URI_BASE}{key}")))
+        Ok(taxon_uri_from_match(&matched))
     }
+}
+
+fn taxon_uri_from_match(matched: &GbifSpeciesMatchResponse) -> Option<String> {
+    let match_type = matched
+        .match_type
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
+    let accepted = match_type == "EXACT"
+        || (match_type == "FUZZY"
+            && matched.confidence.unwrap_or(0) >= MIN_FUZZY_CONFIDENCE);
+    if !accepted {
+        return None;
+    }
+
+    matched
+        .accepted_usage_key
+        .or(matched.usage_key)
+        .map(|key| format!("{GBIF_TAXON_URI_BASE}{key}"))
 }
 
 #[cfg(test)]
@@ -113,7 +119,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gbif_taxon_uri_base_is_https() {
-        assert!(GBIF_TAXON_URI_BASE.starts_with("https://"));
+    fn exact_match_builds_taxon_uri() {
+        let matched = GbifSpeciesMatchResponse {
+            usage_key: Some(5231190),
+            accepted_usage_key: None,
+            match_type: Some("EXACT".to_string()),
+            confidence: Some(98),
+        };
+
+        assert_eq!(
+            taxon_uri_from_match(&matched).as_deref(),
+            Some("https://www.gbif.org/species/5231190")
+        );
+    }
+
+    #[test]
+    fn synonym_prefers_accepted_usage_key() {
+        let matched = GbifSpeciesMatchResponse {
+            usage_key: Some(2468551),
+            accepted_usage_key: Some(9702100),
+            match_type: Some("EXACT".to_string()),
+            confidence: Some(97),
+        };
+
+        assert_eq!(
+            taxon_uri_from_match(&matched).as_deref(),
+            Some("https://www.gbif.org/species/9702100")
+        );
+    }
+
+    #[test]
+    fn weak_fuzzy_and_higher_rank_matches_are_rejected() {
+        let weak_fuzzy = GbifSpeciesMatchResponse {
+            usage_key: Some(1),
+            accepted_usage_key: None,
+            match_type: Some("FUZZY".to_string()),
+            confidence: Some(73),
+        };
+        let higher_rank = GbifSpeciesMatchResponse {
+            usage_key: Some(2),
+            accepted_usage_key: None,
+            match_type: Some("HIGHERRANK".to_string()),
+            confidence: Some(100),
+        };
+
+        assert_eq!(taxon_uri_from_match(&weak_fuzzy), None);
+        assert_eq!(taxon_uri_from_match(&higher_rank), None);
     }
 }
