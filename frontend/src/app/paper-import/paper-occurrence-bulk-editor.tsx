@@ -124,6 +124,11 @@ export function PaperOccurrenceBulkEditor({
     );
   }
 
+  function removeEditor(key: number) {
+    setEditors((current) => current.filter((editor) => editor.key !== key));
+    setErrorMessage(null);
+  }
+
   async function handleBulkRegister() {
     if (isSubmitting || registered || editors.length === 0) return;
 
@@ -196,20 +201,25 @@ export function PaperOccurrenceBulkEditor({
 
   return (
     <div>
-      <div className="space-y-8">
-        {editors.map((editor, index) => (
-          <OccurrenceEditorCard
-            key={editor.key}
-            index={index}
-            editor={editor}
-            disabled={isSubmitting || Boolean(registered)}
-            darwinCoreTerms={darwinCoreTerms}
-            termsStatus={termsStatus}
-            onLoadTerms={() => void loadDarwinCoreTerms()}
-            onChange={(next) => updateEditor(index, next)}
-          />
-        ))}
-      </div>
+      {editors.length > 0 ? (
+        <div className="space-y-8">
+          {editors.map((editor, index) => (
+            <OccurrenceEditorCard
+              key={editor.key}
+              index={index}
+              editor={editor}
+              disabled={isSubmitting || Boolean(registered)}
+              darwinCoreTerms={darwinCoreTerms}
+              termsStatus={termsStatus}
+              onLoadTerms={() => void loadDarwinCoreTerms()}
+              onChange={(next) => updateEditor(index, next)}
+              onDelete={() => removeEditor(editor.key)}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-[#65737a]">登録対象のOccurrenceはありません。</p>
+      )}
 
       {errorMessage ? (
         <div className="mt-6 rounded-md border border-[#e1b8b8] bg-[#fff5f5] px-4 py-3 text-sm text-[#8d3131]" role="alert">
@@ -228,12 +238,17 @@ export function PaperOccurrenceBulkEditor({
 
       <div className="mt-8 flex justify-end border-t border-[#d8dfe2] pt-6">
         <button
-          className="h-11 rounded-md bg-[#176b57] px-7 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-wait disabled:bg-[#829b95]"
-          disabled={isSubmitting || Boolean(registered)}
+          className="h-11 rounded-md bg-[#176b57] px-7 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
+          disabled={isSubmitting || Boolean(registered) || editors.length === 0}
           onClick={() => void handleBulkRegister()}
           type="button"
         >
-          {submissionMessage ?? (registered ? "一括登録済み" : `${editors.length}件を一括登録`)}
+          {submissionMessage ??
+            (registered
+              ? "一括登録済み"
+              : editors.length === 0
+                ? "登録対象なし"
+                : `${editors.length}件を一括登録`)}
         </button>
       </div>
     </div>
@@ -248,6 +263,7 @@ function OccurrenceEditorCard({
   termsStatus,
   onLoadTerms,
   onChange,
+  onDelete,
 }: {
   index: number;
   editor: EditorState;
@@ -256,6 +272,7 @@ function OccurrenceEditorCard({
   termsStatus: TermsStatus;
   onLoadTerms: () => void;
   onChange: (editor: EditorState) => void;
+  onDelete: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -391,16 +408,26 @@ function OccurrenceEditorCard({
     <section className="overflow-visible rounded-md border border-[#c9d2d6] bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3">
         <h3 className="text-sm font-semibold text-[#344249]">Occurrence {index + 1}</h3>
-        <label className="inline-flex items-center gap-2 text-sm font-medium text-[#526168]">
-          <input
-            checked={editor.isPublic}
-            className="h-4 w-4 rounded border-[#b8c3c8] text-[#176b57] focus:ring-[#176b57]"
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-[#526168]">
+            <input
+              checked={editor.isPublic}
+              className="h-4 w-4 rounded border-[#b8c3c8] text-[#176b57] focus:ring-[#176b57]"
+              disabled={disabled}
+              onChange={(event) => onChange({ ...editor, isPublic: event.target.checked })}
+              type="checkbox"
+            />
+            公開する
+          </label>
+          <button
+            className="text-sm font-medium text-[#a23c32] hover:underline disabled:cursor-not-allowed disabled:text-[#9aa5aa] disabled:no-underline"
             disabled={disabled}
-            onChange={(event) => onChange({ ...editor, isPublic: event.target.checked })}
-            type="checkbox"
-          />
-          公開する
-        </label>
+            onClick={onDelete}
+            type="button"
+          >
+            このOccurrenceを削除
+          </button>
+        </div>
       </div>
 
       <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-4 border-b border-[#d8dfe2] bg-[#f7f9fa] px-5 py-3 text-xs font-medium text-[#526168] md:grid">
