@@ -11,6 +11,7 @@ pub mod grobid;
 mod grobid_client_api;
 pub mod llama;
 pub mod preprocess;
+pub mod registration_handler;
 pub mod repository;
 pub mod service;
 pub mod source_handler;
@@ -32,6 +33,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/paper-sources/{source_kind}/{source_id}/extract-occurrences",
             post(source_handler::extract_occurrences),
+        )
+        .route(
+            "/papers/{paper_id}/occurrences",
+            post(registration_handler::register_occurrence),
         )
         .with_state(state)
 }
