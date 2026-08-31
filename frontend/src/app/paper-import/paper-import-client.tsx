@@ -9,11 +9,10 @@ import { ApiError, apiFetch } from "@/lib/api";
 type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 type ExtractionStatus = "idle" | "extracting" | "success" | "error";
-type SourceKind = "import" | "paper";
 
-type ReceivePaperSourceResponse = {
+type ReceivePaperResponse = {
   duplicate: boolean;
-  source_kind: SourceKind;
+  source_kind: "paper";
   source_id: string;
   original_filename: string | null;
   content_type: string;
@@ -32,8 +31,8 @@ type ReceivePaperSourceResponse = {
   message: string;
 };
 
-type UpdatePaperSourceMetadataResponse = {
-  source_kind: SourceKind;
+type UpdatePaperMetadataResponse = {
+  source_kind: "paper";
   source_id: string;
   doi: string | null;
   title: string | null;
@@ -45,8 +44,8 @@ type OccurrenceCandidate = {
   locality: string | null;
 };
 
-type ExtractPaperSourceOccurrencesResponse = {
-  source_kind: SourceKind;
+type ExtractPaperOccurrencesResponse = {
+  source_kind: "paper";
   source_id: string;
   occurrences: OccurrenceCandidate[];
 };
@@ -58,14 +57,14 @@ export function PaperImportClient() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [paperSource, setPaperSource] = useState<ReceivePaperSourceResponse | null>(null);
-  const [duplicateApproved, setDuplicateApproved] = useState(false);
+  const [paper, setPaper] = useState<ReceivePaperResponse | null>(null);
+  const [reimportApproved, setReimportApproved] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [doiInput, setDoiInput] = useState("");
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>("idle");
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extractionResult, setExtractionResult] =
-    useState<ExtractPaperSourceOccurrencesResponse | null>(null);
+    useState<ExtractPaperOccurrencesResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -89,8 +88,8 @@ export function PaperImportClient() {
   }, []);
 
   const resetFlow = () => {
-    setPaperSource(null);
-    setDuplicateApproved(false);
+    setPaper(null);
+    setReimportApproved(false);
     setTitleInput("");
     setDoiInput("");
     setExtractionStatus("idle");
@@ -153,23 +152,25 @@ export function PaperImportClient() {
     formData.append("file", pdfFile);
 
     try {
-      const result = await apiFetch<ReceivePaperSourceResponse>("/paper-import", {
+      const result = await apiFetch<ReceivePaperResponse>("/paper-import", {
         method: "POST",
         body: formData,
       });
 
-      setPaperSource(result);
+      setPaper(result);
       setTitleInput(result.title ?? "");
       setDoiInput(result.doi ?? "");
       setUploadStatus("success");
 
+      // duplicate=true means this paper already has occurrence data registered.
+      // Reprocessing never changes the backend paper status back to unregistered.
       if (result.duplicate) {
         const approved = window.confirm(
-          "すでにインポートを一度していますがしますか？",
+          "この論文からはすでにOccurrenceデータを登録済みです。もう一度登録処理を行いますか？",
         );
-        setDuplicateApproved(approved);
+        setReimportApproved(approved);
       } else {
-        setDuplicateApproved(true);
+        setReimportApproved(true);
       }
     } catch (error: unknown) {
       setUploadStatus("error");
@@ -178,13 +179,13 @@ export function PaperImportClient() {
   };
 
   const handleExtract = async () => {
-    if (!paperSource || !duplicateApproved || extractionStatus === "extracting") return;
+    if (!paper || !reimportApproved || extractionStatus === "extracting") return;
 
-    let source = paperSource;
+    let currentPaper = paper;
     const title = titleInput.trim();
     const doi = doiInput.trim();
 
-    if (source.requires_bibliographic_input && !title && !doi) {
+    if (currentPaper.requires_bibliographic_input && !title && !doi) {
       setExtractionStatus("error");
       setExtractionError("Occurrence抽出を続けるにはタイトルまたはDOIが必要です。");
       return;
@@ -195,9 +196,9 @@ export function PaperImportClient() {
     setExtractionResult(null);
 
     try {
-      if (source.requires_bibliographic_input) {
-        const metadata = await apiFetch<UpdatePaperSourceMetadataResponse>(
-          `/paper-sources/${source.source_kind}/${source.source_id}/bibliographic-metadata`,
+      if (currentPaper.requires_bibliographic_input) {
+        const metadata = await apiFetch<UpdatePaperMetadataResponse>(
+          `/paper-sources/paper/${currentPaper.source_id}/bibliographic-metadata`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -208,18 +209,18 @@ export function PaperImportClient() {
           },
         );
 
-        source = {
-          ...source,
+        currentPaper = {
+          ...currentPaper,
           doi: metadata.doi,
           title: metadata.title,
           requires_bibliographic_input: metadata.requires_bibliographic_input,
         };
-        setPaperSource(source);
+        setPaper(currentPaper);
         setTitleInput(metadata.title ?? title);
         setDoiInput(metadata.doi ?? doi);
       }
 
-      const result = await extractPaperSource(source.source_kind, source.source_id);
+      const result = await extractPaper(currentPaper.source_id);
       setExtractionResult(result);
       setExtractionStatus("success");
     } catch (error: unknown) {
@@ -261,7 +262,7 @@ export function PaperImportClient() {
           </div>
           <form className="px-5 py-6" onSubmit={handleUpload}>
             <p className="mb-5 text-sm leading-6 text-[#526168]">
-              PDFを送信するとSHA-256で既存ファイルを確認します。同一PDFがある場合は既存データを再利用します。
+              PDFを送信するとSHA-256で重複を確認します。未登録の同一PDFは既存の保存データから処理を再開します。
             </p>
             <input
               type="file"
@@ -296,32 +297,30 @@ export function PaperImportClient() {
           </form>
         </section>
 
-        {paperSource && (
+        {paper && (
           <section className="mt-6 overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
             <div className="border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3">
               <h2 className="text-sm font-medium text-[#526168]">2. 書誌情報の確認</h2>
             </div>
             <div className="px-5 py-6">
               <div className="mb-5 rounded-md border border-[#bfd8c7] bg-[#f3faf5] px-4 py-3 text-sm text-[#345d40]">
-                {paperSource.duplicate
-                  ? duplicateApproved
-                    ? "既存のPDF・書誌情報を再利用します。GarageとPostgreSQLへの重複保存は行いません。"
-                    : "再インポートを中止しました。"
-                  : "PDFを保存し、GROBIDによる書誌情報抽出が完了しました。"}
+                {paper.duplicate
+                  ? reimportApproved
+                    ? "登録済み論文を再処理します。既存のPDFとpapersレコードをそのまま再利用します。"
+                    : "再登録処理を中止しました。"
+                  : "論文PDFを保存し、書誌情報の確認準備ができました。"}
               </div>
 
               <dl className="mb-5 grid gap-2 text-sm text-[#526168] sm:grid-cols-[9rem_1fr]">
                 <dt>ファイル名</dt>
-                <dd className="break-all">{paperSource.original_filename ?? selectedFile?.name ?? "-"}</dd>
-                <dt>Source</dt>
-                <dd>{paperSource.source_kind}</dd>
-                <dt>Source ID</dt>
-                <dd className="break-all font-mono text-xs">{paperSource.source_id}</dd>
+                <dd className="break-all">{paper.original_filename ?? selectedFile?.name ?? "-"}</dd>
+                <dt>Paper ID</dt>
+                <dd className="break-all font-mono text-xs">{paper.source_id}</dd>
                 <dt>SHA-256</dt>
-                <dd className="break-all font-mono text-xs">{paperSource.sha256}</dd>
+                <dd className="break-all font-mono text-xs">{paper.sha256}</dd>
               </dl>
 
-              {duplicateApproved && (
+              {reimportApproved && (
                 <>
                   <div className="grid gap-4">
                     <label className="block">
@@ -330,7 +329,7 @@ export function PaperImportClient() {
                         type="text"
                         value={titleInput}
                         onChange={(event) => setTitleInput(event.target.value)}
-                        readOnly={Boolean(paperSource.title)}
+                        readOnly={Boolean(paper.title)}
                         placeholder="取得できなかった場合は入力してください"
                         className="w-full rounded-md border border-[#c9d2d6] px-3 py-2.5 text-sm read-only:bg-[#f5f7f8]"
                       />
@@ -341,14 +340,14 @@ export function PaperImportClient() {
                         type="text"
                         value={doiInput}
                         onChange={(event) => setDoiInput(event.target.value)}
-                        readOnly={Boolean(paperSource.doi)}
+                        readOnly={Boolean(paper.doi)}
                         placeholder="10.xxxx/... または https://doi.org/..."
                         className="w-full rounded-md border border-[#c9d2d6] px-3 py-2.5 text-sm read-only:bg-[#f5f7f8]"
                       />
                     </label>
                   </div>
 
-                  {paperSource.requires_bibliographic_input && (
+                  {paper.requires_bibliographic_input && (
                     <p className="mt-3 text-sm text-[#8b641f]">
                       タイトルとDOIを取得できませんでした。どちらか一方を入力してください。
                     </p>
@@ -420,12 +419,9 @@ export function PaperImportClient() {
   );
 }
 
-async function extractPaperSource(
-  sourceKind: SourceKind,
-  sourceId: string,
-): Promise<ExtractPaperSourceOccurrencesResponse> {
+async function extractPaper(paperId: string): Promise<ExtractPaperOccurrencesResponse> {
   const response = await fetch(
-    `/api/paper-sources/${encodeURIComponent(sourceKind)}/${encodeURIComponent(sourceId)}/extract-occurrences`,
+    `/api/papers/${encodeURIComponent(paperId)}/extract-occurrences`,
     {
       method: "POST",
       credentials: "include",
@@ -435,13 +431,13 @@ async function extractPaperSource(
   if (!response.ok) {
     const body = await readResponseBody(response);
     throw new ApiError(
-      `Paper source extraction failed with status ${response.status}`,
+      `Paper occurrence extraction failed with status ${response.status}`,
       response.status,
       body,
     );
   }
 
-  return (await response.json()) as ExtractPaperSourceOccurrencesResponse;
+  return (await response.json()) as ExtractPaperOccurrencesResponse;
 }
 
 function getUploadErrorMessage(error: unknown): string {
