@@ -345,7 +345,7 @@ async fn build_request_parts(
         "min_p": 0.0,
         "presence_penalty": 2.0,
         "repeat_penalty": 1.0,
-        "max_tokens": 16384,
+        "max_tokens": 32768,
         "stream": false,
         "chat_template_kwargs": {
             "enable_thinking": false
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(requests[0]["min_p"], 0.0);
         assert_eq!(requests[0]["presence_penalty"], 2.0);
         assert_eq!(requests[0]["repeat_penalty"], 1.0);
-        assert_eq!(requests[0]["max_tokens"], 16384);
+        assert_eq!(requests[0]["max_tokens"], 32768);
         assert_eq!(requests[0]["stream"], false);
         assert_eq!(
             requests[0]["chat_template_kwargs"]["enable_thinking"],
