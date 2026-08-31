@@ -8,6 +8,7 @@ use axum::{
 pub mod extraction;
 pub mod fulltext;
 pub mod gbif;
+pub mod gbif_handler;
 pub mod grobid;
 mod grobid_client_api;
 pub mod llama;
@@ -34,6 +35,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/paper-sources/{source_kind}/{source_id}/extract-occurrences",
             post(source_handler::extract_occurrences),
+        )
+        .route(
+            "/papers/{paper_id}/resolve-taxa",
+            post(gbif_handler::resolve_taxa),
         )
         .route(
             "/papers/{paper_id}/occurrences",
