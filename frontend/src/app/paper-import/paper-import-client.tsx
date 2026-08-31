@@ -46,6 +46,19 @@ type UpdatePaperMetadataResponse = {
 type ExtractPaperOccurrencesResponse = {
   source_kind: "paper";
   source_id: string;
+  occurrences: Array<Omit<PaperOccurrenceCandidate, "toTaxon">>;
+};
+
+type ResolvePaperTaxaResponse = {
+  matches: Array<{
+    scientificName: string;
+    toTaxon: string | null;
+  }>;
+};
+
+type ReviewedPaperOccurrencesResponse = {
+  source_kind: "paper";
+  source_id: string;
   occurrences: PaperOccurrenceCandidate[];
 };
 
@@ -63,7 +76,7 @@ export function PaperImportClient() {
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>("idle");
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extractionResult, setExtractionResult] =
-    useState<ExtractPaperOccurrencesResponse | null>(null);
+    useState<ReviewedPaperOccurrencesResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -217,8 +230,22 @@ export function PaperImportClient() {
         setDoiInput(metadata.doi ?? doi);
       }
 
-      const result = await extractPaper(currentPaper.source_id);
-      setExtractionResult(result);
+      const extracted = await extractPaper(currentPaper.source_id);
+      const resolved = await resolvePaperTaxa(
+        currentPaper.source_id,
+        extracted.occurrences.map((occurrence) => occurrence.scientificName),
+      );
+
+      const occurrences = extracted.occurrences.map((occurrence, index) => ({
+        ...occurrence,
+        toTaxon: resolved.matches[index]?.toTaxon ?? null,
+      }));
+
+      setExtractionResult({
+        source_kind: extracted.source_kind,
+        source_id: extracted.source_id,
+        occurrences,
+      });
       setExtractionStatus("success");
     } catch (error: unknown) {
       setExtractionStatus("error");
@@ -364,7 +391,7 @@ export function PaperImportClient() {
                       className="rounded-md bg-[#31434b] px-5 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-[#9ca8ad]"
                     >
                       {extractionStatus === "extracting"
-                        ? "LLMで抽出中..."
+                        ? "LLMで抽出・GBIF照合中..."
                         : "この論文からOccurrenceを抽出"}
                     </button>
                   </div>
@@ -381,7 +408,7 @@ export function PaperImportClient() {
             </div>
             <div className="px-5 py-6">
               <p className="mb-6 text-sm leading-6 text-[#526168]">
-                抽出された各Occurrenceを通常のデータ登録画面と同じ項目で確認・修正できます。最下部の一括登録でまとめて保存します。
+                LLMが抽出した学名はscientificNameとして保持し、Rust側のGBIF照合で解決できた分類だけをtoTaxonへ設定しています。各Occurrenceを確認・修正して一括登録できます。
               </p>
               <PaperOccurrenceBulkEditor
                 key={`${extractionResult.source_id}-${extractionResult.occurrences.length}`}
@@ -417,6 +444,22 @@ async function extractPaper(paperId: string): Promise<ExtractPaperOccurrencesRes
   return (await response.json()) as ExtractPaperOccurrencesResponse;
 }
 
+async function resolvePaperTaxa(
+  paperId: string,
+  scientificNames: string[],
+): Promise<ResolvePaperTaxaResponse> {
+  if (scientificNames.length === 0) return { matches: [] };
+
+  return apiFetch<ResolvePaperTaxaResponse>(
+    `/papers/${encodeURIComponent(paperId)}/resolve-taxa`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scientificNames }),
+    },
+  );
+}
+
 function getUploadErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) {
     return "PDFの送信に失敗しました。";
@@ -437,7 +480,7 @@ function getUploadErrorMessage(error: unknown): string {
 
 function getExtractionErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) {
-    return "Occurrence抽出に失敗しました。";
+    return "Occurrence抽出またはGBIF照合に失敗しました。";
   }
   switch (error.status) {
     case 401:
