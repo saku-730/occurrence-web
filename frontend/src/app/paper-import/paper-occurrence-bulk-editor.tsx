@@ -84,6 +84,7 @@ export function PaperOccurrenceBulkEditor({
   const [editors, setEditors] = useState<EditorState[]>(() =>
     candidates.map((candidate, index) => buildEditorState(candidate, index)),
   );
+  const nextEditorKey = useRef(candidates.length);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<TermsStatus>("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -126,6 +127,12 @@ export function PaperOccurrenceBulkEditor({
 
   function removeEditor(key: number) {
     setEditors((current) => current.filter((editor) => editor.key !== key));
+    setErrorMessage(null);
+  }
+
+  function addEditor() {
+    const key = nextEditorKey.current++;
+    setEditors((current) => [...current, buildEmptyEditorState(key)]);
     setErrorMessage(null);
   }
 
@@ -195,10 +202,6 @@ export function PaperOccurrenceBulkEditor({
     }
   }
 
-  if (candidates.length === 0) {
-    return <p className="text-sm text-[#65737a]">Occurrence候補は抽出されませんでした。</p>;
-  }
-
   return (
     <div>
       {editors.length > 0 ? (
@@ -236,7 +239,15 @@ export function PaperOccurrenceBulkEditor({
         </section>
       ) : null}
 
-      <div className="mt-8 flex justify-end border-t border-[#d8dfe2] pt-6">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-[#d8dfe2] pt-6">
+        <button
+          className="h-11 rounded-md border border-[#176b57] bg-white px-5 text-sm font-medium text-[#176b57] hover:bg-[#f2f8f6] disabled:cursor-not-allowed disabled:border-[#aeb8bc] disabled:text-[#8a969b]"
+          disabled={isSubmitting || Boolean(registered)}
+          onClick={addEditor}
+          type="button"
+        >
+          Occurrenceを追加
+        </button>
         <button
           className="h-11 rounded-md bg-[#176b57] px-7 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
           disabled={isSubmitting || Boolean(registered) || editors.length === 0}
@@ -591,6 +602,21 @@ function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): E
     nextId,
     selectedFiles: [],
     taxonLabels,
+    isPublic: true,
+  };
+}
+
+function buildEmptyEditorState(key: number): EditorState {
+  return {
+    key,
+    rows: [
+      { id: 1, predicate: DWC_SCIENTIFIC_NAME_URI, object: "" },
+      { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
+      { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
+    ],
+    nextId: 4,
+    selectedFiles: [],
+    taxonLabels: {},
     isPublic: true,
   };
 }
