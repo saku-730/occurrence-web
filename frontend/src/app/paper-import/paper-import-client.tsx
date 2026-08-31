@@ -162,8 +162,6 @@ export function PaperImportClient() {
       setDoiInput(result.doi ?? "");
       setUploadStatus("success");
 
-      // duplicate=true means this paper already has occurrence data registered.
-      // Reprocessing never changes the backend paper status back to unregistered.
       if (result.duplicate) {
         const approved = window.confirm(
           "この論文からはすでにOccurrenceデータを登録済みです。もう一度登録処理を行いますか？",
@@ -393,6 +391,7 @@ export function PaperImportClient() {
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">#</th>
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">学名</th>
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">Locality</th>
+                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">登録</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -404,6 +403,17 @@ export function PaperImportClient() {
                           </td>
                           <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
                             {occurrence.locality ?? "-"}
+                          </td>
+                          <td className="border-b border-[#e5eaec] px-4 py-3">
+                            <a
+                              className="font-medium text-[#176b57] hover:underline"
+                              href={paperRegistrationHref(
+                                extractionResult.source_id,
+                                occurrence,
+                              )}
+                            >
+                              データ登録画面で確認
+                            </a>
                           </td>
                         </tr>
                       ))}
@@ -440,6 +450,18 @@ async function extractPaper(paperId: string): Promise<ExtractPaperOccurrencesRes
   return (await response.json()) as ExtractPaperOccurrencesResponse;
 }
 
+function paperRegistrationHref(
+  paperId: string,
+  occurrence: OccurrenceCandidate,
+): string {
+  const params = new URLSearchParams({
+    paperId,
+    scientificName: occurrence.scientificName,
+  });
+  if (occurrence.locality) params.set("locality", occurrence.locality);
+  return `/paper-import/register?${params.toString()}`;
+}
+
 function getUploadErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) {
     return "PDFの送信に失敗しました。";
@@ -452,7 +474,7 @@ function getUploadErrorMessage(error: unknown): string {
     case 415:
       return "PDFファイルのみアップロードできます。";
     case 502:
-      return "PDFの保存またはGROBID処理に失敗しました。";
+      return "PDFの保存に失敗しました。";
     default:
       return getBackendMessage(error.body) ?? `PDFの送信に失敗しました（HTTP ${error.status}）。`;
   }
