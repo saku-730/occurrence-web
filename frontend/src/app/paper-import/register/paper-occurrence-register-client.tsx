@@ -55,12 +55,21 @@ export function PaperOccurrenceRegisterClient({
   paperId,
   scientificName,
   locality,
+  decimalLatitude,
+  decimalLongitude,
 }: {
   paperId: string;
   scientificName: string;
   locality: string;
+  decimalLatitude: string;
+  decimalLongitude: string;
 }) {
-  const initialRows = buildInitialRows(scientificName, locality);
+  const initialRows = buildInitialRows(
+    scientificName,
+    locality,
+    decimalLatitude,
+    decimalLongitude,
+  );
   const [rows, setRows] = useState<StatementRow[]>(initialRows);
   const nextId = useRef(initialRows.length + 1);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -399,11 +408,16 @@ export function PaperOccurrenceRegisterClient({
   );
 }
 
-function buildInitialRows(scientificName: string, locality: string): StatementRow[] {
+function buildInitialRows(
+  scientificName: string,
+  locality: string,
+  decimalLatitude: string,
+  decimalLongitude: string,
+): StatementRow[] {
   const rows: StatementRow[] = [
     { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: scientificName.trim() },
-    { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
-    { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
+    { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: decimalLongitude.trim() },
+    { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: decimalLatitude.trim() },
   ];
   if (locality.trim()) {
     rows.push({ id: 4, predicate: DWC_LOCALITY_URI, object: locality.trim() });
@@ -747,6 +761,7 @@ function registrationErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return "登録処理に失敗しました";
   if (error.status === 400) return "入力したRDFデータが不正です";
   if (error.status === 401) return "ログインセッションが無効です";
+  if (error.status === 403) return "添付ファイルをこのデータへ関連付ける権限がありません";
   if (error.status === 404) return "元論文が見つかりません";
   if (error.status === 502) return "データ保存先との通信に失敗しました";
   return "登録処理に失敗しました";
