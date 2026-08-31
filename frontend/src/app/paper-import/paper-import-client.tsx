@@ -285,9 +285,6 @@ export function PaperImportClient() {
             <h2 className="text-sm font-medium text-[#526168]">1. 論文PDF</h2>
           </div>
           <form className="px-5 py-6" onSubmit={handleUpload}>
-            <p className="mb-5 text-sm leading-6 text-[#526168]">
-              PDFを送信するとSHA-256で重複を確認します。未登録の同一PDFは既存の保存データから処理を再開します。
-            </p>
             <input
               type="file"
               accept="application/pdf,.pdf"
@@ -340,8 +337,6 @@ export function PaperImportClient() {
                 <dd className="break-all">{paper.original_filename ?? selectedFile?.name ?? "-"}</dd>
                 <dt>Paper ID</dt>
                 <dd className="break-all font-mono text-xs">{paper.source_id}</dd>
-                <dt>SHA-256</dt>
-                <dd className="break-all font-mono text-xs">{paper.sha256}</dd>
               </dl>
 
               {reimportApproved && (

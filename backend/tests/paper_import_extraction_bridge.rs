@@ -1,4 +1,7 @@
-use std::{path::Path, sync::{Arc, Mutex}};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use axum::body::Bytes;
 use backend::features::{
@@ -12,7 +15,7 @@ use backend::features::{
             PaperOccurrenceExtractor,
         },
         llama::{
-            OccurrenceCandidate, OccurrenceExtractionResult, PaperLlmExtractionError,
+            LlamaError, OccurrenceCandidate, OccurrenceExtractionResult, PaperLlmExtractionError,
         },
     },
 };
@@ -27,6 +30,8 @@ const PDF_BYTES: &[u8] = b"%PDF-1.7\nbridge-test-pdf\n%%EOF\n";
 struct FakeObjectStore {
     bytes: Vec<u8>,
     gets: Arc<Mutex<Vec<(String, String)>>>,
+    fail_get: bool,
+    stream_error_after_first_chunk: bool,
 }
 
 impl FakeObjectStore {
@@ -34,6 +39,26 @@ impl FakeObjectStore {
         Self {
             bytes,
             gets: Arc::new(Mutex::new(Vec::new())),
+            fail_get: false,
+            stream_error_after_first_chunk: false,
+        }
+    }
+
+    fn failing_get() -> Self {
+        Self {
+            bytes: Vec::new(),
+            gets: Arc::new(Mutex::new(Vec::new())),
+            fail_get: true,
+            stream_error_after_first_chunk: false,
+        }
+    }
+
+    fn failing_stream(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            gets: Arc::new(Mutex::new(Vec::new())),
+            fail_get: false,
+            stream_error_after_first_chunk: true,
         }
     }
 
@@ -57,11 +82,18 @@ impl MediaObjectStore for FakeObjectStore {
             .expect("get lock poisoned")
             .push((input.bucket, input.object_key));
 
+        if self.fail_get {
+            return Err(MediaServiceError::ObjectStoreFailed);
+        }
+
         let midpoint = self.bytes.len() / 2;
-        let chunks = vec![
+        let mut chunks = vec![
             Ok(Bytes::copy_from_slice(&self.bytes[..midpoint])),
             Ok(Bytes::copy_from_slice(&self.bytes[midpoint..])),
         ];
+        if self.stream_error_after_first_chunk {
+            chunks[1] = Err(MediaServiceError::ObjectStoreFailed);
+        }
         Ok(Box::pin(stream::iter(chunks)))
     }
 
@@ -73,17 +105,33 @@ impl MediaObjectStore for FakeObjectStore {
 #[derive(Clone)]
 struct RecordingExtractor {
     calls: Arc<Mutex<Vec<Vec<u8>>>>,
+    paths: Arc<Mutex<Vec<PathBuf>>>,
+    fail: bool,
 }
 
 impl RecordingExtractor {
     fn new() -> Self {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        }
+    }
+
+    fn failing() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            fail: true,
         }
     }
 
     fn calls(&self) -> Vec<Vec<u8>> {
         self.calls.lock().expect("extractor lock poisoned").clone()
+    }
+
+    fn paths(&self) -> Vec<PathBuf> {
+        self.paths.lock().expect("extractor path lock poisoned").clone()
     }
 }
 
@@ -100,6 +148,15 @@ impl PaperOccurrenceExtractor for RecordingExtractor {
             .lock()
             .expect("extractor lock poisoned")
             .push(bytes);
+
+        self.paths
+            .lock()
+            .expect("extractor path lock poisoned")
+            .push(pdf_path.to_path_buf());
+
+        if self.fail {
+            return Err(PaperLlmExtractionError::Llama(LlamaError::RequestFailed));
+        }
 
         Ok(OccurrenceExtractionResult {
             occurrences: vec![OccurrenceCandidate {
@@ -251,5 +308,155 @@ async fn service_rejects_corrupted_garage_pdf_and_returns_import_to_staged() {
         .expect("paper import status should be readable");
     assert_eq!(status, "staged");
 
+    cleanup(&db, import_id, user_id).await;
+}
+
+async fn import_status(db: &PgPool, import_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM paper_imports WHERE id = $1")
+        .bind(import_id)
+        .fetch_one(db)
+        .await
+        .expect("paper import status should be readable")
+}
+
+#[tokio::test]
+async fn service_restores_staged_after_object_store_or_extractor_failure() {
+    let db = test_db_pool().await;
+
+    let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
+    let store = FakeObjectStore::failing_get();
+    let extractor = RecordingExtractor::new();
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        user_id,
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("object-store failure should abort extraction");
+    assert!(matches!(error, PaperOccurrenceExtractionError::ObjectStoreFailed));
+    assert!(extractor.calls().is_empty());
+    assert_eq!(import_status(&db, import_id).await, "staged");
+    cleanup(&db, import_id, user_id).await;
+
+    let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
+    let store = FakeObjectStore::failing_stream(PDF_BYTES.to_vec());
+    let extractor = RecordingExtractor::new();
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        user_id,
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("mid-stream object-store failure should abort extraction");
+    assert!(matches!(error, PaperOccurrenceExtractionError::ObjectStoreFailed));
+    assert!(extractor.calls().is_empty());
+    assert_eq!(import_status(&db, import_id).await, "staged");
+    cleanup(&db, import_id, user_id).await;
+
+    let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
+    let store = FakeObjectStore::new(PDF_BYTES.to_vec());
+    let extractor = RecordingExtractor::failing();
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        user_id,
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("extractor failure should abort extraction");
+    assert!(matches!(error, PaperOccurrenceExtractionError::Extractor(_)));
+    assert_eq!(extractor.calls(), vec![PDF_BYTES.to_vec()]);
+    assert_eq!(import_status(&db, import_id).await, "staged");
+    cleanup(&db, import_id, user_id).await;
+}
+
+#[tokio::test]
+async fn service_rejects_other_user_or_non_staged_import_without_reading_pdf() {
+    let db = test_db_pool().await;
+    let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
+    let store = FakeObjectStore::new(PDF_BYTES.to_vec());
+    let extractor = RecordingExtractor::new();
+
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        Uuid::new_v4(),
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("another user must not start extraction");
+    assert!(matches!(error, PaperOccurrenceExtractionError::NotFound));
+    assert!(store.get_requests().is_empty());
+    assert!(extractor.calls().is_empty());
+    assert_eq!(import_status(&db, import_id).await, "staged");
+
+    sqlx::query("UPDATE paper_imports SET status = 'reviewing' WHERE id = $1")
+        .bind(import_id)
+        .execute(&db)
+        .await
+        .expect("test import status should be updated");
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        user_id,
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("only staged imports may start extraction");
+    assert!(matches!(error, PaperOccurrenceExtractionError::NotFound));
+    assert!(store.get_requests().is_empty());
+    assert!(extractor.calls().is_empty());
+
+    cleanup(&db, import_id, user_id).await;
+}
+
+#[tokio::test]
+async fn service_rejects_non_pdf_signature_and_returns_import_to_staged() {
+    let db = test_db_pool().await;
+    let non_pdf_bytes = b"not a PDF despite matching metadata";
+    let (import_id, user_id, _, _) = create_staged_import(&db, non_pdf_bytes).await;
+    let store = FakeObjectStore::new(non_pdf_bytes.to_vec());
+    let extractor = RecordingExtractor::new();
+
+    let error = PaperOccurrenceExtractionService::extract(
+        import_id,
+        user_id,
+        &store,
+        &extractor,
+        &db,
+    )
+    .await
+    .expect_err("non-PDF signature must not reach the extractor");
+
+    assert!(matches!(error, PaperOccurrenceExtractionError::InvalidStoredPdf));
+    assert!(extractor.calls().is_empty());
+    assert_eq!(import_status(&db, import_id).await, "staged");
+    cleanup(&db, import_id, user_id).await;
+}
+
+#[tokio::test]
+async fn service_removes_temporary_pdf_after_extraction() {
+    let db = test_db_pool().await;
+    let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
+    let store = FakeObjectStore::new(PDF_BYTES.to_vec());
+    let extractor = RecordingExtractor::new();
+
+    PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+        .await
+        .expect("extraction should succeed");
+
+    let paths = extractor.paths();
+    assert_eq!(paths.len(), 1);
+    assert!(
+        !paths[0].exists(),
+        "temporary downloaded PDF must be removed after extractor returns"
+    );
     cleanup(&db, import_id, user_id).await;
 }

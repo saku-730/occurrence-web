@@ -373,6 +373,11 @@
 
 ### GROBID client / parser
 
+- [x] occurrence抽出bridgeはGarage取得失敗またはExtractor失敗時に`staged`へ戻し、再試行可能にする`service_restores_staged_after_object_store_or_extractor_failure`
+- [x] occurrence抽出bridgeは所有者以外または`staged`以外のimportを取得・Extractor呼出なしで拒否する`service_rejects_other_user_or_non_staged_import_without_reading_pdf`
+- [x] occurrence抽出bridgeはサイズ・SHA-256が一致していても`%PDF-`で始まらないGarage objectを拒否する`service_rejects_non_pdf_signature_and_returns_import_to_staged`
+- [x] occurrence抽出bridgeはExtractor終了後に一時PDFを削除する`service_removes_temporary_pdf_after_extraction`
+
 - [x] llama clientは固定prompt・抽出テキスト・全ページJPEGを同一`/v1/chat/completions` requestのcontent配列へ順序どおり送り、正常なOccurrence JSONを返す`llama_client_sends_multimodal_request_and_parses_occurrences`
 - [x] llama clientは空テキスト時に画像参照用メッセージを送り、画像bytesを完全なdata URIとして送る`multimodal_request_uses_image_fallback_for_empty_text_and_encodes_bytes`
 - [x] llama clientは500、choicesなし、assistant contentの不正JSON、空scientificName、不正緯度経度を拒否する`llama_client_rejects_upstream_and_invalid_occurrence_responses`
