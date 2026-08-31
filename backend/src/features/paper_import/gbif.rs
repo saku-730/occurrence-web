@@ -73,10 +73,16 @@ impl GbifClient {
             return Ok(None);
         }
 
+        // reqwest is built with default features disabled in this project, so
+        // RequestBuilder::query() is unavailable. Build the encoded query on
+        // the URL directly instead.
+        let mut url = reqwest::Url::parse(&self.endpoint)
+            .map_err(|_| GbifMatchError::InvalidConfiguration)?;
+        url.query_pairs_mut().append_pair("name", scientific_name);
+
         let response = self
             .http
-            .get(&self.endpoint)
-            .query(&[("name", scientific_name)])
+            .get(url)
             .send()
             .await
             .map_err(|_| GbifMatchError::RequestFailed)?;
