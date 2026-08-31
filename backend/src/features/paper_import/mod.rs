@@ -5,25 +5,18 @@ use axum::{
     routing::{patch, post},
 };
 
-pub mod dto;
 pub mod extraction;
-pub mod extraction_handler;
 pub mod fulltext;
 pub mod grobid;
 mod grobid_client_api;
-pub mod handler;
 pub mod llama;
 pub mod preprocess;
 pub mod repository;
 pub mod service;
 pub mod source_handler;
-pub mod staging;
-pub mod staging_dto;
-pub mod staging_handler;
 
-// paper_importsは未正式登録PDFのsource情報を保持するために使う。
-// 新フローではstaged/extracting/reviewingの状態遷移をAPIの条件にしない。
-// 同一PDFはSHA-256で既存sourceを返し、Garage/PostgreSQLへ重複保存しない。
+// papers is the single PostgreSQL source of truth for paper PDFs.
+// status is intentionally limited to unregistered/registered occurrence data.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route(
