@@ -507,7 +507,7 @@ mod tests {
         json!({
             "choices": [{
                 "message": {
-                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo"}]}"#
                 }
             }]
         })
@@ -635,7 +635,7 @@ mod tests {
         assert!(content[1]["text"]
             .as_str()
             .is_some_and(|text| text.contains("テキストは抽出できませんでした")));
-        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZQ==");
+        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
         assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
     }
 
@@ -657,12 +657,12 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\" \",\"locality\":null,\"decimalLatitude\":null,\"decimalLongitude\":null}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
                 "invalid_occurrence",
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\"A species\",\"locality\":null,\"decimalLatitude\":91.0,\"decimalLongitude\":0.0}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
                 "invalid_occurrence",
             ),
         ];
@@ -691,7 +691,7 @@ mod tests {
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":null,\"decimalLatitude\":null,\"decimalLongitude\":null,\"inventedField\":\"must not be accepted\"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"decimalLatitude":null,"decimalLongitude":null,"inventedField":"must not be accepted"}]}"#
                 }
             }]
         });
