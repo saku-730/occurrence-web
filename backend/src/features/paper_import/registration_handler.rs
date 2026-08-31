@@ -28,14 +28,11 @@ use crate::{
     state::AppState,
 };
 
-use super::{gbif::GbifClient, repository::PaperRepository};
+use super::repository::PaperRepository;
 
 const OCCURRENCE_GRAPH_URI: &str = "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_REFERENCES_PREDICATE_URI: &str =
     "http://rs.tdwg.org/dwc/terms/associatedReferences";
-const SCIENTIFIC_NAME_PREDICATE_URI: &str =
-    "http://rs.tdwg.org/dwc/terms/scientificName";
-const TO_TAXON_PREDICATE_URI: &str = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const SOURCE_PAPER_PREDICATE_URI: &str = "https://bio-database.net/terms/sourcePaper";
 const PAPER_URI_BASE: &str = "https://bio-database.net/papers/";
 const MAX_BATCH_OCCURRENCES: usize = 1000;
@@ -232,11 +229,9 @@ async fn register_one_occurrence(
     )
     .await?;
 
-    // Resolve the final user-confirmed scientificName in Rust. GBIF lookup is
-    // best effort: network failure or an uncertain match leaves scientificName
-    // intact and registration continues without an automatic toTaxon.
-    let rdf_body = add_gbif_to_taxon(body).await?;
-    let rdf_body = add_paper_provenance(&rdf_body, paper_id, associated_reference)?;
+    // Taxonomy has already been resolved and shown to the user before this
+    // point. Persist exactly the reviewed RDF, adding only paper provenance.
+    let rdf_body = add_paper_provenance(body, paper_id, associated_reference)?;
 
     let output = OccurrenceService::create_occurrence(
         CreateOccurrenceInput {
@@ -342,74 +337,6 @@ async fn ensure_referenced_media_owned_by_user(
     }
 
     Ok(())
-}
-
-async fn add_gbif_to_taxon(
-    frontend_nquads: &[u8],
-) -> Result<Vec<u8>, PaperRegistrationError> {
-    let mut quads = RdfParser::from_format(RdfFormat::NQuads)
-        .for_slice(frontend_nquads)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| PaperRegistrationError::InvalidRdf)?;
-
-    if quads
-        .iter()
-        .any(|quad| quad.predicate.as_str() == TO_TAXON_PREDICATE_URI)
-    {
-        return Ok(frontend_nquads.to_vec());
-    }
-
-    let scientific_name_quads = quads
-        .iter()
-        .filter(|quad| quad.predicate.as_str() == SCIENTIFIC_NAME_PREDICATE_URI)
-        .filter_map(|quad| match &quad.object {
-            Term::Literal(value) => {
-                let name = value.value().trim();
-                (!name.is_empty()).then_some((
-                    name.to_string(),
-                    quad.subject.clone(),
-                    quad.graph_name.clone(),
-                ))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    if scientific_name_quads.is_empty() {
-        return Ok(frontend_nquads.to_vec());
-    }
-
-    let mut unique_names = scientific_name_quads
-        .iter()
-        .map(|(name, _, _)| name.clone())
-        .collect::<Vec<_>>();
-    unique_names.sort();
-    unique_names.dedup();
-    if unique_names.len() != 1 {
-        return Ok(frontend_nquads.to_vec());
-    }
-
-    let gbif = match GbifClient::new() {
-        Ok(client) => client,
-        Err(_) => return Ok(frontend_nquads.to_vec()),
-    };
-    let taxon_uri = match gbif.match_to_taxon(&unique_names[0]).await {
-        Ok(Some(uri)) => uri,
-        Ok(None) | Err(_) => return Ok(frontend_nquads.to_vec()),
-    };
-
-    let (_, subject, graph_name) = &scientific_name_quads[0];
-    let to_taxon =
-        NamedNode::new(TO_TAXON_PREDICATE_URI).map_err(|_| PaperRegistrationError::Internal)?;
-    let taxon = NamedNode::new(taxon_uri).map_err(|_| PaperRegistrationError::Internal)?;
-    quads.push(Quad::new(
-        subject.clone(),
-        to_taxon,
-        taxon,
-        graph_name.clone(),
-    ));
-
-    serialize_nquads(&quads)
 }
 
 fn add_paper_provenance(
