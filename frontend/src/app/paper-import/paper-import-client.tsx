@@ -412,9 +412,6 @@ export function PaperImportClient() {
               <h2 className="text-sm font-medium text-[#526168]">3. LLM抽出結果の確認・登録</h2>
             </div>
             <div className="px-5 py-6">
-              <p className="mb-6 text-sm leading-6 text-[#526168]">
-                LLMが抽出した学名はscientificNameとして保持します。Rust側のGBIF照合で解決できた場合だけ分類を表示し、分類名にはGBIFの著者名込み学名を表示します。
-              </p>
               <PaperOccurrenceBulkEditor
                 key={`${extractionResult.source_id}-${extractionResult.occurrences.length}`}
                 paperId={extractionResult.source_id}
