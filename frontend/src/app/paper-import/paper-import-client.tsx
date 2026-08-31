@@ -46,13 +46,16 @@ type UpdatePaperMetadataResponse = {
 type ExtractPaperOccurrencesResponse = {
   source_kind: "paper";
   source_id: string;
-  occurrences: Array<Omit<PaperOccurrenceCandidate, "toTaxon">>;
+  occurrences: Array<
+    Omit<PaperOccurrenceCandidate, "toTaxon" | "taxonScientificName">
+  >;
 };
 
 type ResolvePaperTaxaResponse = {
   matches: Array<{
     scientificName: string;
     toTaxon: string | null;
+    taxonScientificName: string | null;
   }>;
 };
 
@@ -239,6 +242,8 @@ export function PaperImportClient() {
       const occurrences = extracted.occurrences.map((occurrence, index) => ({
         ...occurrence,
         toTaxon: resolved.matches[index]?.toTaxon ?? null,
+        taxonScientificName:
+          resolved.matches[index]?.taxonScientificName ?? null,
       }));
 
       setExtractionResult({
@@ -285,6 +290,9 @@ export function PaperImportClient() {
             <h2 className="text-sm font-medium text-[#526168]">1. 論文PDF</h2>
           </div>
           <form className="px-5 py-6" onSubmit={handleUpload}>
+            <p className="mb-5 text-sm leading-6 text-[#526168]">
+              PDFを送信するとSHA-256で重複を確認します。未登録の同一PDFは既存の保存データから処理を再開します。
+            </p>
             <input
               type="file"
               accept="application/pdf,.pdf"
@@ -337,6 +345,8 @@ export function PaperImportClient() {
                 <dd className="break-all">{paper.original_filename ?? selectedFile?.name ?? "-"}</dd>
                 <dt>Paper ID</dt>
                 <dd className="break-all font-mono text-xs">{paper.source_id}</dd>
+                <dt>SHA-256</dt>
+                <dd className="break-all font-mono text-xs">{paper.sha256}</dd>
               </dl>
 
               {reimportApproved && (
@@ -403,7 +413,7 @@ export function PaperImportClient() {
             </div>
             <div className="px-5 py-6">
               <p className="mb-6 text-sm leading-6 text-[#526168]">
-                LLMが抽出した学名はscientificNameとして保持し、Rust側のGBIF照合で解決できた分類だけをtoTaxonへ設定しています。各Occurrenceを確認・修正して一括登録できます。
+                LLMが抽出した学名はscientificNameとして保持します。Rust側のGBIF照合で解決できた場合だけ分類を表示し、分類名にはGBIFの著者名込み学名を表示します。
               </p>
               <PaperOccurrenceBulkEditor
                 key={`${extractionResult.source_id}-${extractionResult.occurrences.length}`}
