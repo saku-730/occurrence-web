@@ -13,17 +13,20 @@ const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";
 const DWC_SCIENTIFIC_NAME_URI = "http://rs.tdwg.org/dwc/terms/scientificName";
+const DWC_SCIENTIFIC_NAME_LABEL = "scientificName";
 const DWC_DECIMAL_LONGITUDE_URI = "http://rs.tdwg.org/dwc/terms/decimalLongitude";
 const DWC_DECIMAL_LONGITUDE_LABEL = "経度";
 const DWC_DECIMAL_LATITUDE_URI = "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DWC_DECIMAL_LATITUDE_LABEL = "緯度";
 const DWC_LOCALITY_URI = "http://rs.tdwg.org/dwc/terms/locality";
+const DWC_LOCALITY_LABEL = "locality";
 const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
 const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
 const GBIF_SUGGEST_DEBOUNCE_MS = 300;
 
 export type PaperOccurrenceCandidate = {
   scientificName: string;
+  toTaxon: string | null;
   locality: string | null;
   decimalLatitude: number | null;
   decimalLongitude: number | null;
@@ -45,7 +48,6 @@ type EditorState = {
   rows: StatementRow[];
   nextId: number;
   selectedFiles: File[];
-  taxonScientificNames: Record<number, string>;
   isPublic: boolean;
 };
 
@@ -95,13 +97,17 @@ export function PaperOccurrenceBulkEditor({
       const visibleTerms = terms.filter(
         (term) =>
           term.uri !== DWCIRI_TO_TAXON_URI &&
+          term.uri !== DWC_SCIENTIFIC_NAME_URI &&
           term.uri !== DWC_DECIMAL_LONGITUDE_URI &&
-          term.uri !== DWC_DECIMAL_LATITUDE_URI,
+          term.uri !== DWC_DECIMAL_LATITUDE_URI &&
+          term.uri !== DWC_LOCALITY_URI,
       );
       setDarwinCoreTerms([
         { uri: DWCIRI_TO_TAXON_URI, local_name: DWCIRI_TO_TAXON_LABEL },
+        { uri: DWC_SCIENTIFIC_NAME_URI, local_name: DWC_SCIENTIFIC_NAME_LABEL },
         { uri: DWC_DECIMAL_LONGITUDE_URI, local_name: DWC_DECIMAL_LONGITUDE_LABEL },
         { uri: DWC_DECIMAL_LATITUDE_URI, local_name: DWC_DECIMAL_LATITUDE_LABEL },
+        { uri: DWC_LOCALITY_URI, local_name: DWC_LOCALITY_LABEL },
         ...visibleTerms,
       ]);
       setTermsStatus("loaded");
@@ -110,11 +116,9 @@ export function PaperOccurrenceBulkEditor({
     }
   }
 
-  function updateEditor(index: number, update: (editor: EditorState) => EditorState) {
+  function updateEditor(index: number, next: EditorState) {
     setEditors((current) =>
-      current.map((editor, currentIndex) =>
-        currentIndex === index ? update(editor) : editor,
-      ),
+      current.map((editor, currentIndex) => (currentIndex === index ? next : editor)),
     );
   }
 
@@ -127,8 +131,7 @@ export function PaperOccurrenceBulkEditor({
     const prepared: Array<{ statements: StatementRow[]; editor: EditorState }> = [];
     try {
       for (const [index, editor] of editors.entries()) {
-        let statements = validateStatementRows(editor.rows);
-        statements = normalizeTaxonStatements(statements, editor.taxonScientificNames);
+        const statements = validateStatementRows(editor.rows);
         validateSelectedFiles(editor.selectedFiles);
         if (statements.length === 0 && editor.selectedFiles.length === 0) {
           throw new Error(`Occurrence ${index + 1}: 項目または添付ファイルを1つ以上入力してください`);
@@ -162,9 +165,7 @@ export function PaperOccurrenceBulkEditor({
         const accessRightsUri = item.editor.isPublic
           ? PUBLIC_ACCESS_RIGHTS_URI
           : PRIVATE_ACCESS_RIGHTS_URI;
-        nquadsList.push(
-          buildOccurrenceNQuads(item.statements, mediaUris, accessRightsUri),
-        );
+        nquadsList.push(buildOccurrenceNQuads(item.statements, mediaUris, accessRightsUri));
       }
 
       setSubmissionMessage(`${nquadsList.length}件のOccurrenceを一括登録しています`);
@@ -203,7 +204,7 @@ export function PaperOccurrenceBulkEditor({
             darwinCoreTerms={darwinCoreTerms}
             termsStatus={termsStatus}
             onLoadTerms={() => void loadDarwinCoreTerms()}
-            onChange={(next) => updateEditor(index, () => next)}
+            onChange={(next) => updateEditor(index, next)}
           />
         ))}
       </div>
@@ -218,7 +219,7 @@ export function PaperOccurrenceBulkEditor({
         <section className="mt-6 rounded-md border border-[#9dbeb4] bg-[#f3faf5] px-5 py-4" aria-live="polite">
           <p className="font-medium">{registered.length}件のデータを登録しました</p>
           <p className="mt-2 text-sm text-[#526168]">
-            各Occurrenceに論文の出典情報とGBIFのtoTaxonを可能な範囲で自動付与し、paperをregisteredに更新しました。
+            確認画面に表示した分類・scientificNameと論文出典情報を保存し、paperをregisteredに更新しました。
           </p>
         </section>
       ) : null}
@@ -255,17 +256,89 @@ function OccurrenceEditorCard({
   onChange: (editor: EditorState) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scientificName =
+    editor.rows.find((row) => row.predicate === DWC_SCIENTIFIC_NAME_URI)?.object ?? "";
+
+  function replaceRows(rows: StatementRow[]) {
+    onChange({ ...editor, rows });
+  }
 
   function updateRow(id: number, field: "predicate" | "object", value: string) {
-    let nextTaxonNames = editor.taxonScientificNames;
-    if (field === "predicate" && value.trim() !== DWCIRI_TO_TAXON_URI && id in nextTaxonNames) {
-      nextTaxonNames = { ...nextTaxonNames };
-      delete nextTaxonNames[id];
+    replaceRows(
+      editor.rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)),
+    );
+  }
+
+  function updateScientificName(value: string) {
+    const existing = editor.rows.find((row) => row.predicate === DWC_SCIENTIFIC_NAME_URI);
+    if (existing) {
+      replaceRows(
+        editor.rows.map((row) =>
+          row.id === existing.id ? { ...row, object: value } : row,
+        ),
+      );
+      return;
     }
+
     onChange({
       ...editor,
-      rows: editor.rows.map((row) => (row.id === id ? { ...row, [field]: value } : row)),
-      taxonScientificNames: nextTaxonNames,
+      rows: [
+        ...editor.rows,
+        { id: editor.nextId, predicate: DWC_SCIENTIFIC_NAME_URI, object: value },
+      ],
+      nextId: editor.nextId + 1,
+    });
+  }
+
+  function updateTaxonAndScientificName(taxonRowId: number, taxonUri: string, name: string) {
+    let hasScientificName = false;
+    const rows = editor.rows.map((row) => {
+      if (row.id === taxonRowId) return { ...row, object: taxonUri };
+      if (row.predicate === DWC_SCIENTIFIC_NAME_URI) {
+        hasScientificName = true;
+        return { ...row, object: name };
+      }
+      return row;
+    });
+
+    if (hasScientificName) {
+      replaceRows(rows);
+      return;
+    }
+
+    onChange({
+      ...editor,
+      rows: [
+        ...rows,
+        { id: editor.nextId, predicate: DWC_SCIENTIFIC_NAME_URI, object: name },
+      ],
+      nextId: editor.nextId + 1,
+    });
+  }
+
+  function clearTaxonAndUpdateScientificName(taxonRowId: number, name: string) {
+    let hasScientificName = false;
+    const rows = editor.rows.map((row) => {
+      if (row.id === taxonRowId) return { ...row, object: "" };
+      if (row.predicate === DWC_SCIENTIFIC_NAME_URI) {
+        hasScientificName = true;
+        return { ...row, object: name };
+      }
+      return row;
+    });
+
+    if (hasScientificName) {
+      replaceRows(rows);
+      return;
+    }
+
+    onChange({
+      ...editor,
+      rows: [
+        ...rows,
+        { id: editor.nextId, predicate: DWC_SCIENTIFIC_NAME_URI, object: name },
+      ],
+      nextId: editor.nextId + 1,
     });
   }
 
@@ -278,13 +351,7 @@ function OccurrenceEditorCard({
   }
 
   function removeRow(id: number) {
-    const names = { ...editor.taxonScientificNames };
-    delete names[id];
-    onChange({
-      ...editor,
-      rows: editor.rows.filter((row) => row.id !== id),
-      taxonScientificNames: names,
-    });
+    onChange({ ...editor, rows: editor.rows.filter((row) => row.id !== id) });
   }
 
   function addFiles(files: FileList | null) {
@@ -344,18 +411,28 @@ function OccurrenceEditorCard({
               />
             </div>
 
-            <ObjectValueField
-              disabled={disabled}
-              onChange={(value) => updateRow(row.id, "object", value)}
-              onTaxonSelect={(scientificName) => {
-                const names = { ...editor.taxonScientificNames };
-                if (scientificName.trim()) names[row.id] = scientificName;
-                else delete names[row.id];
-                onChange({ ...editor, taxonScientificNames: names });
-              }}
-              predicate={row.predicate}
-              value={row.object}
-            />
+            {row.predicate === DWCIRI_TO_TAXON_URI ? (
+              <TaxonValueCombobox
+                disabled={disabled}
+                scientificName={scientificName}
+                taxonUri={row.object}
+                onFreeTextChange={(name) => clearTaxonAndUpdateScientificName(row.id, name)}
+                onSelect={(taxonUri, name) =>
+                  updateTaxonAndScientificName(row.id, taxonUri, name)
+                }
+              />
+            ) : (
+              <ObjectValueField
+                disabled={disabled}
+                onChange={(value) =>
+                  row.predicate === DWC_SCIENTIFIC_NAME_URI
+                    ? updateScientificName(value)
+                    : updateRow(row.id, "object", value)
+                }
+                predicate={row.predicate}
+                value={row.object}
+              />
+            )}
 
             <button
               className="h-10 w-fit px-1 text-sm text-[#a23c32] hover:underline disabled:cursor-not-allowed disabled:text-[#9aa5aa] disabled:no-underline md:w-12"
@@ -431,27 +508,27 @@ function OccurrenceEditorCard({
 
 function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): EditorState {
   const rows: StatementRow[] = [
-    { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: candidate.scientificName.trim() },
+    { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: candidate.toTaxon?.trim() ?? "" },
+    { id: 2, predicate: DWC_SCIENTIFIC_NAME_URI, object: candidate.scientificName.trim() },
     {
-      id: 2,
+      id: 3,
       predicate: DWC_DECIMAL_LONGITUDE_URI,
       object: candidate.decimalLongitude == null ? "" : String(candidate.decimalLongitude),
     },
     {
-      id: 3,
+      id: 4,
       predicate: DWC_DECIMAL_LATITUDE_URI,
       object: candidate.decimalLatitude == null ? "" : String(candidate.decimalLatitude),
     },
   ];
   if (candidate.locality?.trim()) {
-    rows.push({ id: 4, predicate: DWC_LOCALITY_URI, object: candidate.locality.trim() });
+    rows.push({ id: 5, predicate: DWC_LOCALITY_URI, object: candidate.locality.trim() });
   }
   return {
     key: index,
     rows,
-    nextId: rows.length + 1,
+    nextId: rows.reduce((max, row) => Math.max(max, row.id), 0) + 1,
     selectedFiles: [],
-    taxonScientificNames: {},
     isPublic: true,
   };
 }
@@ -459,27 +536,14 @@ function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): E
 function ObjectValueField({
   disabled,
   onChange,
-  onTaxonSelect,
   predicate,
   value,
 }: {
   disabled: boolean;
   onChange: (value: string) => void;
-  onTaxonSelect: (scientificName: string) => void;
   predicate: string;
   value: string;
 }) {
-  if (predicate === DWCIRI_TO_TAXON_URI) {
-    return (
-      <TaxonValueCombobox
-        disabled={disabled}
-        onChange={onChange}
-        onSelectScientificName={onTaxonSelect}
-        value={value}
-      />
-    );
-  }
-
   const placeholder =
     predicate === DWC_DECIMAL_LONGITUDE_URI
       ? "140.106861"
@@ -504,33 +568,29 @@ function ObjectValueField({
 
 function TaxonValueCombobox({
   disabled,
-  onChange,
-  onSelectScientificName,
-  value,
+  scientificName,
+  taxonUri,
+  onFreeTextChange,
+  onSelect,
 }: {
   disabled: boolean;
-  onChange: (value: string) => void;
-  onSelectScientificName: (scientificName: string) => void;
-  value: string;
+  scientificName: string;
+  taxonUri: string;
+  onFreeTextChange: (scientificName: string) => void;
+  onSelect: (taxonUri: string, scientificName: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [query, setQuery] = useState(value);
+  const [query, setQuery] = useState(scientificName || taxonUri);
   const [suggestions, setSuggestions] = useState<GbifSpeciesSuggestion[]>([]);
   const [suggestStatus, setSuggestStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
-  const lastSelectedLabel = useRef("");
-  const lastSelectedValue = useRef("");
 
   useEffect(() => {
-    if (value === lastSelectedValue.current && lastSelectedLabel.current) {
-      setQuery(lastSelectedLabel.current);
-      return;
-    }
-    setQuery(value);
-  }, [value]);
+    setQuery(scientificName || taxonUri);
+  }, [scientificName, taxonUri]);
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed.length < 3) {
+    if (trimmed.length < 3 || isAbsoluteHttpUri(trimmed)) {
       setSuggestions([]);
       setSuggestStatus("idle");
       return;
@@ -580,8 +640,7 @@ function TaxonValueCombobox({
         onChange={(event) => {
           const next = event.target.value;
           setQuery(next);
-          onSelectScientificName("");
-          onChange(next);
+          onFreeTextChange(next);
           setIsOpen(true);
         }}
         onFocus={() => setIsOpen(true)}
@@ -590,6 +649,11 @@ function TaxonValueCombobox({
         type="text"
         value={query}
       />
+      {taxonUri ? (
+        <p className="mt-1 break-all text-xs text-[#65737a]">{taxonUri}</p>
+      ) : (
+        <p className="mt-1 text-xs text-[#8b641f]">GBIFで一意に解決できていません</p>
+      )}
       {isOpen ? (
         <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#b8c3c8] bg-white py-1 shadow-lg" role="listbox">
           {suggestStatus === "loading" ? <p className="px-3 py-2 text-sm text-[#65737a]">GBIF候補を読み込み中</p> : null}
@@ -603,11 +667,8 @@ function TaxonValueCombobox({
               onClick={() => {
                 const label = item.scientificName || item.canonicalName || String(item.key);
                 const speciesUri = `${GBIF_SPECIES_URI_PREFIX}${item.key}`;
-                lastSelectedLabel.current = label;
-                lastSelectedValue.current = speciesUri;
-                onSelectScientificName(label);
-                onChange(speciesUri);
                 setQuery(label);
+                onSelect(speciesUri, label);
                 setIsOpen(false);
               }}
               role="option"
@@ -718,17 +779,26 @@ function PredicateCombobox({
 
 function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): string {
   if (value === DWCIRI_TO_TAXON_URI) return DWCIRI_TO_TAXON_LABEL;
+  if (value === DWC_SCIENTIFIC_NAME_URI) return DWC_SCIENTIFIC_NAME_LABEL;
   if (value === DWC_DECIMAL_LONGITUDE_URI) return DWC_DECIMAL_LONGITUDE_LABEL;
   if (value === DWC_DECIMAL_LATITUDE_URI) return DWC_DECIMAL_LATITUDE_LABEL;
+  if (value === DWC_LOCALITY_URI) return DWC_LOCALITY_LABEL;
   return terms.find((term) => term.uri === value)?.local_name ?? value;
 }
 
 function validateStatementRows(rows: StatementRow[]): StatementRow[] {
   const statements: StatementRow[] = [];
+  const optionalBlankPredicates = new Set([
+    DWCIRI_TO_TAXON_URI,
+    DWC_DECIMAL_LONGITUDE_URI,
+    DWC_DECIMAL_LATITUDE_URI,
+  ]);
+
   for (const row of rows) {
     const predicate = row.predicate.trim();
     const object = row.object.trim();
     if (!predicate && !object) continue;
+    if (predicate && !object && optionalBlankPredicates.has(predicate)) continue;
     if (!predicate || !object) throw new Error("項目名と値を両方入力してください");
     if (!isAbsoluteHttpUri(predicate) || hasUnsafeIriCharacter(predicate)) {
       throw new Error("項目名には有効な絶対URIを入力してください");
@@ -736,37 +806,12 @@ function validateStatementRows(rows: StatementRow[]): StatementRow[] {
     if (isAbsoluteHttpUri(object) && hasUnsafeIriCharacter(object)) {
       throw new Error("値のURIに使用できない文字が含まれています");
     }
+    if (predicate === DWCIRI_TO_TAXON_URI && !isAbsoluteHttpUri(object)) {
+      throw new Error("分類にはGBIF等の有効なURIを指定してください");
+    }
     statements.push({ ...row, predicate, object });
   }
   return statements;
-}
-
-function normalizeTaxonStatements(
-  statements: StatementRow[],
-  scientificNamesByRowId: Record<number, string>,
-): StatementRow[] {
-  const normalized: StatementRow[] = [];
-  const generatedScientificNames: StatementRow[] = [];
-  for (const row of statements) {
-    if (row.predicate !== DWCIRI_TO_TAXON_URI) {
-      normalized.push(row);
-      continue;
-    }
-    if (!isAbsoluteHttpUri(row.object)) {
-      normalized.push({ ...row, predicate: DWC_SCIENTIFIC_NAME_URI });
-      continue;
-    }
-    normalized.push(row);
-    const name = scientificNamesByRowId[row.id];
-    if (name?.trim()) {
-      generatedScientificNames.push({
-        id: statements.length + generatedScientificNames.length + 10000,
-        predicate: DWC_SCIENTIFIC_NAME_URI,
-        object: name.trim(),
-      });
-    }
-  }
-  return [...normalized, ...generatedScientificNames];
 }
 
 function validateSelectedFiles(files: File[]) {
