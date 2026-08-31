@@ -42,6 +42,8 @@ type UpdatePaperMetadataResponse = {
 type OccurrenceCandidate = {
   scientificName: string;
   locality: string | null;
+  decimalLatitude: number | null;
+  decimalLongitude: number | null;
 };
 
 type ExtractPaperOccurrencesResponse = {
@@ -391,6 +393,8 @@ export function PaperImportClient() {
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">#</th>
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">学名</th>
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">Locality</th>
+                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">緯度</th>
+                        <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">経度</th>
                         <th className="border-b border-[#d8dfe2] px-4 py-3 font-medium">登録</th>
                       </tr>
                     </thead>
@@ -403,6 +407,12 @@ export function PaperImportClient() {
                           </td>
                           <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
                             {occurrence.locality ?? "-"}
+                          </td>
+                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
+                            {occurrence.decimalLatitude ?? "-"}
+                          </td>
+                          <td className="border-b border-[#e5eaec] px-4 py-3 text-[#526168]">
+                            {occurrence.decimalLongitude ?? "-"}
                           </td>
                           <td className="border-b border-[#e5eaec] px-4 py-3">
                             <a
@@ -459,6 +469,12 @@ function paperRegistrationHref(
     scientificName: occurrence.scientificName,
   });
   if (occurrence.locality) params.set("locality", occurrence.locality);
+  if (occurrence.decimalLatitude != null) {
+    params.set("decimalLatitude", String(occurrence.decimalLatitude));
+  }
+  if (occurrence.decimalLongitude != null) {
+    params.set("decimalLongitude", String(occurrence.decimalLongitude));
+  }
   return `/paper-import/register?${params.toString()}`;
 }
 
