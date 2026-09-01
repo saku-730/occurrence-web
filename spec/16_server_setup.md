@@ -170,7 +170,6 @@ https://bio-database.net/graphs/app/occurrence-profile
   - Bio-Databaseでその語彙を使用するかを保持する。
   - Bio-Databaseで表示する日本語名を保持する。
 
-ここで分けているものはRDFのnamespaceではなくnamed graphである。
 
 Darwin Core公式情報とBio-Database固有情報を別graphにすることで、Darwin Core公式語彙だけを更新する場合とBio-Database側の設定だけを更新する場合を独立して扱える。例えばTDWG側の語彙を更新するときに `vocabularies/darwin-core` graphだけを再作成しても、`occurrence-profile` graphに保存したBio-Database固有設定は残せる。
 
@@ -208,22 +207,6 @@ http://www.w3.org/2004/02/skos/core#prefLabel
 - `label_ja` が空なら日本語名を推測して生成しない。
 - `list.csv` にだけ存在し、Darwin Core語彙本体に存在しないIRIは設定graphにも追加しない。
 
-現在生成済みの `darwin_core_master.nq` は以下の構成を想定する。
-
-```text
-Darwin Core vocabulary graph: 3654 triples
-Bio-Database occurrence-profile graph: 799 triples
-合計: 4453 triples
-```
-
-`occurrence-profile` graphの内訳は以下。
-
-```text
-useAtBioDatabase: 437 triples
-  true: 254
-  false: 183
-Japanese skos:prefLabel @ja: 362 triples
-```
 
 現在、生成済み N-Quads はあるが、5 TTL と `list.csv` から N-Quads を再生成するスクリプトはリポジトリに未収録。
 
@@ -232,7 +215,7 @@ Japanese skos:prefLabel @ja: 362 triples
 FusekiにまだDarwin Coreデータがない場合は、そのままN-Quadsを投入する。
 
 ```bash
-FILE='/実際のパス/darwin_core_master.nq'
+FILE='/実際のパス/darwin_core_master_ja.nq'
 
 curl -fsS \
   -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
