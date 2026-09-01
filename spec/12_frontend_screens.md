@@ -106,6 +106,14 @@ MVP対象外。
 項目は固定必須ではない。  
 ユーザーが必要な述語・値を追加できるUIを想定する。
 
+Darwin Coreの入力候補は `GET /vocabularies/darwin-core` から取得する。
+
+- backendはFusekiの `https://bio-database.net/graphs/app/occurrence-profile` を参照し、`https://bio-database.net/terms/useAtBioDatabase true` の語彙だけを候補として返す。
+- 候補の表示名は同graphの `skos:prefLabel` のうち言語タグが `@ja` の値を優先する。
+- 日本語 `skos:prefLabel` が存在しない場合のみ、Darwin Core vocabulary graphの `localName` を表示名として使用する。
+- 保存時のpredicateは表示名ではなく、候補に対応するIRIを使用する。
+- この表示方針はオカレンス新規作成、オカレンス編集、論文取り込み後のOccurrence編集で共通とする。
+
 MVPでは最低限、以下のような入力補助を用意してよい。
 
 - `dwc:scientificName`
