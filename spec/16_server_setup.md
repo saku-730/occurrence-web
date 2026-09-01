@@ -127,11 +127,45 @@ download docker file from this link.
 
 https://repo1.maven.org/maven2/org/apache/jena/jena-fuseki-docker/6.1.0/jena-fuseki-docker-6.1.0.zip
 
+#### Darwin Core master data
 
-Darwin core 導入。
+TDWG の以下5つの Turtle ファイルを元に、Bio-Database 用の N-Quads を作成する。
+
+```text
+ac.ttl
+dc.ttl
+dcterms.ttl
+iri.ttl
+terms.ttl
+```
+
+取得例。
 
 ```bash
-FILE='/実際のパス/darwin_core_master_single_graph.nq'
+mkdir -p dwc-source
+cd dwc-source
+
+wget https://rs.tdwg.org/dwc/ac.ttl
+wget https://rs.tdwg.org/dwc/dc.ttl
+wget https://rs.tdwg.org/dwc/dcterms.ttl
+wget https://rs.tdwg.org/dwc/iri.ttl
+wget https://rs.tdwg.org/dwc/terms.ttl
+```
+
+この5ファイルから Bio-Database 用の metadata を付与して `darwin_core_master.nq` を生成する。
+主に次の named graph を使用する。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+現在、生成済み N-Quads はあるが、5 TTL から N-Quads を再生成するスクリプトはリポジトリに未収録。
+
+Fuseki への投入。
+
+```bash
+FILE='/実際のパス/darwin_core_master.nq'
 
 curl -fsS \
   -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
@@ -141,7 +175,34 @@ curl -fsS \
   "${FUSEKI_URL}/${FUSEKI_DATASET}/data"
 ```
 
-gbif backbone is too big for web api, so use tdbloader
+#### GBIF Backbone master data
+
+GBIF Backbone の `simple.txt.gz` を取得し、リポジトリ内の変換ツールで N-Quads に変換する。
+
+gzip は展開不要。
+
+```bash
+wget https://hosted-datasets.gbif.org/datasets/backbone/current/simple.txt.gz
+```
+
+変換。
+
+```bash
+cd ~/occurrence-web/tools/gbif-backbone-to-rdf
+cargo build --release
+
+cargo run --release -- \
+  /path/to/simple.txt.gz \
+  gbif-backbone.nq
+```
+
+生成される分類マスタの named graph。
+
+```text
+https://bio-database.net/graphs/taxonomy/gbif-backbone
+```
+
+GBIF Backbone は大きすぎるので Web API 経由では投入せず `tdb2.tdbloader` を使用する。
 
 ```bash
 docker compose stop fuseki
