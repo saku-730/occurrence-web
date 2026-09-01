@@ -109,6 +109,23 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 ---
 
+## 現行プロンプトでの属名略記ルール
+
+基準点の抽出品質を維持しつつ、`P. agrestis` のような属名略記がreview UIまで残る問題への対策として、現行 `feature-paper-import` では略記禁止をさらに強化する。
+
+- scientificName の先頭属名トークンに `P.`、`M.`、`A.`、`Ph.` 等の略記を残してはならない
+- 略記が1件でも残ったJSONは不正な出力として扱う、という指示をプロンプト上で明示する
+- 100%の確証がなくても、最も可能性が高い完全な属名を1つ選ぶ
+- 確証不足を理由に略記を残したり、そのOccurrence自体を捨てたりしない
+- 一般的な分類学知識の利用を許可する
+- JSON出力直前に全 scientificName の先頭属名トークンを再確認させる
+
+ただし、処理負荷を増やさないため同じ指示を多数の節で繰り返さない。略記禁止を短いハード制約として集中して記述し、従来の冗長な推定説明・最終確認の重複は削減する。
+
+この変更はプロンプトのみの変更とし、sampling設定、`max_tokens`、JSON Schema、LLM通信処理は同時に変更しない。
+
+---
+
 ## 不採用・変更済み案
 
 ### 学名省略を確証不足ならそのまま残す
@@ -118,6 +135,10 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 ### 学名省略を解決できなければOccurrence自体を捨てる
 
 不採用。Occurrenceの取りこぼしが増えるため、属名のみ積極的推定を許可する。
+
+### 略記禁止を長い説明の追加だけで強化する
+
+不採用。プロンプトが長くなり処理負荷や指示競合が増えるため、「略記が1件でも残れば不正」という短いハード制約を中心にする。
 
 ### 長大なプロンプトを `llama.rs` にハードコードする
 
@@ -146,10 +167,10 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 ## テスト上の最低確認
 
-プロンプト外出しのような内部変更でも、少なくとも次を維持する。
+プロンプト変更・外出しのような内部変更でも、少なくとも次を維持する。
 
 - request先頭に `OCCURRENCE_EXTRACTION_PROMPT` が入る
 - JSON Schemaが従来どおりである
 - sampling設定が意図せず変わっていない
-- `prompt.txt` に基準プロンプトの重要指示が存在する
+- `prompt.txt` に属名略記の禁止と完全形への展開指示が存在する
 - valid responseを従来どおりparseできる
