@@ -1,0 +1,68 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>.
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+@prefix owl: <http://www.w3.org/2002/07/owl#>.
+@prefix dc: <http://purl.org/dc/elements/1.1/>.
+@prefix dcterms: <http://purl.org/dc/terms/>.
+@prefix dwc: <http://rs.tdwg.org/dwc/terms/>.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#>.
+@prefix tdwgutility: <http://rs.tdwg.org/dwc/terms/attributes/>.
+@prefix foaf: <http://xmlns.com/foaf/0.1/>.
+@prefix dwciri: <http://rs.tdwg.org/dwc/iri/>.
+@prefix vann: <http://purl.org/vocab/vann/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dc:publisher "Biodiversity Information Standards (TDWG)"@en;
+     dcterms:publisher <https://www.grid.ac/institutes/grid.480498.9>;
+     rdfs:label "Darwin Core terms borrowed from the Dublin Core legacy namespace"@en;
+     dcterms:title "Darwin Core terms borrowed from the Dublin Core legacy namespace"@en;
+     rdfs:comment "This list includes terms borrowed by Darwin Core from the legacy (http://purl.org/dc/elements/1.1/) Dublin Core namespace"@en;
+     dcterms:description "This list includes terms borrowed by Darwin Core from the legacy (http://purl.org/dc/elements/1.1/) Dublin Core namespace"@en;
+     dcterms:created "2015-03-27"^^xsd:date;
+     vann:preferredNamespacePrefix "dc";
+     vann:preferredNamespaceUri "http://purl.org/dc/elements/1.1/";
+     a tdwgutility:TermList.
+
+<http://rs.tdwg.org/dwc/version/dc/2015-03-27>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dc/2015-03-27>.
+
+<http://rs.tdwg.org/dwc/version/dc/2020-10-28>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dc/2020-10-28>.
+
+<http://rs.tdwg.org/dwc/version/dc/2023-06-28>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dc/2023-06-28>.
+
+<http://rs.tdwg.org/dwc/version/dc/2025-06-12>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dc/2025-06-12>.
+
+<http://purl.org/dc/elements/1.1/language>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasPart <http://purl.org/dc/elements/1.1/language>.
+
+<http://purl.org/dc/elements/1.1/type>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dc/>.
+
+<http://rs.tdwg.org/dwc/dc/>
+     dcterms:hasPart <http://purl.org/dc/elements/1.1/type>.
+
+<http://rs.tdwg.org/dwc/dc.ttl>
+     dc:format "text/turtle";
+     dc:creator "Biodiversity Information Standards (TDWG)";
+     dcterms:references <http://rs.tdwg.org/dwc/dc/>;
+     dcterms:modified "2025-07-07T15:53:12-05:00"^^xsd:dateTime;
+     a foaf:document.
+
