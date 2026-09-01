@@ -169,6 +169,16 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ---
 
+## Markdownコンテンツ表示
+
+- `frontend/content/` 配下のMarkdown表示には標準的なMarkdownパーサライブラリを使用し、正規表現ベースの独自Markdownパーサは実装しない。
+- CommonMark/GFM相当の基本構文として、見出し、段落、順序付き・順序なしリスト、リンク、引用、インラインコード、コードブロック、水平線、表を表示できるようにする。
+- `/...`、`#...` などサイト内リンクは通常の同一タブ遷移とする。
+- `http://`、`https://` の外部リンクだけを別タブで開き、`rel="noopener noreferrer"` を付与する。
+- Markdown本文中の生HTMLは解釈せず、コンテンツファイルから任意HTMLを直接描画しない。
+
+---
+
 ## Darwin Core用語集
 
 - `/terms/darwin-core` は `frontend/content/terms/darwin-core.md` を表示する。
