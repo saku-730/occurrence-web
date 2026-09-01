@@ -10,7 +10,7 @@ import { apiFetch } from "@/lib/api";
 const API_PREFIX = "/api/backend";
 const USER_URI_PREFIX = "https://bio-database.net/users/";
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
-const ASSOCIATED_MEDIA_PREDICATE = "http://rs.tdwg.org/ac/terms/associatedMedia";
+const ASSOCIATED_MEDIA_PREDICATE = "http://rs.tdwg.org/dwc/terms/associatedMedia";
 
 interface OccurrenceDetailState {
   status: "loading" | "ready" | "not_found" | "error";

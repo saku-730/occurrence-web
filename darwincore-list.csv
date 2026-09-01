@@ -1,0 +1,24 @@
+"shold not use" 基本使わない 
+dwc:acceptedScientificName dcterms:accessRights 
+dwc:acceptedScientificNameID dcterms:Agent class
+dwc:AcceptedTaxon dwc:agentID 
+dwc:AcceptedTaxonID dwc:agentRemarks 
+dwc:acceptedTaxonID dwc:agentRoleOrder 
+dwc:acceptedTaxonName dwc:agentType 
+dwc:acceptedTaxonNameID dwc:Assertion class
+dwc:AccessConstraints dwc:assertionBy 
+dwc:accordingTo dwciri:assertionBy 
+dwc:accuracy dwc:assertionEffectiveDate 
+ dwc:assertionError 
+ dwc:assertionID 
+ dwc:assertionMadeDate 
+ dwc:assertionProtocols 
+ dwc:assertionReferences 
+ dwc:assertionRemarks 
+ dwciri:assertionType 
+ dwc:assertionType 
+ dwciri:assertionUnit 
+ dwc:assertionUnit 
+ dwc:assertionValue 
+ dwciri:assertionValue 
+ dwc:associatedMedia 

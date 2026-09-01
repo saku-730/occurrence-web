@@ -10,8 +10,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+<<<<<<< HEAD
+    "markdown-to-jsx": "9.10.2",
+=======
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
+>>>>>>> origin/main
     "next": "16.2.10",
     "qrcode": "^1.5.4",
     "react": "19.2.4",

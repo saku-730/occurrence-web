@@ -10,7 +10,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 const API_PREFIX = "/api/backend";
 const USER_URI_PREFIX = "https://bio-database.net/users/";
 const OCCURRENCE_GRAPH_URI = "https://bio-database.net/graphs/occurrences";
-const ASSOCIATED_MEDIA_PREDICATE_URI = "http://rs.tdwg.org/ac/terms/associatedMedia";
+const ASSOCIATED_MEDIA_PREDICATE_URI = "http://rs.tdwg.org/dwc/terms/associatedMedia";
 const MAX_MEDIA_SIZE_BYTES = 1000 * 1024 * 1024;
 const DWCIRI_TO_TAXON_URI = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const DWCIRI_TO_TAXON_LABEL = "分類";

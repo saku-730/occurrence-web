@@ -1,7 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ReactNode } from "react";
+import type { ComponentPropsWithoutRef, PropsWithChildren } from "react";
 
+import Markdown from "markdown-to-jsx/react";
 import { notFound } from "next/navigation";
 
 import { SiteHeader } from "@/components/site-header";
@@ -13,6 +14,93 @@ interface MarkdownPageProps {
     contentPath: string[];
   }>;
 }
+
+function MarkdownWrapper({ children }: PropsWithChildren) {
+  return <div className="space-y-5">{children}</div>;
+}
+
+const MARKDOWN_OPTIONS = {
+  disableParsingRawHTML: true,
+  forceBlock: true,
+  forceWrapper: true,
+  wrapper: MarkdownWrapper,
+  overrides: {
+    h1: {
+      props: {
+        className: "text-2xl font-semibold",
+      },
+    },
+    h2: {
+      props: {
+        className: "pt-2 text-lg font-semibold",
+      },
+    },
+    h3: {
+      props: {
+        className: "pt-1 text-base font-semibold",
+      },
+    },
+    p: {
+      props: {
+        className: "text-sm leading-7 text-[#324047]",
+      },
+    },
+    ul: {
+      props: {
+        className: "list-disc space-y-2 pl-5 text-sm leading-7 text-[#324047]",
+      },
+    },
+    ol: {
+      props: {
+        className: "list-decimal space-y-2 pl-5 text-sm leading-7 text-[#324047]",
+      },
+    },
+    li: {
+      props: {
+        className: "pl-1",
+      },
+    },
+    a: {
+      component: MarkdownLink,
+    },
+    blockquote: {
+      props: {
+        className: "border-l-4 border-[#d8dfe2] pl-4 text-sm leading-7 text-[#4b5960]",
+      },
+    },
+    code: {
+      props: {
+        className: "rounded bg-[#eef2f3] px-1.5 py-0.5 font-mono text-[0.9em]",
+      },
+    },
+    pre: {
+      props: {
+        className:
+          "overflow-x-auto rounded-md bg-[#eef2f3] p-4 text-sm leading-6 [&>code]:bg-transparent [&>code]:p-0",
+      },
+    },
+    hr: {
+      props: {
+        className: "border-0 border-t border-[#d8dfe2]",
+      },
+    },
+    table: {
+      props: {
+        className: "w-full border-collapse text-left text-sm",
+      },
+    },
+    th: {
+      props: {
+        className: "border border-[#d8dfe2] bg-[#f5f7f8] px-3 py-2 font-semibold",
+      },
+    },
+    td: {
+      props: {
+        className: "border border-[#d8dfe2] px-3 py-2 align-top",
+      },
+    },
+  },
+} as const;
 
 export async function generateStaticParams() {
   const files = await listMarkdownFiles(CONTENT_ROOT);
@@ -40,15 +128,13 @@ export default async function MarkdownContentPage({ params }: MarkdownPageProps)
     notFound();
   }
 
-  const content = renderMarkdown(markdown);
-
   return (
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
       <SiteHeader />
 
       <main className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
         <article className="rounded-md border border-[#d8dfe2] bg-white px-6 py-7">
-          <div className="space-y-5">{content}</div>
+          <Markdown options={MARKDOWN_OPTIONS}>{markdown}</Markdown>
         </article>
       </main>
     </div>
@@ -84,110 +170,30 @@ function resolveMarkdownPath(contentPath: string[]): string | null {
   return path.join(CONTENT_ROOT, ...contentPath) + ".md";
 }
 
-function renderMarkdown(markdown: string): ReactNode[] {
-  const blocks: ReactNode[] = [];
-  const lines = markdown.split(/\r?\n/);
-  let paragraph: string[] = [];
-  let listItems: string[] = [];
+function MarkdownLink({
+  href = "",
+  className,
+  children,
+  ...props
+}: ComponentPropsWithoutRef<"a">) {
+  const classes = ["text-[#176b57] underline-offset-2 hover:underline", className]
+    .filter(Boolean)
+    .join(" ");
+  const isExternalHttpLink = /^https?:\/\//i.test(href);
 
-  function flushParagraph() {
-    if (paragraph.length === 0) return;
-    const text = paragraph.join(" ");
-    blocks.push(
-      <p className="text-sm leading-7 text-[#324047]" key={`p-${blocks.length}`}>
-        {renderInlineMarkdown(text)}
-      </p>,
-    );
-    paragraph = [];
-  }
-
-  function flushList() {
-    if (listItems.length === 0) return;
-    blocks.push(
-      <ul className="list-disc space-y-2 pl-5 text-sm leading-7 text-[#324047]" key={`ul-${blocks.length}`}>
-        {listItems.map((item, index) => (
-          <li key={`${item}-${index}`}>{renderInlineMarkdown(item)}</li>
-        ))}
-      </ul>,
-    );
-    listItems = [];
-  }
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-
-    if (!line) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    if (line.startsWith("# ")) {
-      flushParagraph();
-      flushList();
-      blocks.push(
-        <h1 className="text-2xl font-semibold" key={`h1-${blocks.length}`}>
-          {renderInlineMarkdown(line.slice(2).trim())}
-        </h1>,
-      );
-      continue;
-    }
-
-    if (line.startsWith("## ")) {
-      flushParagraph();
-      flushList();
-      blocks.push(
-        <h2 className="pt-2 text-lg font-semibold" key={`h2-${blocks.length}`}>
-          {renderInlineMarkdown(line.slice(3).trim())}
-        </h2>,
-      );
-      continue;
-    }
-
-    if (line.startsWith("- ")) {
-      flushParagraph();
-      listItems.push(line.slice(2).trim());
-      continue;
-    }
-
-    flushList();
-    paragraph.push(line);
-  }
-
-  flushParagraph();
-  flushList();
-
-  return blocks;
-}
-
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = linkPattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-
-    nodes.push(
-      <a
-        className="text-[#176b57] underline-offset-2 hover:underline"
-        href={match[2]}
-        key={`${match[2]}-${match.index}`}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {match[1]}
-      </a>,
-    );
-    lastIndex = linkPattern.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes;
+  return (
+    <a
+      {...props}
+      className={classes}
+      href={href}
+      {...(isExternalHttpLink
+        ? {
+            rel: "noopener noreferrer",
+            target: "_blank",
+          }
+        : {})}
+    >
+      {children}
+    </a>
+  );
 }
