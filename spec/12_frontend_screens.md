@@ -169,6 +169,17 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ---
 
+## Darwin Core用語集
+
+- `/terms/darwin-core` は `frontend/content/terms/darwin-core.md` を表示する。
+- 同ページには `frontend/content/terms/darwin-core/` 配下に存在する各Darwin Core用語Markdownへのリンク一覧を掲載する。
+- 用語ページのURLは `/terms/darwin-core/{Markdownファイル名から.mdを除いた値}` とする。
+- 一覧は用語名の先頭文字ごとに整理する。
+- `template.md`、`list.csv`、一時ロックファイルなど、用語ページではない管理ファイルは一覧へ含めない。
+- 括弧などURL上でエンコードが必要な文字を含むファイル名は、表示名は元のファイル名を維持し、リンクURL側だけパーセントエンコードする。
+
+---
+
 ## メディアUI
 
 - ユーザー体験としてはオカレンス作成と同時にアップロードできる
