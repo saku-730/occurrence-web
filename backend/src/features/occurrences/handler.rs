@@ -23,7 +23,6 @@ use crate::{
     state::AppState,
 };
 
-use super::darwin_core_policy::is_supported_darwin_core_iri;
 use super::{
     dto::{
         CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -332,7 +331,7 @@ pub async fn create_occurrence(
     get,
     path = "/vocabularies/darwin-core",
     responses(
-        (status = 200, description = "Bio-Database-supported Darwin Core terms sorted by localName", body = [DarwinCoreTermResponse]),
+        (status = 200, description = "Darwin Core terms sorted by localName", body = [DarwinCoreTermResponse]),
         (status = 502, description = "Vocabulary store failed", body = ErrorResponse)
     ),
     tag = "vocabularies"
@@ -341,8 +340,6 @@ pub async fn list_darwin_core_terms(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<DarwinCoreTermResponse>>, OccurrenceHandlerError> {
     let mut terms = state.occurrence_rdf_store.list_darwin_core_terms().await?;
-    // Fusekiは語彙を保持し、Bio-Databaseで新規入力候補として使うかはlist.csvで決める。
-    terms.retain(|term| is_supported_darwin_core_iri(&term.uri));
     terms.sort_by(|left, right| {
         left.local_name
             .to_lowercase()

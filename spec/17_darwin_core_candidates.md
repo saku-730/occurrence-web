@@ -1,66 +1,138 @@
-# 17. Darwin Core 入力候補の選定
+# Darwin Core候補とBio-Database用メタデータ
 
-## 目的
+## 1. 目的
 
-オカレンス作成・編集画面の述語候補に Darwin Core 語彙を無条件ですべて表示せず、Bio-Database で実際に利用する用語だけを提示する。
+Darwin Core語彙全体と、Bio-Databaseで各語彙をどのように利用するかというアプリ固有メタデータをFusekiで管理する。
 
-## 候補選定の source of truth
+実行時の候補生成ではFusekiを問い合わせ先とし、`frontend/content/terms/darwin-core/list.csv` を直接フィルターとして使用しない。
 
-Bio-Database で新規入力候補として利用する用語は、次のファイルを source of truth とする。
+---
 
-- `frontend/content/terms/darwin-core/list.csv`
+## 2. 基本方針
 
-候補判定には次の列を使う。
+- Darwin Core公式語彙はFusekiに保持する。
+- Bio-Database固有の語彙設定もFusekiに保持する。
+- Darwin Core公式語彙とBio-Database固有設定はnamed graphを分離する。
+- backendは実行時に`list.csv`を読んで候補を絞り込まない。
+- `list.csv`はGit管理可能な元データとして残し、FusekiへBio-Database固有設定を投入するためのseed/import元として利用できる。
 
-- `namespace`: 語彙名前空間
-- `iri`: 用語を一意に識別する IRI
-- `use_at_bio_database`: Bio-Database で新規入力候補として利用するか
+使用する主なnamed graphは以下とする。
 
-`GET /vocabularies/darwin-core` の候補として採用する条件は、`namespace=dwc` かつ `use_at_bio_database=true` とする。照合は term 名や英語ラベルではなく IRI で行う。
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
 
-`label` と `label_ja` は表示名であり、候補採否の判定には使用しない。
+- `.../vocabularies/darwin-core`: Darwin Core語彙本体
+- `.../app/occurrence-profile`: Bio-Databaseでの利用可否や表示情報などのアプリ固有設定
 
-## Fuseki との責務分離
+この分離によりDarwin Core語彙を再生成・再投入しても、Bio-Database固有設定を独立して管理できるようにする。
 
-`use_at_bio_database` は Darwin Core 自体の語彙定義ではなく、Bio-Database 固有の UI・運用ポリシーである。そのため、このフラグを Fuseki の Darwin Core 語彙データには追加しない。
+---
 
-責務は次のように分離する。
+## 3. Bio-Database用メタデータ
 
-- Fuseki: Darwin Core RDF 語彙の保存・検索
-- `list.csv`: Bio-Database で利用する用語の選定と表示用メタデータ
-- backend: Fuseki の語彙取得結果を `list.csv` の許可 IRI で絞り込む
-- frontend: backend が返した候補を表示する
+最低限、各語彙について以下をFuseki側で表現できるようにする。
 
-## 候補 API
+- Bio-Databaseで新規入力候補として使用するか
+- 日本語表示名
 
-`GET /vocabularies/darwin-core` は次の順序で候補を作る。
+`list.csv`では現在それぞれ以下の列に対応する。
 
-1. Fuseki から Darwin Core terms namespace の語彙を取得する
-2. `list.csv` から `namespace=dwc` かつ `use_at_bio_database=true` の IRI 集合を作る
-3. Fuseki の取得結果と許可 IRI 集合の積集合だけを返す
-4. 返却候補を従来どおり `local_name`、次に IRI の順で並べる
+```text
+use_at_bio_database
+label_ja
+```
 
-不整合時は次の扱いとする。
+将来的には必要に応じて以下もBio-Database固有メタデータとして追加できる。
 
-- Fuseki に存在しても `list.csv` で `false` または未定義なら、新規候補には表示しない
-- `list.csv` で `true` でも Fuseki に存在しなければ、新規候補には表示しない
+- 表示順
+- 入力形式
+- 必須・推奨区分
+- カテゴリ
+- literal / IRI の入力制約
 
-## 既存データの扱い
+RDF上の具体的なBio-Database独自predicate URIは、Fusekiへの投入処理を実装する際に確定する。Darwin Core公式語彙のpredicateとして偽装せず、Bio-Database独自namespaceを使用する。
 
-この制限は「新規に選択できる候補」にだけ適用する。
+概念例:
 
-既存オカレンスに `use_at_bio_database=false` または `list.csv` 未定義の述語が保存されている場合でも、その RDF を削除・変換しない。作成・編集画面が既存データを読み込んだときは、その既存述語を表示できる状態を維持する。
+```turtle
+# predicate URIは設計例。正式URIは投入処理実装時に確定する。
+dwc:scientificName
+    bio:useAtBioDatabase true ;
+    bio:labelJa "学名"@ja .
+```
 
-## 実装上の扱い
+これらのtripleはBio-Database用named graphに格納し、Darwin Core公式語彙graphそのものは改変しない。
 
-backend は `list.csv` をコンパイル時に読み込み、許可 IRI 集合を生成する。実行時に frontend ディレクトリを参照する必要はない。
+---
 
-`list.csv` の列位置を固定値として扱わず、ヘッダ名 `namespace`、`iri`、`use_at_bio_database` から対象列を決定する。
+## 4. `list.csv`の位置づけ
 
-## 受け入れ条件
+`frontend/content/terms/darwin-core/list.csv`は、Bio-Databaseで利用する語彙設定を人間がGit上で管理・レビューするための元データとして利用できる。
 
-- `dwc:scientificName` のように `use_at_bio_database=true` の Darwin Core 用語が候補 API に含まれる
-- `dwc:acceptedScientificName` のように `use_at_bio_database=false` の用語が候補 API に含まれない
-- `dcterms:*` など別 namespace の行は Darwin Core 候補 API の対象外とする
-- 既存オカレンスに候補外述語があっても、その値は自動削除されない
-- `use_at_bio_database` のための RDF triple を Fuseki に追加しない
+ただし、Rust backendが実行時に`include_str!`等で`list.csv`を読み、Fusekiの結果と照合して候補を決定する構成にはしない。
+
+想定する流れは以下。
+
+```text
+list.csv
+   ↓ setup / seed / import
+Fuseki
+ ├─ Darwin Core vocabulary graph
+ └─ Bio-Database occurrence-profile graph
+          ↓
+      Rust backend
+          ↓
+       frontend
+```
+
+この構成では実行時の問い合わせ先はFusekiに一本化される。
+
+---
+
+## 5. Darwin Core候補API
+
+対象API:
+
+```text
+GET /vocabularies/darwin-core
+```
+
+最終的な処理方針は以下。
+
+1. Fuseki内のDarwin Core語彙graphを対象にする。
+2. Bio-Databaseの`occurrence-profile` graphと結合する。
+3. Bio-Databaseで使用する設定が有効な語彙だけを新規入力候補として返す。
+4. 日本語表示名など、UIに必要なメタデータもFusekiから取得して返す。
+5. 候補の識別にはIRIを使用する。表示ラベルは識別子として扱わない。
+
+既存Occurrenceに、現在の新規入力候補ではないpredicateが含まれていても、自動削除・自動変換はしない。
+
+---
+
+## 6. 移行状態
+
+この方針への変更時点では、`list.csv`を実行時フィルターとして利用する実装を撤回する。
+
+そのため、FusekiへのBio-Database固有メタデータ投入と、そのメタデータを使ったSPARQL絞り込みが実装されるまでは、`GET /vocabularies/darwin-core`はFusekiに存在するDarwin Core語彙を全件返す。
+
+これは移行中の一時的な挙動であり、最終仕様は前節のFuseki内メタデータによる絞り込みとする。
+
+---
+
+## 7. 受け入れ条件
+
+移行時点:
+
+- backendに`list.csv`を実行時読み込みする依存がない。
+- `darwin_core_policy`によるCSVパース・allowlist生成がない。
+- `GET /vocabularies/darwin-core`はFusekiから取得したDarwin Core語彙をそのまま候補として返す。
+
+最終形:
+
+- Darwin Core公式語彙graphとBio-Database固有設定graphが分離されている。
+- `list.csv`のBio-Database固有情報をFusekiへ投入できる。
+- backendはFuseki内のBio-Database固有設定を使って候補を絞り込む。
+- 日本語表示名などのUI用メタデータもFusekiから取得できる。
+- runtimeの候補判定に`list.csv`を直接使用しない。
