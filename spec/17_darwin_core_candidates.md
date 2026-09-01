@@ -98,7 +98,7 @@ Darwin Core公式語彙graphにはBio-Database固有tripleを追加しない。
 
 ---
 
-## 4. `list.csv`の位置づけ
+## 4. `list.csv`とのマージ規則
 
 `frontend/content/terms/darwin-core/list.csv`は、Bio-Databaseで利用する語彙設定を人間がGit上で管理・レビューするための元データとして利用する。
 
@@ -110,13 +110,24 @@ Darwin Core公式語彙graphにはBio-Database固有tripleを追加しない。
 | `use_at_bio_database` | `bio:useAtBioDatabase` の `xsd:boolean` |
 | `label_ja` | `skos:prefLabel` の `@ja` literal |
 
-ただし、Rust backendが実行時に`include_str!`等で`list.csv`を読み、Fusekiの結果と照合して候補を決定する構成にはしない。
+N-Quads生成時は、Darwin Core語彙graphに実際に存在する主語IRIを基準にする。
+
+1. 元N-QuadsのDarwin Core語彙graphに存在する各主語IRIを列挙する。
+2. 同じIRIが`list.csv`に存在する場合、`use_at_bio_database`をそのまま `bio:useAtBioDatabase` として生成する。
+3. 同じIRIが`list.csv`に存在しない場合、`bio:useAtBioDatabase false` を明示的に生成する。
+4. 同じIRIが`list.csv`に存在し、かつ`label_ja`が空でなければ `skos:prefLabel` `@ja` を生成する。
+5. `label_ja`が空欄、またはIRI自体が`list.csv`に存在しない場合、日本語ラベルtripleは生成しない。
+6. `list.csv`には存在するが元N-QuadsのDarwin Core語彙graphに存在しないIRIについては、Bio-Database固有graphにもtripleを生成しない。語彙本体に存在しないIRIだけを設定graphへ作成しないためである。
+
+これにより、Fuseki内のDarwin Core語彙graphに存在するすべての語彙について、`useAtBioDatabase` が `true` または `false` のどちらかで必ず明示される。
+
+Rust backendが実行時に`include_str!`等で`list.csv`を読み、Fusekiの結果と照合して候補を決定する構成にはしない。
 
 想定する流れは以下。
 
 ```text
-list.csv
-   ↓ setup / seed / import
+list.csv + Darwin Core source N-Quads
+                ↓ setup / seed / import
 Fuseki
  ├─ Darwin Core vocabulary graph
  └─ Bio-Database occurrence-profile graph
@@ -170,9 +181,12 @@ GET /vocabularies/darwin-core
 
 N-Quads生成:
 
-- `list.csv` の全行について `use_at_bio_database` を `xsd:boolean` として明示的に生成する。
-- `label_ja` が存在する行について `skos:prefLabel` + `@ja` を生成する。
+- 元のDarwin Core語彙graphに存在する全主語について `bio:useAtBioDatabase` が1件存在する。
+- `list.csv` にIRIが存在すれば `use_at_bio_database` の値を使用する。
+- `list.csv` にIRIが存在しなければ `bio:useAtBioDatabase false` とする。
+- `label_ja` が存在する語彙について `skos:prefLabel` + `@ja` を生成する。
 - `label_ja` が空欄なら日本語ラベルtripleを生成しない。
+- `list.csv`にのみ存在し、元の語彙graphには存在しないIRIの設定tripleは生成しない。
 - Bio-Database固有tripleは `https://bio-database.net/graphs/app/occurrence-profile` に入れる。
 - 元のDarwin Core語彙tripleは `https://bio-database.net/graphs/vocabularies/darwin-core` のまま保持する。
 
