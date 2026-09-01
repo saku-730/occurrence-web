@@ -106,6 +106,9 @@ MVP対象外。
 項目は固定必須ではない。  
 ユーザーが必要な述語・値を追加できるUIを想定する。
 
+- Darwin Core の新規入力候補は `17_darwin_core_candidates.md` に従い、`list.csv` の `use_at_bio_database=true` の用語だけを表示する
+- 既存データに候補外の述語が含まれる場合、その項目は削除せず表示・編集可能な状態を維持する
+
 MVPでは最低限、以下のような入力補助を用意してよい。
 
 - `dwc:scientificName`
