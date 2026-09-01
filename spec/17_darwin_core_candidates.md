@@ -26,7 +26,56 @@ https://bio-database.net/graphs/app/occurrence-profile
 - `.../vocabularies/darwin-core`: Darwin Core語彙本体
 - `.../app/occurrence-profile`: Bio-Databaseでの利用可否と日本語表示名
 
-この分離によりDarwin Core語彙を再生成・再投入しても、Bio-Database固有設定を独立して管理できるようにする。
+### 2.1 named graphを分離する理由
+
+ここで分けているのは、語彙IRIのnamespaceではなくFuseki上のnamed graphである。
+
+同じDarwin Core用語IRIを主語にしていても、情報の出所と意味が異なるためgraphを分ける。
+
+Darwin Core語彙graphにはTDWG由来の公式語彙情報を保持する。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+```
+
+一方、次の情報はDarwin Core公式仕様ではなくBio-Database独自の設定である。
+
+- Bio-Databaseでその用語を使用するか
+- Bio-Database上で日本語で何と表示するか
+
+そのため、これらは次のアプリ固有graphに保持する。
+
+```text
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+概念的には次の構造になる。
+
+```text
+dwc:scientificName
+      │
+      ├─ Darwin Core公式情報
+      │     → graphs/vocabularies/darwin-core
+      │
+      └─ Bio-Database独自情報
+            → graphs/app/occurrence-profile
+```
+
+この分離の主な目的は、公式語彙データとアプリ固有設定のライフサイクルを独立させることである。
+
+たとえばDarwin Core公式語彙を最新版に更新するときは、Darwin Core語彙graphだけを削除・再投入できる。この操作によってBio-Database独自の利用可否や日本語名を失わない。
+
+逆にBio-Database側の設定だけを作り直す場合は、`occurrence-profile` graphだけを削除・再投入できる。
+
+したがって、Darwin Core公式データの更新とBio-Database独自設定の更新を互いに巻き込まずに実施できる。
+
+述語のnamespaceについても同様に、Bio-Database固有概念はBio-Database独自namespaceを使用する。
+
+```text
+https://bio-database.net/terms/useAtBioDatabase
+```
+
+一方、日本語表示名は既存標準語彙で意味を十分表現できるため、独自述語を作らず `skos:prefLabel` を使用する。
 
 ---
 
@@ -141,7 +190,51 @@ Fuseki
 
 ---
 
-## 5. Darwin Core候補API
+## 5. Fusekiへの投入・置き換え
+
+生成した `darwin_core_master.nq` は、Darwin Core公式語彙graphとBio-Database固有設定graphの両方を含む。
+
+既存Fuseki上のDarwin Core関連データを完全に置き換える場合は、対象の2 graphだけを削除してから、新しいN-Quadsを投入する。
+
+削除対象:
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+SPARQL Update例:
+
+```sparql
+DROP SILENT GRAPH <https://bio-database.net/graphs/vocabularies/darwin-core>;
+DROP SILENT GRAPH <https://bio-database.net/graphs/app/occurrence-profile>;
+```
+
+この操作ではOccurrence RDFやGBIF Backboneなど、他のnamed graphは削除しない。
+
+その後、生成済みN-QuadsをFusekiの `/data` endpointへ `application/n-quads` として投入する。
+
+```bash
+curl -fsS \
+  -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
+  -X POST \
+  -H 'Content-Type: application/n-quads' \
+  --data-binary @darwin_core_master.nq \
+  "${FUSEKI_URL}/${FUSEKI_DATASET}/data"
+```
+
+現在生成済みのN-Quadsでは、概ね次の件数を想定する。
+
+```text
+graphs/vocabularies/darwin-core : 3654 triples
+graphs/app/occurrence-profile   : 799 triples
+```
+
+投入後はgraphごとのtriple数を確認し、対象2 graphが期待どおり再作成されたことを検証する。
+
+---
+
+## 6. Darwin Core候補API
 
 対象API:
 
@@ -161,7 +254,7 @@ GET /vocabularies/darwin-core
 
 ---
 
-## 6. 移行状態
+## 7. 移行状態
 
 この方針への変更時点では、`list.csv`を実行時フィルターとして利用する実装を撤回する。
 
@@ -171,7 +264,7 @@ GET /vocabularies/darwin-core
 
 ---
 
-## 7. 受け入れ条件
+## 8. 受け入れ条件
 
 移行時点:
 
