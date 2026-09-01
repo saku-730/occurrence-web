@@ -18,6 +18,8 @@ const OCCURRENCE_PROFILE_GRAPH_URI: &str =
 const LOCAL_NAME_PREDICATE_URI: &str = "https://bio-database.net/terms/localName";
 const USE_AT_BIO_DATABASE_PREDICATE_URI: &str =
     "https://bio-database.net/terms/useAtBioDatabase";
+const SKOS_PREF_LABEL_PREDICATE_URI: &str =
+    "http://www.w3.org/2004/02/skos/core#prefLabel";
 
 #[derive(Clone)]
 pub struct FusekiClient {
@@ -43,7 +45,7 @@ impl FusekiClient {
 fn build_list_darwin_core_terms_query() -> String {
     format!(
         r#"
-        SELECT DISTINCT ?term ?localName
+        SELECT DISTINCT ?term ?localName ?labelJa
         WHERE {{
             GRAPH <{DARWIN_CORE_VOCABULARY_GRAPH_URI}> {{
                 ?term <{LOCAL_NAME_PREDICATE_URI}> ?localName .
@@ -51,9 +53,13 @@ fn build_list_darwin_core_terms_query() -> String {
             }}
             GRAPH <{OCCURRENCE_PROFILE_GRAPH_URI}> {{
                 ?term <{USE_AT_BIO_DATABASE_PREDICATE_URI}> true .
+                OPTIONAL {{
+                    ?term <{SKOS_PREF_LABEL_PREDICATE_URI}> ?labelJa .
+                    FILTER(LANG(?labelJa) = "ja")
+                }}
             }}
         }}
-        ORDER BY LCASE(STR(?localName)) STR(?term)
+        ORDER BY LCASE(COALESCE(STR(?labelJa), STR(?localName))) STR(?term)
         "#
     )
 }
@@ -131,7 +137,9 @@ impl OccurrenceRdfStore for FusekiClient {
                 Ok(DarwinCoreTerm {
                     uri: binding_value(binding, "term")
                         .ok_or(OccurrenceServiceError::StoreFailed)?,
-                    local_name: binding_value(binding, "localName")
+                    // frontendはlocal_nameを表示名として扱っているため、
+                    // Fusekiの日本語prefLabelを優先し、無い場合だけ従来localNameへ戻す。
+                    local_name: display_name_from_binding(binding)
                         .ok_or(OccurrenceServiceError::StoreFailed)?,
                 })
             })
@@ -153,6 +161,10 @@ impl OccurrenceRdfStore for FusekiClient {
     }
 }
 
+fn display_name_from_binding(binding: &serde_json::Value) -> Option<String> {
+    binding_value(binding, "labelJa").or_else(|| binding_value(binding, "localName"))
+}
+
 fn binding_value(binding: &serde_json::Value, name: &str) -> Option<String> {
     binding
         .get(name)?
@@ -166,7 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn darwin_core_term_query_joins_occurrence_profile_and_requires_enabled_terms() {
+    fn darwin_core_term_query_joins_profile_requires_enabled_and_reads_japanese_label() {
         let query = build_list_darwin_core_terms_query();
 
         assert!(query.contains(&format!(
@@ -176,5 +188,29 @@ mod tests {
         assert!(query.contains(&format!(
             "?term <{USE_AT_BIO_DATABASE_PREDICATE_URI}> true ."
         )));
+        assert!(query.contains(&format!(
+            "?term <{SKOS_PREF_LABEL_PREDICATE_URI}> ?labelJa ."
+        )));
+        assert!(query.contains("FILTER(LANG(?labelJa) = \"ja\")"));
+    }
+
+    #[test]
+    fn japanese_label_is_preferred_and_local_name_is_fallback() {
+        let with_japanese = serde_json::json!({
+            "localName": { "value": "scientificName" },
+            "labelJa": { "value": "学名" }
+        });
+        assert_eq!(
+            display_name_from_binding(&with_japanese).as_deref(),
+            Some("学名")
+        );
+
+        let without_japanese = serde_json::json!({
+            "localName": { "value": "scientificName" }
+        });
+        assert_eq!(
+            display_name_from_binding(&without_japanese).as_deref(),
+            Some("scientificName")
+        );
     }
 }
