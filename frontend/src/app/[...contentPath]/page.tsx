@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ComponentPropsWithoutRef } from "react";
+import type { ComponentPropsWithoutRef, PropsWithChildren } from "react";
 
 import Markdown from "markdown-to-jsx/react";
 import { notFound } from "next/navigation";
@@ -15,14 +15,15 @@ interface MarkdownPageProps {
   }>;
 }
 
+function MarkdownWrapper({ children }: PropsWithChildren) {
+  return <div className="space-y-5">{children}</div>;
+}
+
 const MARKDOWN_OPTIONS = {
   disableParsingRawHTML: true,
   forceBlock: true,
   forceWrapper: true,
-  wrapper: "div",
-  wrapperProps: {
-    className: "space-y-5",
-  },
+  wrapper: MarkdownWrapper,
   overrides: {
     h1: {
       props: {
