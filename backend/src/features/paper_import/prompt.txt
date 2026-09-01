@@ -52,11 +52,11 @@
 正しい出力は2件です:
 {
   "scientificName": "Pheretima agrestis",
-  "locality": "大慈仙町"
+  "locality": "奈良県奈良市大慈仙町"
 }
 {
   "scientificName": "Pheretima agrestis",
-  "locality": "奈良公園"
+  "locality": "奈良県奈良市奈良公園"
 }
 
 3. 分類群と位置情報
