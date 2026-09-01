@@ -242,35 +242,53 @@ graphs/app/occurrence-profile   : 799 triples
 GET /vocabularies/darwin-core
 ```
 
-最終的な処理方針は以下。
+候補取得はFuseki内で完結させる。
 
-1. Fuseki内のDarwin Core語彙graphを対象にする。
-2. Bio-Databaseの`occurrence-profile` graphと結合する。
-3. `bio:useAtBioDatabase true` の語彙だけを新規入力候補として返す。
-4. `skos:prefLabel` の `@ja` が存在すれば日本語表示名として返す。
+1. `https://bio-database.net/graphs/vocabularies/darwin-core` から語彙IRIと `bio:localName` を取得する。
+2. 同じ語彙IRIを `https://bio-database.net/graphs/app/occurrence-profile` とJOINする。
+3. `https://bio-database.net/terms/useAtBioDatabase true` を持つ語彙だけを返す。
+4. `false` の語彙、および `useAtBioDatabase` が存在しない語彙は新規入力候補として返さない。
 5. 候補の識別にはIRIを使用する。表示ラベルは識別子として扱わない。
+
+概念的なSPARQLは以下。
+
+```sparql
+SELECT DISTINCT ?term ?localName
+WHERE {
+  GRAPH <https://bio-database.net/graphs/vocabularies/darwin-core> {
+    ?term <https://bio-database.net/terms/localName> ?localName .
+    FILTER(isIRI(?term))
+  }
+  GRAPH <https://bio-database.net/graphs/app/occurrence-profile> {
+    ?term <https://bio-database.net/terms/useAtBioDatabase> true .
+  }
+}
+ORDER BY LCASE(STR(?localName)) STR(?term)
+```
+
+現時点のAPIレスポンスは従来どおり `uri` と `local_name` を返す。`skos:prefLabel` の `@ja` はFusekiには格納済みだが、backend APIレスポンスへの日本語表示名追加は別実装とする。
 
 既存Occurrenceに、現在の新規入力候補ではないpredicateが含まれていても、自動削除・自動変換はしない。
 
 ---
 
-## 7. 移行状態
+## 7. 実装状態
 
-この方針への変更時点では、`list.csv`を実行時フィルターとして利用する実装を撤回する。
+FusekiへのBio-Database固有メタデータ投入後、Darwin Core候補backendの絞り込みを実装済みとする。
 
-そのため、FusekiへのBio-Database固有メタデータ投入と、そのメタデータを使ったSPARQL絞り込みが実装されるまでは、`GET /vocabularies/darwin-core`はFusekiに存在するDarwin Core語彙を全件返す。
+現在の動作:
 
-これは移行中の一時的な挙動であり、最終仕様は前節のFuseki内メタデータによる絞り込みとする。
+- runtimeで `list.csv` は読まない。
+- backendのDarwin Core候補取得はFusekiだけを参照する。
+- Darwin Core語彙graphと`occurrence-profile` graphをIRIでJOINする。
+- `bio:useAtBioDatabase true` の語彙だけを `GET /vocabularies/darwin-core` の候補として返す。
+- `false` または設定なしの語彙は候補に返さない。
+- APIレスポンス形式は現時点では `uri` / `local_name` のまま維持する。
+- 日本語 `skos:prefLabel @ja` のAPI返却は未実装であり、次段階で追加できる。
 
 ---
 
 ## 8. 受け入れ条件
-
-移行時点:
-
-- backendに`list.csv`を実行時読み込みする依存がない。
-- `darwin_core_policy`によるCSVパース・allowlist生成がない。
-- `GET /vocabularies/darwin-core`はFusekiから取得したDarwin Core語彙をそのまま候補として返す。
 
 N-Quads生成:
 
@@ -283,9 +301,16 @@ N-Quads生成:
 - Bio-Database固有tripleは `https://bio-database.net/graphs/app/occurrence-profile` に入れる。
 - 元のDarwin Core語彙tripleは `https://bio-database.net/graphs/vocabularies/darwin-core` のまま保持する。
 
-最終形:
+backend候補取得:
 
-- Darwin Core公式語彙graphとBio-Database固有設定graphが分離されている。
-- backendはFuseki内の `bio:useAtBioDatabase` を使って候補を絞り込む。
-- 日本語表示名はFuseki内の `skos:prefLabel` `@ja` から取得できる。
-- runtimeの候補判定に`list.csv`を直接使用しない。
+- backendに`list.csv`のruntime依存がない。
+- `GET /vocabularies/darwin-core` はFusekiの2 named graphをJOINして取得する。
+- `bio:useAtBioDatabase true` の語彙だけを返す。
+- `bio:useAtBioDatabase false` の語彙を返さない。
+- `useAtBioDatabase` が存在しない語彙も返さない。
+- 既存OccurrenceのRDFは候補設定変更によって自動削除・自動変換しない。
+
+今後:
+
+- 日本語表示名をAPIで返す場合は、`occurrence-profile` graph内の `skos:prefLabel` `@ja` を取得してレスポンスへ追加する。
+- runtimeの候補判定に`list.csv`を直接使用しない方針は維持する。
