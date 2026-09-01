@@ -24,7 +24,7 @@ https://bio-database.net/graphs/app/occurrence-profile
 ```
 
 - `.../vocabularies/darwin-core`: Darwin Core語彙本体
-- `.../app/occurrence-profile`: Bio-Databaseでの利用可否や表示情報などのアプリ固有設定
+- `.../app/occurrence-profile`: Bio-Databaseでの利用可否と日本語表示名
 
 この分離によりDarwin Core語彙を再生成・再投入しても、Bio-Database固有設定を独立して管理できるようにする。
 
@@ -32,44 +32,83 @@ https://bio-database.net/graphs/app/occurrence-profile
 
 ## 3. Bio-Database用メタデータ
 
-最低限、各語彙について以下をFuseki側で表現できるようにする。
+Bio-Database固有設定として各語彙に追加する情報は、当面次の2つだけとする。
 
-- Bio-Databaseで新規入力候補として使用するか
-- 日本語表示名
+1. Bio-Databaseで使用するか
+2. 日本語で何と表示するか
 
-`list.csv`では現在それぞれ以下の列に対応する。
+### 3.1 Bio-Databaseで使用するか
+
+述語:
 
 ```text
-use_at_bio_database
-label_ja
+https://bio-database.net/terms/useAtBioDatabase
 ```
 
-将来的には必要に応じて以下もBio-Database固有メタデータとして追加できる。
+目的語は `xsd:boolean` とし、`true` / `false` を明示的に保存する。
 
-- 表示順
-- 入力形式
-- 必須・推奨区分
-- カテゴリ
-- literal / IRI の入力制約
+`list.csv` の `use_at_bio_database` 列を元にする。
 
-RDF上の具体的なBio-Database独自predicate URIは、Fusekiへの投入処理を実装する際に確定する。Darwin Core公式語彙のpredicateとして偽装せず、Bio-Database独自namespaceを使用する。
+N-Quads例:
 
-概念例:
-
-```turtle
-# predicate URIは設計例。正式URIは投入処理実装時に確定する。
-dwc:scientificName
-    bio:useAtBioDatabase true ;
-    bio:labelJa "学名"@ja .
+```nq
+<http://rs.tdwg.org/dwc/terms/scientificName> <https://bio-database.net/terms/useAtBioDatabase> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <https://bio-database.net/graphs/app/occurrence-profile> .
 ```
 
-これらのtripleはBio-Database用named graphに格納し、Darwin Core公式語彙graphそのものは改変しない。
+`false` の用語についてもtripleを省略せず、明示的に `false` を保存する。
+
+### 3.2 日本語表示名
+
+述語:
+
+```text
+http://www.w3.org/2004/02/skos/core#prefLabel
+```
+
+目的語は日本語言語タグ付きliteral (`@ja`) とする。
+
+`list.csv` の `label_ja` 列を元にする。
+
+N-Quads例:
+
+```nq
+<http://rs.tdwg.org/dwc/terms/scientificName> <http://www.w3.org/2004/02/skos/core#prefLabel> "学名"@ja <https://bio-database.net/graphs/app/occurrence-profile> .
+```
+
+`label_ja` が空欄の場合は、日本語ラベルを推測・英語ラベルで代用せず、`skos:prefLabel` の `@ja` tripleは生成しない。
+
+### 3.3 主語とnamed graph
+
+主語には各語彙そのもののIRIを使う。
+
+Bio-Database固有の2種類のtripleはすべて次のnamed graphへ格納する。
+
+```text
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+Darwin Core公式語彙graphにはBio-Database固有tripleを追加しない。
+
+したがって、1語彙の基本形は次のようになる。
+
+```nq
+<TERM_IRI> <https://bio-database.net/terms/useAtBioDatabase> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <https://bio-database.net/graphs/app/occurrence-profile> .
+<TERM_IRI> <http://www.w3.org/2004/02/skos/core#prefLabel> "日本語名"@ja <https://bio-database.net/graphs/app/occurrence-profile> .
+```
 
 ---
 
 ## 4. `list.csv`の位置づけ
 
-`frontend/content/terms/darwin-core/list.csv`は、Bio-Databaseで利用する語彙設定を人間がGit上で管理・レビューするための元データとして利用できる。
+`frontend/content/terms/darwin-core/list.csv`は、Bio-Databaseで利用する語彙設定を人間がGit上で管理・レビューするための元データとして利用する。
+
+対応は以下とする。
+
+| `list.csv` | RDF |
+| --- | --- |
+| `iri` | 主語IRI |
+| `use_at_bio_database` | `bio:useAtBioDatabase` の `xsd:boolean` |
+| `label_ja` | `skos:prefLabel` の `@ja` literal |
 
 ただし、Rust backendが実行時に`include_str!`等で`list.csv`を読み、Fusekiの結果と照合して候補を決定する構成にはしない。
 
@@ -103,8 +142,8 @@ GET /vocabularies/darwin-core
 
 1. Fuseki内のDarwin Core語彙graphを対象にする。
 2. Bio-Databaseの`occurrence-profile` graphと結合する。
-3. Bio-Databaseで使用する設定が有効な語彙だけを新規入力候補として返す。
-4. 日本語表示名など、UIに必要なメタデータもFusekiから取得して返す。
+3. `bio:useAtBioDatabase true` の語彙だけを新規入力候補として返す。
+4. `skos:prefLabel` の `@ja` が存在すれば日本語表示名として返す。
 5. 候補の識別にはIRIを使用する。表示ラベルは識別子として扱わない。
 
 既存Occurrenceに、現在の新規入力候補ではないpredicateが含まれていても、自動削除・自動変換はしない。
@@ -129,10 +168,17 @@ GET /vocabularies/darwin-core
 - `darwin_core_policy`によるCSVパース・allowlist生成がない。
 - `GET /vocabularies/darwin-core`はFusekiから取得したDarwin Core語彙をそのまま候補として返す。
 
+N-Quads生成:
+
+- `list.csv` の全行について `use_at_bio_database` を `xsd:boolean` として明示的に生成する。
+- `label_ja` が存在する行について `skos:prefLabel` + `@ja` を生成する。
+- `label_ja` が空欄なら日本語ラベルtripleを生成しない。
+- Bio-Database固有tripleは `https://bio-database.net/graphs/app/occurrence-profile` に入れる。
+- 元のDarwin Core語彙tripleは `https://bio-database.net/graphs/vocabularies/darwin-core` のまま保持する。
+
 最終形:
 
 - Darwin Core公式語彙graphとBio-Database固有設定graphが分離されている。
-- `list.csv`のBio-Database固有情報をFusekiへ投入できる。
-- backendはFuseki内のBio-Database固有設定を使って候補を絞り込む。
-- 日本語表示名などのUI用メタデータもFusekiから取得できる。
+- backendはFuseki内の `bio:useAtBioDatabase` を使って候補を絞り込む。
+- 日本語表示名はFuseki内の `skos:prefLabel` `@ja` から取得できる。
 - runtimeの候補判定に`list.csv`を直接使用しない。
