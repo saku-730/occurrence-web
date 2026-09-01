@@ -1,0 +1,54 @@
+name: Fix package-lock conflict
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix-package-lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve package-lock conflict
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("frontend/package-lock.json")
+          text = path.read_text()
+          old = '''<<<<<<< HEAD
+                  "markdown-to-jsx": "9.10.2",
+          =======
+                  "html2canvas": "^1.4.1",
+                  "jspdf": "^4.2.1",
+          >>>>>>> origin/main
+          '''
+          new = '''        "html2canvas": "^1.4.1",
+                  "jspdf": "^4.2.1",
+                  "markdown-to-jsx": "9.10.2",
+          '''
+
+          if old not in text:
+              raise SystemExit("expected package-lock conflict block not found")
+
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Validate JSON
+        run: python -m json.tool frontend/package-lock.json > /dev/null
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          git commit -m "fix package-lock.json merge conflict"
+          git push
