@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>User Guide on Bio Database</title>
+		<link>http://localhost:1313/usage/user-guide/</link>
+		<description>Recent content in User Guide on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<atom:link href="http://localhost:1313/usage/user-guide/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Occurrences</title>
+				<link>http://localhost:1313/usage/user-guide/occurrences/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/occurrences/</guid>
+				<description>&lt;h2 id=&#34;occurrenceとは何か&#34;&gt;Occurrenceとは何か&lt;/h2&gt;&#xA;&lt;p&gt;Occurrenceは、生物がいつ、どこで、どのように確認・採集・記録されたかを表すデータです。種名だけでなく、同定、イベント、位置情報、添付ファイル、権利情報を関連付けて管理できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;新規登録&#34;&gt;新規登録&lt;/h2&gt;&#xA;&lt;p&gt;データ登録画面で項目名と値を入力して、オカレンスを新規作成します。分類を選択した場合は、GBIF Backbone Taxonomyの候補を利用できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;編集&#34;&gt;編集&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは、詳細画面の編集から項目と添付ファイルを変更できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;削除&#34;&gt;削除&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは削除できます。削除前には確認画面が表示されます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開非公開&#34;&gt;公開・非公開&lt;/h2&gt;&#xA;&lt;p&gt;公開データはログインしていない利用者を含めて閲覧できます。非公開データは作成者のみが閲覧できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;所有者&#34;&gt;所有者&lt;/h2&gt;&#xA;&lt;p&gt;オカレンスの作成者が所有者です。所有者は自分のオカレンスを編集・削除できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;入力可能な項目&#34;&gt;入力可能な項目&lt;/h2&gt;&#xA;&lt;p&gt;項目名にはDarwin CoreをはじめとするURIを指定できます。一般的な項目は候補から選択でき、分類、同定、イベント、位置情報などを記録できます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Search</title>
+				<link>http://localhost:1313/usage/user-guide/search/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/search/</guid>
+				<description>&lt;h2 id=&#34;キーワード検索&#34;&gt;キーワード検索&lt;/h2&gt;&#xA;&lt;p&gt;データ検索画面で、項目名と検索したい値を指定します。入力した値と一致するオカレンスを検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;分類群による検索&#34;&gt;分類群による検索&lt;/h2&gt;&#xA;&lt;p&gt;分類を検索条件に指定すると、GBIF Backbone Taxonomyに基づく分類群を対象にオカレンスを絞り込めます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;日付による検索&#34;&gt;日付による検索&lt;/h2&gt;&#xA;&lt;p&gt;記録日、作成日時、更新日時などの日付を持つ項目を条件として、対象となるオカレンスを検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;場所による検索&#34;&gt;場所による検索&lt;/h2&gt;&#xA;&lt;p&gt;国、自治体、産地、緯度・経度などの位置情報を持つ項目を条件として検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ページネーション&#34;&gt;ページネーション&lt;/h2&gt;&#xA;&lt;p&gt;検索結果は複数ページに分けて表示されます。次のページを選択すると、続きの検索結果を表示できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;検索結果の見方&#34;&gt;検索結果の見方&lt;/h2&gt;&#xA;&lt;p&gt;各行にはオカレンスの主要情報、作成者、作成日時、更新日時、公開範囲が表示されます。行を選択すると詳細画面を開けます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Identifications</title>
+				<link>http://localhost:1313/usage/user-guide/identifications/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/identifications/</guid>
+				<description>&lt;h2 id=&#34;identificationとは何か&#34;&gt;Identificationとは何か&lt;/h2&gt;&#xA;&lt;p&gt;Identificationは、オカレンスに対する生物学的な同定情報を表すまとまりです。オカレンス本体とは分離して、学名、同定者、同定日、確度、注記などを管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;現在の同定&#34;&gt;現在の同定&lt;/h2&gt;&#xA;&lt;p&gt;現在採用している学名や分類群を、オカレンスのIdentificationとして記録します。オカレンス本体の記録情報と分離することで、採集・観察の事実と同定結果を区別できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;複数同定の扱い&#34;&gt;複数同定の扱い&lt;/h2&gt;&#xA;&lt;p&gt;現行のMVPでは、各オカレンスに1件のIdentificationを登録します。データモデルでは複数のIdentificationを扱える識別子の構造を採用しており、将来は同定履歴を複数件として記録する予定です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;同定者&#34;&gt;同定者&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;dwc:identifiedBy&lt;/code&gt; を使って、同定を行った人または組織を記録します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;同定日&#34;&gt;同定日&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;dwc:dateIdentified&lt;/code&gt; を使って、同定が行われた日付を記録します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;同定確度注記&#34;&gt;同定確度・注記&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;dwc:identificationQualifier&lt;/code&gt; で同定の確度や限定条件を、&lt;code&gt;dwc:identificationRemarks&lt;/code&gt; で補足情報を記録します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;gbif分類群との関連付け&#34;&gt;GBIF分類群との関連付け&lt;/h2&gt;&#xA;&lt;p&gt;分類をGBIF Backbone Taxonomyの候補から選ぶと、&lt;code&gt;dwciri:toTaxon&lt;/code&gt; にGBIFの分類群URIを記録します。同時に学名を &lt;code&gt;dwc:scientificName&lt;/code&gt; として保存し、URIと表示用の学名を関連付けます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Media</title>
+				<link>http://localhost:1313/usage/user-guide/media/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/media/</guid>
+				<description>&lt;h2 id=&#34;画像のアップロード&#34;&gt;画像のアップロード&lt;/h2&gt;&#xA;&lt;p&gt;オカレンスの登録画面または編集画面からファイルを追加できます。アップロードしたファイルはGarageに保存され、オカレンスにはメディアURIとして紐付きます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;対応形式&#34;&gt;対応形式&lt;/h2&gt;&#xA;&lt;p&gt;対応する形式は以下です。ファイルの拡張子だけでなく、実データのMIME typeも検証します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;画像: JPEG、PNG、WebP&lt;/li&gt;&#xA;&lt;li&gt;音声: MP3、WAV、M4A&lt;/li&gt;&#xA;&lt;li&gt;動画: MP4、MOV&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;ファイルサイズ制限&#34;&gt;ファイルサイズ制限&lt;/h2&gt;&#xA;&lt;p&gt;画像、音声、動画はいずれも1ファイルあたり1000MBまでアップロードできます。上限を超えるファイルは保存されません。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ライセンス&#34;&gt;ライセンス&lt;/h2&gt;&#xA;&lt;p&gt;添付ファイルの利用条件は、紐付けるオカレンスのライセンス情報として管理します。公開前に、ファイルを共有・再利用できる条件を確認してください。&lt;/p&gt;&#xA;&lt;h2 id=&#34;撮影者作成者&#34;&gt;撮影者・作成者&lt;/h2&gt;&#xA;&lt;p&gt;アップロードしたユーザーはメディアの所有者として保存されます。撮影者やファイル作成者がアップロード者と異なる場合は、オカレンスの項目や注記に記録してください。&lt;/p&gt;&#xA;&lt;h2 id=&#34;画像の削除&#34;&gt;画像の削除&lt;/h2&gt;&#xA;&lt;p&gt;編集画面では、オカレンスからメディアの紐付けを解除できます。メディア本体を削除するには、アップロードした本人が明示的に削除します。ほかのオカレンスから参照されているメディアは削除できません。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Access Control</title>
+				<link>http://localhost:1313/usage/user-guide/access-control/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/access-control/</guid>
+				<description>&lt;h2 id=&#34;公開データ&#34;&gt;公開データ&lt;/h2&gt;&#xA;&lt;p&gt;公開として登録したオカレンスは、ログインしていない利用者を含めて閲覧できます。公開オカレンスに紐付くメディアも閲覧できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;非公開データ&#34;&gt;非公開データ&lt;/h2&gt;&#xA;&lt;p&gt;非公開として登録したオカレンスは、作成者以外には検索結果と詳細画面に表示されません。非公開オカレンスにのみ紐付くメディアも同じ条件で保護されます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;作成者&#34;&gt;作成者&lt;/h2&gt;&#xA;&lt;p&gt;オカレンスを登録したログインユーザーが作成者として記録されます。作成者情報はバックエンドが自動で設定するため、登録時に変更できません。&lt;/p&gt;&#xA;&lt;h2 id=&#34;閲覧可能範囲&#34;&gt;閲覧可能範囲&lt;/h2&gt;&#xA;&lt;p&gt;公開オカレンスは誰でも閲覧できます。非公開オカレンスは、そのオカレンスの作成者だけが閲覧できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;編集可能範囲&#34;&gt;編集可能範囲&lt;/h2&gt;&#xA;&lt;p&gt;オカレンスを編集・削除できるのは作成者です。添付メディアも、アップロードしたユーザーだけが削除できます。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>

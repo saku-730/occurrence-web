@@ -7579,7 +7579,10 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             body_json["items"][0]["occurrence_id"],
             occurrence_id.to_string()
         );
-        assert_eq!(body_json["items"][0]["creator_user_id"], creator_user_id.to_string());
+        assert_eq!(
+            body_json["items"][0]["creator_user_id"],
+            creator_user_id.to_string()
+        );
         assert_eq!(body_json["items"][0]["occurrence_uri"], occurrence_uri);
         assert_eq!(body_json["items"][0]["scientific_name"], "Quercus serrata");
         assert_eq!(

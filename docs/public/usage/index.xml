@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Usage on Bio Database</title>
+		<link>http://localhost:1313/usage/</link>
+		<description>Recent content in Usage on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<atom:link href="http://localhost:1313/usage/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Overview</title>
+				<link>http://localhost:1313/usage/overview/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/overview/</guid>
+				<description>&lt;h2 id=&#34;背景&#34;&gt;背景&lt;/h2&gt;&#xA;&lt;p&gt;生物オカレンス情報は、単なる種名と位置情報だけではありません。採集イベント、同定履歴、標本、画像、分類群、権利情報など、複数の情報が相互に関係します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;解決したい問題&#34;&gt;解決したい問題&lt;/h2&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;表計算ファイルでは項目追加や複数値の管理が難しい&lt;/li&gt;&#xA;&lt;li&gt;データ構造がプロジェクトごとに異なる&lt;/li&gt;&#xA;&lt;li&gt;分類群名や語彙の表記揺れが起きる&lt;/li&gt;&#xA;&lt;li&gt;画像とメタデータが分離しやすい&lt;/li&gt;&#xA;&lt;li&gt;公開範囲や所有者管理が難しい&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;対象利用者&#34;&gt;対象利用者&lt;/h2&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;生物調査を行う研究者&lt;/li&gt;&#xA;&lt;li&gt;標本・観察記録を管理する個人&lt;/li&gt;&#xA;&lt;li&gt;小規模な研究室や調査グループ&lt;/li&gt;&#xA;&lt;li&gt;生物多様性データをRDFとして扱いたい開発者&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;プロジェクトの範囲&#34;&gt;プロジェクトの範囲&lt;/h2&gt;&#xA;&lt;p&gt;プロジェクトの機能は、実装済み、開発中、将来予定に分けて整理します。&lt;/p&gt;&#xA;&lt;h3 id=&#34;実装済み&#34;&gt;実装済み&lt;/h3&gt;&#xA;&lt;p&gt;現時点で利用できる機能です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;開発中&#34;&gt;開発中&lt;/h3&gt;&#xA;&lt;p&gt;現在実装・検証を進めている機能です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;将来予定&#34;&gt;将来予定&lt;/h3&gt;&#xA;&lt;p&gt;運用状況と利用者の要望を踏まえて追加を検討する機能です。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Getting Started</title>
+				<link>http://localhost:1313/usage/getting-started/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/getting-started/</guid>
+				<description>&lt;p&gt;Bio Databaseでオカレンスデータを登録、確認、公開するまでの基本的な流れを説明します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;アカウント作成&#34;&gt;アカウント作成&lt;/h2&gt;&#xA;&lt;p&gt;メールアドレスを使ってアカウントを作成します。仮登録メールに記載されたリンクから本登録を完了します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ログイン&#34;&gt;ログイン&lt;/h2&gt;&#xA;&lt;p&gt;作成したメールアドレスとパスワードでログインします。データの登録、編集、削除にはログインが必要です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;最初のオカレンス登録&#34;&gt;最初のオカレンス登録&lt;/h2&gt;&#xA;&lt;p&gt;データ登録画面で項目名と値を入力します。分類を指定する場合は、GBIF Backbone Taxonomyの候補から選択できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;登録したデータの確認&#34;&gt;登録したデータの確認&lt;/h2&gt;&#xA;&lt;p&gt;登録後はデータ詳細画面で、入力した項目、作成者、作成日時、添付ファイルを確認できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;検索&#34;&gt;検索&lt;/h2&gt;&#xA;&lt;p&gt;データ検索画面から、項目名と値を条件として登録済みのオカレンスを検索します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;編集削除&#34;&gt;編集・削除&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは、詳細画面から編集または削除できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開範囲の設定&#34;&gt;公開範囲の設定&lt;/h2&gt;&#xA;&lt;p&gt;登録時に公開範囲を設定します。公開データは誰でも閲覧でき、非公開データは作成者のみが閲覧できます。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>

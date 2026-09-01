@@ -16,6 +16,8 @@ use crate::features::occurrences::dto::{
 };
 
 // API追加時はhandlerだけでなくこのOpenAPI定義にも登録する。フロントとの契約をここで固定する。
+// paper import APIは現在source_handlerへ簡略化中のため、旧dto/handlerのOpenAPI定義は削除している。
+// source_handlerへutoipa定義を追加する段階で、新しいpaper APIだけをここへ登録する。
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -69,6 +71,7 @@ use crate::features::occurrences::dto::{
         (name = "auth", description = "Authentication endpoints"),
         (name = "occurrences", description = "Occurrence RDF endpoints"),
         (name = "media", description = "Media attachment endpoints"),
+        (name = "paper-import", description = "Paper PDF import endpoints"),
         (name = "vocabularies", description = "Read-only RDF vocabulary endpoints")
     )
 )]

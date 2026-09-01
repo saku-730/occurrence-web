@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Bio Database</title>
+		<link>http://localhost:1313/</link>
+		<description>Recent content on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<lastBuildDate>Mon, 01 Jan 0001 00:00:00 +0000</lastBuildDate>
+		
+			<atom:link href="http://localhost:1313/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Backend</title>
+				<link>http://localhost:1313/docs/architecture/backend/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/architecture/backend/</guid>
+				<description>&lt;h2 id=&#34;rustを採用した理由&#34;&gt;Rustを採用した理由&lt;/h2&gt;&#xA;&lt;p&gt;Rustは、型による入力・状態の表現、非同期I/O、メモリ安全性を備えています。RDFストア、PostgreSQL、Garageなど複数の外部サービスを扱うAPIサーバーで、エラー処理を明示的に保つために採用しています。&lt;/p&gt;&#xA;&lt;h2 id=&#34;apiの責務&#34;&gt;APIの責務&lt;/h2&gt;&#xA;&lt;p&gt;APIサーバーは、認証、認可、HTTPリクエストの処理、入力検証、RDFへの変換、外部ストレージとの通信を担当します。フロントエンドや外部クライアントからFuseki・PostgreSQL・Garageへ直接接続させません。&lt;/p&gt;&#xA;&lt;h2 id=&#34;入力検証&#34;&gt;入力検証&lt;/h2&gt;&#xA;&lt;p&gt;オカレンス登録では、N-Quadsの構文、Named Graph、blank node subject、バックエンド管理述語、アクセス権URIを検証します。メディアでは、MIME type、拡張子、magic bytes、ファイルサイズを検証します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdf生成&#34;&gt;RDF生成&lt;/h2&gt;&#xA;&lt;p&gt;フロントエンドが送るフラットな項目名と値を受け取り、述語に応じてOccurrence、Identification、Event、Locationへ振り分けます。作成者、作成日時、更新日時、アクセス権はバックエンドが付加・管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;fusekiとの通信&#34;&gt;Fusekiとの通信&lt;/h2&gt;&#xA;&lt;p&gt;FusekiにはSPARQL QueryとSPARQL Updateで接続します。オカレンスの保存、詳細取得、検索、更新、削除を行い、分類群の階層関係も検索に利用します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;postgresqlとの役割分担&#34;&gt;PostgreSQLとの役割分担&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLは、ユーザー、認証情報、セッション、パスワードリセットトークン、メディアメタデータを管理します。RDFの意味関係を持つオカレンスデータはFusekiに保存します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;garageとの通信&#34;&gt;Garageとの通信&lt;/h2&gt;&#xA;&lt;p&gt;メディア本体はS3互換APIを介してGarageへ保存します。アップロード時は一時ファイルからストリーム転送し、PostgreSQLへのメタデータ保存が失敗した場合はGarageの保存を補償削除します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Data Model</title>
+				<link>http://localhost:1313/docs/concepts/data-model/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/data-model/</guid>
+				<description>&lt;h2 id=&#34;全体像&#34;&gt;全体像&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseでは、Occurrenceを記録全体の起点として、関連する情報をそれぞれの役割に応じて分離します。&lt;/p&gt;&#xA;&#xD;&#xA;&#xD;&#xA;&#xD;&#xA;&lt;div class=&#34;expressive-code&#34;&gt;&#xD;&#xA;  &lt;figure class=&#34;frame not-content&#34;&gt;&#xD;&#xA;  &lt;figcaption class=&#34;header&#34;&gt;&#xD;&#xA;    &lt;span class=&#34;title&#34;&gt;&lt;/span&gt;&#xD;&#xA;  &lt;/figcaption&gt;&#xD;&#xA;  &lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-text&#34; data-lang=&#34;text&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;Occurrence&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Identification&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Event&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Location&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── MaterialSample&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;├── Media&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;└── Project&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&#xD;&#xA;  &lt;/figure&gt;&#xD;&#xA;&lt;/div&gt;&#xD;&#xA;&lt;p&gt;現行実装では、Identification、Event、LocationをOccurrenceから独立した中間ノードとして保存します。Mediaは外部メディアURIとして関連付けます。MaterialSampleとProjectは、このモデルを拡張するための概念です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;occurrence&#34;&gt;Occurrence&lt;/h2&gt;&#xA;&lt;p&gt;記録全体の起点です。以下の情報と、ほかの構成要素との関連を保持します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Design Decisions</title>
+				<link>http://localhost:1313/docs/development/design-decisions/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/development/design-decisions/</guid>
+				<description>&lt;p&gt;このページでは、Bio Databaseにおける主要な設計判断を記録します。利用手順ではなく、技術選定の背景とトレードオフを説明するためのページです。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdfとpostgresqlを併用した理由&#34;&gt;RDFとPostgreSQLを併用した理由&lt;/h2&gt;&#xA;&lt;h3 id=&#34;課題&#34;&gt;課題&lt;/h3&gt;&#xA;&lt;p&gt;オカレンスは柔軟な語彙と多様な関係を必要とする一方、ユーザー、セッション、認証トークン、メディアメタデータには整合性の高い更新と検索が必要です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;候補&#34;&gt;候補&lt;/h3&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;すべてをRDFストアで管理する&lt;/li&gt;&#xA;&lt;li&gt;すべてをリレーショナルデータベースで管理する&lt;/li&gt;&#xA;&lt;li&gt;RDFとPostgreSQLを用途別に併用する&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h3 id=&#34;採用した方法&#34;&gt;採用した方法&lt;/h3&gt;&#xA;&lt;p&gt;オカレンスと語彙・分類群はRDFとしてFusekiに保存し、ユーザー・認証・セッション・メディアメタデータはPostgreSQLで管理します。&lt;/p&gt;&#xA;&lt;h3 id=&#34;採用理由&#34;&gt;採用理由&lt;/h3&gt;&#xA;&lt;p&gt;RDFは外部語彙と関係の追加に適し、PostgreSQLは認証やトランザクションを伴うアプリケーションデータに適しています。&lt;/p&gt;&#xA;&lt;h3 id=&#34;欠点&#34;&gt;欠点&lt;/h3&gt;&#xA;&lt;p&gt;データが2つのストアに分かれるため、横断処理と障害時の整合性を考慮する必要があります。&lt;/p&gt;&#xA;&lt;h3 id=&#34;今後の改善&#34;&gt;今後の改善&lt;/h3&gt;&#xA;&lt;p&gt;ストア間の補償処理、監査ログ、孤立メディア検出を強化します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;fusekiをdockerで運用する理由&#34;&gt;FusekiをDockerで運用する理由&lt;/h2&gt;&#xA;&lt;h3 id=&#34;課題-1&#34;&gt;課題&lt;/h3&gt;&#xA;&lt;p&gt;RDFストアを開発環境と本番環境で同じ構成に保ち、設定とデータ保存先を明確にする必要があります。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Occurrences</title>
+				<link>http://localhost:1313/usage/user-guide/occurrences/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/occurrences/</guid>
+				<description>&lt;h2 id=&#34;occurrenceとは何か&#34;&gt;Occurrenceとは何か&lt;/h2&gt;&#xA;&lt;p&gt;Occurrenceは、生物がいつ、どこで、どのように確認・採集・記録されたかを表すデータです。種名だけでなく、同定、イベント、位置情報、添付ファイル、権利情報を関連付けて管理できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;新規登録&#34;&gt;新規登録&lt;/h2&gt;&#xA;&lt;p&gt;データ登録画面で項目名と値を入力して、オカレンスを新規作成します。分類を選択した場合は、GBIF Backbone Taxonomyの候補を利用できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;編集&#34;&gt;編集&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは、詳細画面の編集から項目と添付ファイルを変更できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;削除&#34;&gt;削除&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは削除できます。削除前には確認画面が表示されます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開非公開&#34;&gt;公開・非公開&lt;/h2&gt;&#xA;&lt;p&gt;公開データはログインしていない利用者を含めて閲覧できます。非公開データは作成者のみが閲覧できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;所有者&#34;&gt;所有者&lt;/h2&gt;&#xA;&lt;p&gt;オカレンスの作成者が所有者です。所有者は自分のオカレンスを編集・削除できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;入力可能な項目&#34;&gt;入力可能な項目&lt;/h2&gt;&#xA;&lt;p&gt;項目名にはDarwin CoreをはじめとするURIを指定できます。一般的な項目は候補から選択でき、分類、同定、イベント、位置情報などを記録できます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Overview</title>
+				<link>http://localhost:1313/docs/overview/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/overview/</guid>
+				<description>&lt;h2 id=&#34;概要&#34;&gt;概要&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseは、生物オカレンス情報を構造化して登録、検索、共有するためのWebアプリケーションです。オカレンスのRDFデータ、ユーザー・認証情報、添付メディアを役割ごとに分けて管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;フロントエンド&#34;&gt;フロントエンド&lt;/h2&gt;&#xA;&lt;p&gt;Next.jsを使用して、データ登録、検索、詳細表示、編集、ユーザー操作の画面を提供します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;apiサーバー&#34;&gt;APIサーバー&lt;/h2&gt;&#xA;&lt;p&gt;Rustで実装したAPIサーバーが、認証、入力検証、オカレンスのRDF変換、アクセス制御を担当します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ユーザー認証情報&#34;&gt;ユーザー・認証情報&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLでユーザー、セッション、パスワードリセットトークン、メディアのメタデータを管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdfデータストア&#34;&gt;RDFデータストア&lt;/h2&gt;&#xA;&lt;p&gt;Apache Jena Fusekiに、オカレンス、語彙、分類群のRDFグラフを保存します。APIサーバーはSPARQLを使って保存、取得、検索を行います。&lt;/p&gt;&#xA;&lt;h2 id=&#34;メディアストレージ&#34;&gt;メディアストレージ&lt;/h2&gt;&#xA;&lt;p&gt;GarageをS3互換オブジェクトストレージとして使用し、画像、音声、動画などのファイル本体を保存します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;分類群データ&#34;&gt;分類群データ&lt;/h2&gt;&#xA;&lt;p&gt;GBIF Backbone TaxonomyをRDFへ変換し、約20GB規模の分類群データとしてFusekiへ投入します。分類候補の表示と分類群URIの記録に利用します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開基盤&#34;&gt;公開基盤&lt;/h2&gt;&#xA;&lt;p&gt;nginxをリバースプロキシとして使用し、Cloudflare Tunnelを経由して外部へ公開します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Overview</title>
+				<link>http://localhost:1313/usage/overview/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/overview/</guid>
+				<description>&lt;h2 id=&#34;背景&#34;&gt;背景&lt;/h2&gt;&#xA;&lt;p&gt;生物オカレンス情報は、単なる種名と位置情報だけではありません。採集イベント、同定履歴、標本、画像、分類群、権利情報など、複数の情報が相互に関係します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;解決したい問題&#34;&gt;解決したい問題&lt;/h2&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;表計算ファイルでは項目追加や複数値の管理が難しい&lt;/li&gt;&#xA;&lt;li&gt;データ構造がプロジェクトごとに異なる&lt;/li&gt;&#xA;&lt;li&gt;分類群名や語彙の表記揺れが起きる&lt;/li&gt;&#xA;&lt;li&gt;画像とメタデータが分離しやすい&lt;/li&gt;&#xA;&lt;li&gt;公開範囲や所有者管理が難しい&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;対象利用者&#34;&gt;対象利用者&lt;/h2&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;生物調査を行う研究者&lt;/li&gt;&#xA;&lt;li&gt;標本・観察記録を管理する個人&lt;/li&gt;&#xA;&lt;li&gt;小規模な研究室や調査グループ&lt;/li&gt;&#xA;&lt;li&gt;生物多様性データをRDFとして扱いたい開発者&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;プロジェクトの範囲&#34;&gt;プロジェクトの範囲&lt;/h2&gt;&#xA;&lt;p&gt;プロジェクトの機能は、実装済み、開発中、将来予定に分けて整理します。&lt;/p&gt;&#xA;&lt;h3 id=&#34;実装済み&#34;&gt;実装済み&lt;/h3&gt;&#xA;&lt;p&gt;現時点で利用できる機能です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;開発中&#34;&gt;開発中&lt;/h3&gt;&#xA;&lt;p&gt;現在実装・検証を進めている機能です。&lt;/p&gt;&#xA;&lt;h3 id=&#34;将来予定&#34;&gt;将来予定&lt;/h3&gt;&#xA;&lt;p&gt;運用状況と利用者の要望を踏まえて追加を検討する機能です。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Darwin Core</title>
+				<link>http://localhost:1313/docs/concepts/darwin-core/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/concepts/darwin-core/</guid>
+				<description>&lt;h2 id=&#34;darwin-coreとは何か&#34;&gt;Darwin Coreとは何か&lt;/h2&gt;&#xA;&lt;p&gt;Darwin Coreは、生物多様性データを記述するための標準語彙です。分類、採集・観察イベント、位置情報、標本、同定などに共通の項目名を提供します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;このアプリで採用している理由&#34;&gt;このアプリで採用している理由&lt;/h2&gt;&#xA;&lt;p&gt;Bio Databaseでは、プロジェクトごとに項目名や意味がばらつくことを避けるため、Darwin Coreを主要な入力語彙として採用しています。共通語彙を使うことで、登録したデータを検索・共有・再利用しやすくします。&lt;/p&gt;&#xA;&lt;h2 id=&#34;dwcとdwciriの違い&#34;&gt;dwcとdwciriの違い&lt;/h2&gt;&#xA;&lt;p&gt;&lt;code&gt;dwc&lt;/code&gt; は主にリテラル値を取るDarwin Core Termsの語彙です。&lt;code&gt;dwciri&lt;/code&gt; は主にIRIを目的語として関連先のリソースを指すDarwin Core RDFの語彙です。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;&lt;code&gt;dwc:scientificName&lt;/code&gt;: 学名を文字列として記録する&lt;/li&gt;&#xA;&lt;li&gt;&lt;code&gt;dwciri:toTaxon&lt;/code&gt;: 分類群をURIとして関連付ける&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;リテラル値とiri値&#34;&gt;リテラル値とIRI値&lt;/h2&gt;&#xA;&lt;p&gt;リテラル値は、学名や注記のような文字列・日付・数値です。IRI値は、GBIFの分類群ページのように、別のリソースを一意に指すURIです。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Getting Started</title>
+				<link>http://localhost:1313/usage/getting-started/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/getting-started/</guid>
+				<description>&lt;p&gt;Bio Databaseでオカレンスデータを登録、確認、公開するまでの基本的な流れを説明します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;アカウント作成&#34;&gt;アカウント作成&lt;/h2&gt;&#xA;&lt;p&gt;メールアドレスを使ってアカウントを作成します。仮登録メールに記載されたリンクから本登録を完了します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ログイン&#34;&gt;ログイン&lt;/h2&gt;&#xA;&lt;p&gt;作成したメールアドレスとパスワードでログインします。データの登録、編集、削除にはログインが必要です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;最初のオカレンス登録&#34;&gt;最初のオカレンス登録&lt;/h2&gt;&#xA;&lt;p&gt;データ登録画面で項目名と値を入力します。分類を指定する場合は、GBIF Backbone Taxonomyの候補から選択できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;登録したデータの確認&#34;&gt;登録したデータの確認&lt;/h2&gt;&#xA;&lt;p&gt;登録後はデータ詳細画面で、入力した項目、作成者、作成日時、添付ファイルを確認できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;検索&#34;&gt;検索&lt;/h2&gt;&#xA;&lt;p&gt;データ検索画面から、項目名と値を条件として登録済みのオカレンスを検索します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;編集削除&#34;&gt;編集・削除&lt;/h2&gt;&#xA;&lt;p&gt;自分が作成したオカレンスは、詳細画面から編集または削除できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開範囲の設定&#34;&gt;公開範囲の設定&lt;/h2&gt;&#xA;&lt;p&gt;登録時に公開範囲を設定します。公開データは誰でも閲覧でき、非公開データは作成者のみが閲覧できます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Search</title>
+				<link>http://localhost:1313/usage/user-guide/search/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/usage/user-guide/search/</guid>
+				<description>&lt;h2 id=&#34;キーワード検索&#34;&gt;キーワード検索&lt;/h2&gt;&#xA;&lt;p&gt;データ検索画面で、項目名と検索したい値を指定します。入力した値と一致するオカレンスを検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;分類群による検索&#34;&gt;分類群による検索&lt;/h2&gt;&#xA;&lt;p&gt;分類を検索条件に指定すると、GBIF Backbone Taxonomyに基づく分類群を対象にオカレンスを絞り込めます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;日付による検索&#34;&gt;日付による検索&lt;/h2&gt;&#xA;&lt;p&gt;記録日、作成日時、更新日時などの日付を持つ項目を条件として、対象となるオカレンスを検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;場所による検索&#34;&gt;場所による検索&lt;/h2&gt;&#xA;&lt;p&gt;国、自治体、産地、緯度・経度などの位置情報を持つ項目を条件として検索できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;ページネーション&#34;&gt;ページネーション&lt;/h2&gt;&#xA;&lt;p&gt;検索結果は複数ページに分けて表示されます。次のページを選択すると、続きの検索結果を表示できます。&lt;/p&gt;&#xA;&lt;h2 id=&#34;検索結果の見方&#34;&gt;検索結果の見方&lt;/h2&gt;&#xA;&lt;p&gt;各行にはオカレンスの主要情報、作成者、作成日時、更新日時、公開範囲が表示されます。行を選択すると詳細画面を開けます。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Storage</title>
+				<link>http://localhost:1313/docs/architecture/storage/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/architecture/storage/</guid>
+				<description>&lt;p&gt;Bio Databaseでは、データの性質に応じてPostgreSQL、Fuseki、Garageを使い分けます。この役割分担はアプリケーション設計の中心です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;postgresqlに保存するもの&#34;&gt;PostgreSQLに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLには、整合性のある更新と認証処理が必要なデータを保存します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;ユーザー&lt;/li&gt;&#xA;&lt;li&gt;認証情報&lt;/li&gt;&#xA;&lt;li&gt;セッション&lt;/li&gt;&#xA;&lt;li&gt;パスワードリセットトークン&lt;/li&gt;&#xA;&lt;li&gt;メディアのメタデータ&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;fusekiに保存するもの&#34;&gt;Fusekiに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;Fusekiには、生物学的な意味関係を持つRDFデータを保存します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;オカレンス&lt;/li&gt;&#xA;&lt;li&gt;Identification、Event、Location&lt;/li&gt;&#xA;&lt;li&gt;Darwin Coreなどの語彙&lt;/li&gt;&#xA;&lt;li&gt;GBIF Backbone Taxonomy&lt;/li&gt;&#xA;&lt;li&gt;オカレンスとメディアURIの関連&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;garageに保存するもの&#34;&gt;Garageに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;Garageには、画像や添付ファイルなどの大容量バイナリを保存します。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>

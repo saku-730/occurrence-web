@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+	<channel>
+		<title>Architecture on Bio Database</title>
+		<link>http://localhost:1313/docs/architecture/</link>
+		<description>Recent content in Architecture on Bio Database</description>
+		<generator>Hugo</generator>
+		<language>ja-JP</language>
+		
+		
+		
+			<copyright>Copyright (c) 2020-2026 Thulite</copyright>
+		
+		
+			<atom:link href="http://localhost:1313/docs/architecture/index.xml" rel="self" type="application/rss+xml" />
+			<item>
+				<title>Backend</title>
+				<link>http://localhost:1313/docs/architecture/backend/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/architecture/backend/</guid>
+				<description>&lt;h2 id=&#34;rustを採用した理由&#34;&gt;Rustを採用した理由&lt;/h2&gt;&#xA;&lt;p&gt;Rustは、型による入力・状態の表現、非同期I/O、メモリ安全性を備えています。RDFストア、PostgreSQL、Garageなど複数の外部サービスを扱うAPIサーバーで、エラー処理を明示的に保つために採用しています。&lt;/p&gt;&#xA;&lt;h2 id=&#34;apiの責務&#34;&gt;APIの責務&lt;/h2&gt;&#xA;&lt;p&gt;APIサーバーは、認証、認可、HTTPリクエストの処理、入力検証、RDFへの変換、外部ストレージとの通信を担当します。フロントエンドや外部クライアントからFuseki・PostgreSQL・Garageへ直接接続させません。&lt;/p&gt;&#xA;&lt;h2 id=&#34;入力検証&#34;&gt;入力検証&lt;/h2&gt;&#xA;&lt;p&gt;オカレンス登録では、N-Quadsの構文、Named Graph、blank node subject、バックエンド管理述語、アクセス権URIを検証します。メディアでは、MIME type、拡張子、magic bytes、ファイルサイズを検証します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;rdf生成&#34;&gt;RDF生成&lt;/h2&gt;&#xA;&lt;p&gt;フロントエンドが送るフラットな項目名と値を受け取り、述語に応じてOccurrence、Identification、Event、Locationへ振り分けます。作成者、作成日時、更新日時、アクセス権はバックエンドが付加・管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;fusekiとの通信&#34;&gt;Fusekiとの通信&lt;/h2&gt;&#xA;&lt;p&gt;FusekiにはSPARQL QueryとSPARQL Updateで接続します。オカレンスの保存、詳細取得、検索、更新、削除を行い、分類群の階層関係も検索に利用します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;postgresqlとの役割分担&#34;&gt;PostgreSQLとの役割分担&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLは、ユーザー、認証情報、セッション、パスワードリセットトークン、メディアメタデータを管理します。RDFの意味関係を持つオカレンスデータはFusekiに保存します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;garageとの通信&#34;&gt;Garageとの通信&lt;/h2&gt;&#xA;&lt;p&gt;メディア本体はS3互換APIを介してGarageへ保存します。アップロード時は一時ファイルからストリーム転送し、PostgreSQLへのメタデータ保存が失敗した場合はGarageの保存を補償削除します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Storage</title>
+				<link>http://localhost:1313/docs/architecture/storage/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/architecture/storage/</guid>
+				<description>&lt;p&gt;Bio Databaseでは、データの性質に応じてPostgreSQL、Fuseki、Garageを使い分けます。この役割分担はアプリケーション設計の中心です。&lt;/p&gt;&#xA;&lt;h2 id=&#34;postgresqlに保存するもの&#34;&gt;PostgreSQLに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;PostgreSQLには、整合性のある更新と認証処理が必要なデータを保存します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;ユーザー&lt;/li&gt;&#xA;&lt;li&gt;認証情報&lt;/li&gt;&#xA;&lt;li&gt;セッション&lt;/li&gt;&#xA;&lt;li&gt;パスワードリセットトークン&lt;/li&gt;&#xA;&lt;li&gt;メディアのメタデータ&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;fusekiに保存するもの&#34;&gt;Fusekiに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;Fusekiには、生物学的な意味関係を持つRDFデータを保存します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;オカレンス&lt;/li&gt;&#xA;&lt;li&gt;Identification、Event、Location&lt;/li&gt;&#xA;&lt;li&gt;Darwin Coreなどの語彙&lt;/li&gt;&#xA;&lt;li&gt;GBIF Backbone Taxonomy&lt;/li&gt;&#xA;&lt;li&gt;オカレンスとメディアURIの関連&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;garageに保存するもの&#34;&gt;Garageに保存するもの&lt;/h2&gt;&#xA;&lt;p&gt;Garageには、画像や添付ファイルなどの大容量バイナリを保存します。&lt;/p&gt;</description>
+			</item>
+			<item>
+				<title>Deployment</title>
+				<link>http://localhost:1313/docs/architecture/deployment/</link>
+				<pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+				<guid>http://localhost:1313/docs/architecture/deployment/</guid>
+				<description>&lt;p&gt;このページでは、公開可能な範囲のデプロイ構成だけを説明します。秘密鍵、パスワード、実際の内部IPアドレス、認証トークン、接続文字列は掲載しません。&lt;/p&gt;&#xA;&lt;h2 id=&#34;本番ビルド&#34;&gt;本番ビルド&lt;/h2&gt;&#xA;&lt;p&gt;本番デプロイ前に、各コンポーネントの成果物を生成します。&lt;/p&gt;&#xA;&lt;ul&gt;&#xA;&lt;li&gt;Rustのrelease build&lt;/li&gt;&#xA;&lt;li&gt;Next.jsのproduction build&lt;/li&gt;&#xA;&lt;li&gt;Hugoによる静的サイト生成&lt;/li&gt;&#xA;&lt;/ul&gt;&#xA;&lt;h2 id=&#34;プロセス起動&#34;&gt;プロセス起動&lt;/h2&gt;&#xA;&lt;p&gt;本番では、APIサーバー、Next.js、Garage、Cloudflare Tunnelなどの必要なプロセスを起動します。起動順序、停止方法、ログ出力先を運用手順として管理します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;nginx&#34;&gt;nginx&lt;/h2&gt;&#xA;&lt;p&gt;nginxは外部HTTPリクエストを受け、Next.js、Rust API、Hugoの静的ファイルへ振り分けるリバースプロキシです。&lt;/p&gt;&#xA;&lt;h2 id=&#34;cloudflare-tunnel&#34;&gt;Cloudflare Tunnel&lt;/h2&gt;&#xA;&lt;p&gt;Cloudflare Tunnelを使い、サーバーの公開ポートを直接インターネットへ開けずに外部公開します。&lt;/p&gt;&#xA;&lt;h2 id=&#34;公開構成例&#34;&gt;公開構成例&lt;/h2&gt;&#xA;&#xD;&#xA;&#xD;&#xA;&#xD;&#xA;&lt;div class=&#34;expressive-code&#34;&gt;&#xD;&#xA;  &lt;figure class=&#34;frame not-content&#34;&gt;&#xD;&#xA;  &lt;figcaption class=&#34;header&#34;&gt;&#xD;&#xA;    &lt;span class=&#34;title&#34;&gt;&lt;/span&gt;&#xD;&#xA;  &lt;/figcaption&gt;&#xD;&#xA;  &lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-text&#34; data-lang=&#34;text&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;bio-database.net&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;  → nginx&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;  → Next.js&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;docs.bio-database.net&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;  → nginx&#xA;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;  → Hugo public/&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&#xD;&#xA;  &lt;/figure&gt;&#xD;&#xA;&lt;/div&gt;&#xD;&#xA;&lt;p&gt;APIはnginxからRust APIサーバーへ転送します。GarageとFusekiはアプリケーション内部から利用し、直接公開しません。&lt;/p&gt;</description>
+			</item>
+	</channel>
+</rss>
