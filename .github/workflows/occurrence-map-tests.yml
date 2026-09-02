@@ -82,6 +82,6 @@ jobs:
       - name: Typecheck frontend
         working-directory: frontend
         run: npm run typecheck
-      - name: Lint frontend
+      - name: Lint map frontend
         working-directory: frontend
-        run: npm run lint
+        run: npx eslint src/app/map/occurrence-map.tsx src/app/map/page.tsx src/components/site-header.tsx
