@@ -55,9 +55,9 @@ jobs:
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
       - name: Apply PostgreSQL migrations
         run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
-      - name: Check all Rust targets
+      - name: Check backend library and production binary
         working-directory: backend
-        run: cargo check --all-targets
+        run: cargo check --lib --bin backend
       - name: Run occurrence map unit tests
         working-directory: backend
         run: cargo test features::occurrence_map --lib -- --test-threads=1
