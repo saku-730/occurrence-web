@@ -158,6 +158,7 @@ POST /paper-sources/paper/{paper_id}/extract-occurrences
 - `eventDate` が存在する場合、LLM側で `YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` に正規化して返す
 - `verbatimEventDate` はpaper importでは使用しない
 - 日付の精度を勝手に上げない。年月しか分からない場合に日を補完しない
+- LLMがeventDateだけを不正な形式で返した場合、backendはその値だけを `null` に正規化し、scientificName/localityが有効なOccurrence全体は失敗させない
 
 現行paper source handlerは簡略化移行中で、OpenAPIへのutoipa登録は未完了である。paper import APIをOpenAPIへ再登録する際は上記 `eventDate` をschemaへ含める。
 
