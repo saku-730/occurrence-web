@@ -2,7 +2,8 @@ use oxrdf::Term;
 use oxrdfio::{RdfFormat, RdfParser};
 
 use crate::features::occurrences::service::{
-    OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrencesStoreInput, SearchVisibility,
+    OccurrenceRdfStore, OccurrenceServiceError, SearchOccurrenceFilterInput,
+    SearchOccurrencesStoreInput, SearchVisibility,
 };
 
 use super::{
@@ -27,6 +28,7 @@ const GEOREFERENCE_SOURCES: &str = "http://rs.tdwg.org/dwc/iri/georeferenceSourc
 pub async fn list_occurrence_map<S>(
     store: &S,
     visibility: SearchVisibility,
+    filters: Vec<SearchOccurrenceFilterInput>,
 ) -> Result<OccurrenceMapFeatureCollection, OccurrenceServiceError>
 where
     S: OccurrenceRdfStore + ?Sized,
@@ -37,7 +39,7 @@ where
     loop {
         let page = store
             .search_occurrences(SearchOccurrencesStoreInput {
-                filters: Vec::new(),
+                filters: filters.clone(),
                 limit: MAP_PAGE_SIZE,
                 cursor: cursor.clone(),
                 visibility: visibility.clone(),
@@ -168,6 +170,7 @@ mod tests {
         rows: Vec<SearchOccurrenceStoreRow>,
         nquads: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         requested_visibility: Arc<Mutex<Vec<SearchVisibility>>>,
+        requested_filters: Arc<Mutex<Vec<Vec<SearchOccurrenceFilterInput>>>>,
     }
 
     #[async_trait::async_trait]
@@ -191,6 +194,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(input.visibility);
+            self.requested_filters.lock().unwrap().push(input.filters);
             Ok(SearchOccurrencesStorePage {
                 rows: self.rows.clone(),
                 limit: input.limit,
@@ -214,6 +218,15 @@ mod tests {
         }
     }
 
+    fn fake_store(rows: Vec<SearchOccurrenceStoreRow>, nquads: HashMap<String, Vec<u8>>) -> FakeStore {
+        FakeStore {
+            rows,
+            nquads: Arc::new(Mutex::new(nquads)),
+            requested_visibility: Arc::new(Mutex::new(Vec::new())),
+            requested_filters: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     #[tokio::test]
     async fn geojson_uses_longitude_latitude_order_and_exact_nominatim_source() {
         let id = Uuid::new_v4();
@@ -230,16 +243,12 @@ mod tests {
             GEOREFERENCE_SOURCES,
             NOMINATIM_SOURCE_URI,
         );
-        let store = FakeStore {
-            rows: vec![row.clone()],
-            nquads: Arc::new(Mutex::new(HashMap::from([(
-                row.occurrence_uri.clone(),
-                nquads.into_bytes(),
-            )]))),
-            requested_visibility: Arc::new(Mutex::new(Vec::new())),
-        };
+        let store = fake_store(
+            vec![row.clone()],
+            HashMap::from([(row.occurrence_uri.clone(), nquads.into_bytes())]),
+        );
 
-        let map = list_occurrence_map(&store, SearchVisibility::PublicOnly)
+        let map = list_occurrence_map(&store, SearchVisibility::PublicOnly, Vec::new())
             .await
             .unwrap();
 
@@ -251,6 +260,23 @@ mod tests {
             store.requested_visibility.lock().unwrap().as_slice(),
             &[SearchVisibility::PublicOnly]
         );
+    }
+
+    #[tokio::test]
+    async fn forwards_same_darwin_core_filters_to_occurrence_search() {
+        let store = fake_store(Vec::new(), HashMap::new());
+        let filters = vec![SearchOccurrenceFilterInput {
+            predicate: "http://rs.tdwg.org/dwc/terms/locality".to_string(),
+            value: "Kyoto".to_string(),
+            value_type: "literal".to_string(),
+            match_type: "exact".to_string(),
+        }];
+
+        list_occurrence_map(&store, SearchVisibility::All, filters.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(store.requested_filters.lock().unwrap().as_slice(), &[filters]);
     }
 
     #[tokio::test]
@@ -272,16 +298,15 @@ mod tests {
             "<{}/locations/1> <{}> \"35\" <https://bio-database.net/graphs/occurrences> .",
             incomplete.occurrence_uri, DECIMAL_LATITUDE
         );
-        let store = FakeStore {
-            rows: vec![complete.clone(), incomplete.clone()],
-            nquads: Arc::new(Mutex::new(HashMap::from([
+        let store = fake_store(
+            vec![complete.clone(), incomplete.clone()],
+            HashMap::from([
                 (complete.occurrence_uri.clone(), complete_nquads.into_bytes()),
                 (incomplete.occurrence_uri.clone(), incomplete_nquads.into_bytes()),
-            ]))),
-            requested_visibility: Arc::new(Mutex::new(Vec::new())),
-        };
+            ]),
+        );
 
-        let map = list_occurrence_map(&store, SearchVisibility::All)
+        let map = list_occurrence_map(&store, SearchVisibility::All, Vec::new())
             .await
             .unwrap();
 
