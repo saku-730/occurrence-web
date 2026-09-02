@@ -64,6 +64,9 @@ jobs:
       - name: Check backend library and production binary
         working-directory: backend
         run: cargo check --lib --bin backend
+      - name: Run ABR client unit tests
+        working-directory: backend
+        run: cargo test infrastructure::abr --lib -- --test-threads=1
       - name: Run direct ABR lookup integration test
         working-directory: backend
         run: cargo test --test abr_direct -- --test-threads=1
