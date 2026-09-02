@@ -26,6 +26,11 @@ interface CurrentUser {
   user_id: string;
 }
 
+interface DarwinCoreTerm {
+  uri: string;
+  local_name: string;
+}
+
 interface ParsedQuad {
   subject: string;
   predicate: string;
@@ -56,6 +61,7 @@ export default function OccurrenceDetailPage() {
   });
   const [creatorSummary, setCreatorSummary] = useState<UserSummary | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [predicateLabels, setPredicateLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!occurrenceId) {
@@ -162,6 +168,27 @@ export default function OccurrenceDetailPage() {
   useEffect(() => {
     let active = true;
 
+    // Fusekiのoccurrence-profileにある日本語ラベルを詳細表示にも適用する。
+    // 取得に失敗しても詳細データ自体は表示し、既知ラベルやURI末尾へfallbackする。
+    apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core")
+      .then((terms) => {
+        if (!active) return;
+        setPredicateLabels(
+          Object.fromEntries(terms.map((term) => [term.uri, term.local_name])),
+        );
+      })
+      .catch(() => {
+        if (active) setPredicateLabels({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
     apiFetch<CurrentUser>("/auth/me")
       .then((user) => {
         if (active) {
@@ -237,7 +264,7 @@ export default function OccurrenceDetailPage() {
                     {rootQuads.map((quad, index) => (
                       <DetailField
                         key={`${quad.subject}-${quad.predicate}-${quad.object}-${index}`}
-                        label={predicateLabel(quad.predicate)}
+                        label={predicateLabel(quad.predicate, predicateLabels)}
                         value={formatQuadValue(quad.predicate, quad.object)}
                       />
                     ))}
@@ -253,7 +280,7 @@ export default function OccurrenceDetailPage() {
                   {section.quads.map((quad, index) => (
                     <DetailField
                       key={`${quad.subject}-${quad.predicate}-${quad.object}-${index}`}
-                      label={predicateLabel(quad.predicate)}
+                      label={predicateLabel(quad.predicate, predicateLabels)}
                       value={formatQuadValue(quad.predicate, quad.object)}
                     />
                   ))}
@@ -482,7 +509,16 @@ function extractUserIdFromUserUri(userUri: string | null): string | null {
   }
 }
 
-function predicateLabel(predicateUri: string): string {
+function predicateLabel(
+  predicateUri: string,
+  vocabularyLabels: Record<string, string>,
+): string {
+  const vocabularyLabel = vocabularyLabels[predicateUri]?.trim();
+  if (vocabularyLabel) {
+    return vocabularyLabel;
+  }
+
+  // backend管理語彙など、Darwin Core候補APIの対象外となる述語の表示名。
   const known: Record<string, string> = {
     "http://purl.org/dc/terms/creator": "作成者",
     "http://purl.org/dc/terms/created": "作成日時",
@@ -649,4 +685,3 @@ function normalizeObject(object: string): string {
 
   return object;
 }
-

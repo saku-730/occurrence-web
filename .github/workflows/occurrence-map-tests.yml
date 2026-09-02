@@ -1,0 +1,105 @@
+name: Occurrence Map Tests
+
+on:
+  push:
+    branches:
+      - feature-map
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "postgreSQL/migrations/**"
+      - "spec/08_search.md"
+      - "spec/12_frontend_screens.md"
+      - "spec/18_occurrence_map.md"
+      - ".github/workflows/occurrence-map-tests.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "postgreSQL/migrations/**"
+      - "spec/08_search.md"
+      - "spec/12_frontend_screens.md"
+      - "spec/18_occurrence_map.md"
+      - ".github/workflows/occurrence-map-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: occurrence_password
+          POSTGRES_DB: occurrence_web_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d occurrence_web_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://admin:occurrence_password@127.0.0.1:5432/occurrence_web_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Set up Go for goose
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
+      - name: Apply PostgreSQL migrations
+        run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
+      - name: Check backend library and binaries
+        working-directory: backend
+        run: cargo check --lib --bins
+      - name: Run paper import prompt policy test
+        working-directory: backend
+        run: cargo test --test paper_import_prompt -- --test-threads=1
+      - name: Run ABR client unit tests
+        working-directory: backend
+        run: cargo test infrastructure::abr --lib -- --test-threads=1
+      - name: Run direct ABR lookup integration test
+        working-directory: backend
+        run: cargo test --test abr_direct -- --test-threads=1
+      - name: Run occurrence map unit tests
+        working-directory: backend
+        run: cargo test features::occurrence_map --lib -- --test-threads=1
+      - name: Run arbitrary occurrence search query tests
+        working-directory: backend
+        run: cargo test infrastructure::fuseki::tests::build_search_filter_patterns_routes_predicates_through_intermediate_nodes --lib -- --test-threads=1
+      - name: Run Nominatim unit tests
+        working-directory: backend
+        run: cargo test infrastructure::nominatim --lib -- --test-threads=1
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Lint search and map frontend
+        working-directory: frontend
+        run: npx eslint src/app/occurrences/search/page.tsx src/app/map/occurrence-map.tsx src/app/map/page.tsx src/components/darwin-core-search-filters.tsx src/components/occurrence-label-preview.tsx src/components/site-header.tsx

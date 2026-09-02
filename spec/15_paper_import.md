@@ -16,7 +16,13 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
 
 この状態は `paper-import-baseline-d2c5e52` ブランチにも固定して保存する。
 
-今後プロンプトやLLM設定を試行して結果が悪化した場合、このコミットまたは基準ブランチへ戻せる状態を維持する。基準ブランチ上では新しい実験を直接行わない。
+また、`eventDate` 導入直前の状態を次のコミットで固定する。
+
+`d1b8af499bccee5efd6c3b9bc304b6331617e409`
+
+この状態は `paper-import-baseline-before-event-date` ブランチに保存する。`eventDate` 追加後に抽出エラーや品質悪化が発生した場合は、このブランチを「年月日情報を追加する直前の正常系」として比較・復旧に使用する。
+
+今後プロンプトやLLM設定を試行して結果が悪化した場合、これらの基準コミットまたは基準ブランチへ戻せる状態を維持する。基準ブランチ上では新しい実験を直接行わない。
 
 ---
 
@@ -40,20 +46,23 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
 - GROBID等で抽出した論文テキスト
 - PDF各ページをレンダリングした画像
 
-出力はJSON Schemaで制約し、基本形は次とする。
+出力の基本形は次とする。
 
 ```json
 {
   "occurrences": [
     {
       "scientificName": "Metaphire hilgendorfi",
-      "locality": "Tokyo"
+      "locality": "奈良県香芝市真美ヶ丘",
+      "eventDate": "1998-06"
     }
   ]
 }
 ```
 
-現時点ではLLMレスポンスschemaに緯度経度を要求しない。`OccurrenceCandidate` に座標用Optionフィールドが残っていても、LLMの基本出力は `scientificName` と `locality` とする。
+LLMレスポンスのJSON Schemaでは、各Occurrenceについて `scientificName` と `locality` を必須とする。`eventDate` はプロンプト上では全Occurrenceで出力し、不明なら `null` とするよう要求するが、structured outputの失敗率を上げないためSchema上は任意プロパティとする。`eventDate` が欠落した場合もbackendでは `null` と同等に扱う。
+
+現時点ではLLMレスポンスschemaに緯度経度を要求しない。`OccurrenceCandidate` に座標用Optionフィールドが残っていても、LLMの基本出力は `scientificName`、`locality`、`eventDate` とする。
 
 ### 生成設定
 
@@ -117,7 +126,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 - scientificName + locality が同一なら重複排除する
 - JSONを一度出力したら繰り返し生成しない
 
-この基準点では、日本のlocalityに都道府県名を推測補完するルールはまだ採用していない。
+この基準点では、日本のlocalityに都道府県名を推測補完するルールと `eventDate` 抽出はまだ採用していない。
 
 ---
 
@@ -157,6 +166,85 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 ---
 
+## eventDate抽出と正規化
+
+論文中の採集・観察・記録年月日は Darwin Core の `dwc:eventDate` として扱う。
+
+- `verbatimEventDate` は使用しない
+- LLMが論文中の日付表現を直接正規化して `eventDate` を返す
+- プロンプトでは全Occurrenceで `eventDate` キーを出力し、日付を特定できなければ `null` とする
+- 出版年ではなく、そのOccurrenceに対応する採集日・観察日・記録日を取得する
+- 年だけ分かる場合は `YYYY`
+- 年月まで分かる場合は `YYYY-MM`
+- 年月日まで分かる場合は `YYYY-MM-DD`
+- 明示された期間は `開始/終了` とする。例: `1998-05/1998-07`
+- 不明な月・日を `01` などで補完して精度を偽らない
+- 和暦などは西暦へ変換できる場合に変換する
+- `5月上旬` 等の曖昧な日付は、確実に表現できる精度まで落として `YYYY-MM` 等とする
+- 上記形式へ安全に変換できない場合は、元表記をそのまま返さず `null` とする
+- eventDateの取得・正規化に失敗してもOccurrence自体を捨てない
+
+### eventDateの耐障害性
+
+初期実装ではJSON Schemaの `pattern` とRust側の厳格な日付検証を二重に適用していた。このため、1件でも `1998-13` のような不正値が混ざると抽出全体が `InvalidOccurrence` となり、正常なscientificName/localityまで失う問題があった。
+
+その後 `pattern` を外して日付単独の不正を `null` にするようにしたが、Schema上で `eventDate` キー自体を必須にしていたため、日付情報のないOccurrenceにもstructured outputで余分な生成制約が掛かっていた。また、モデルがSchemaから少し外れてMarkdownコードフェンス、前後説明、補助フィールド、文字列以外のeventDateを返した場合、生成自体は完了していてもbackendのdeserializeで抽出全体が失敗する余地が残っていた。
+
+現行実装では次の方針とする。
+
+- JSON Schemaでは `scientificName` と `locality` のみを必須にする
+- `eventDate` は `string | null` の任意プロパティとし、regex `pattern` は使用しない
+- プロンプトでは従来どおりeventDate出力を要求するため、正常時はeventDateを取得する
+- eventDateキーが欠落した場合は `null` として扱う
+- eventDateが配列・数値など文字列以外の場合も、その日付だけ `null` として扱う
+- backendはLLMレスポンスをparseした後に各eventDateを個別に確認する
+- `YYYY`、`YYYY-MM`、`YYYY-MM-DD`、または同形式の `開始/終了` として受理できる値はtrimして保持する
+- 明らかに不正なeventDateは、そのOccurrenceの `eventDate` だけを `null` にする
+- per-Occurrenceに未知の補助フィールドが混ざっても、既知フィールドを安全に取得できる場合は未知フィールドを無視して抽出を継続する
+- message.content全体が直接JSONとしてparseできない場合、最初の `{` から最後の `}` までをJSON候補としてもう一度parseする。これによりMarkdownコードフェンスや短い前後説明が混ざった出力を救済する
+- JSON救済にも失敗した場合は、serdeのparse errorとcontent byte数をbackendログへ出し、原因を判別できるようにする。LLM本文自体はログへ出さない
+- eventDate単独の不正を理由にOccurrence全体や抽出リクエストを失敗させない
+- scientificNameが空、JSONの構造自体を救済できない等、Occurrenceとして成立しないエラーは失敗とする
+
+この耐障害化は、llama.cppログで `truncated = 0` かつ生成完了しているにもかかわらずpaper importが失敗するケースへの対策である。生成完了ログだけではbackend deserialize成功を意味しないため、structured outputの拘束を最小限にし、取得できたscientificName/localityを日付の失敗に巻き込まない。
+
+`eventDate` はLLM候補から抽出APIレスポンスへ引き継ぎ、review UIでは値が存在する場合のみ初期行として表示する。ユーザー確認後は通常のN-Quads生成に含め、既存のOccurrence登録処理へ渡す。backendの通常RDFルーティングにより `dwc:eventDate` はEvent側へ保存される前提とする。
+
+---
+
+## review UIの初期項目
+
+LLM抽出後の各Occurrenceは次を初期表示する。
+
+- GBIF解決あり: `分類`、`scientificName`、`locality`、および取得できた場合 `eventDate`
+- GBIF解決なし: `scientificName`、`locality`、および取得できた場合 `eventDate`
+- `eventDate = null` の場合は空のeventDate行を自動追加しない
+- ユーザーは従来どおり任意のDarwin Core項目を追加・削除・編集できる
+
+### 全Occurrenceへの共通項目一括適用
+
+論文単位で共通するDarwin Core項目を各Occurrenceへ手作業で繰り返し入力する負担を減らすため、review UIに共通項目の一括適用機能を設ける。
+
+- ユーザーはDarwin Coreのpredicateと値を1組指定する
+- 「全N件に適用」で現在review対象になっている全Occurrenceへ適用する
+- 対象Occurrenceに同じpredicateが存在しなければ新しい入力行を追加する
+- 同じpredicateが既に存在する場合は重複行を新設せず、既存の同predicate行の値を指定値へ更新する
+- 適用後の値は通常の個別編集と同じ状態であり、ユーザーがOccurrenceごとに再編集・削除できる
+- 一括適用操作だけではbackendへ保存しない。最終のpaper batch registration時に通常の入力行としてN-Quadsへ含める
+- `dwciri:toTaxon` はGBIF URIとscientificNameが連動するため、この単純な共通値一括適用の対象外とする
+- predicate/valueの空入力、predicateの不正URI、URI値の不正文字は適用前にfrontendで拒否する
+- 登録処理中および登録完了後は一括適用を無効化する
+
+例。
+
+```text
+dwc:basisOfRecord = PreservedSpecimen
+```
+
+を指定すると、review中の全Occurrenceに同じ `dwc:basisOfRecord` が設定される。
+
+---
+
 ## 不採用・変更済み案
 
 ### 学名省略を確証不足ならそのまま残す
@@ -174,6 +262,30 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 ### 属名略記・地点分割をすぐ複雑なbackend後処理で補正する
 
 現時点では不採用。高性能モデルへの変更で実用上改善したため、まずは速度低下を許容して単純な構成を維持する。再発率が高くなった場合に再検討する。
+
+### `verbatimEventDate` を併用する
+
+現時点では不採用。paper importではLLMが日付を `eventDate` へ正規化して返す単純な構成を採用し、原表記を別フィールドには保存しない。
+
+### 不明な月日を補って完全な日付にする
+
+不採用。論文が持つ精度以上の日付を生成することになるため、年・年月など分かる精度のまま保存する。
+
+### eventDateの1件不正で抽出全体を失敗させる
+
+不採用。日付は追加情報であり、正しく抽出できたscientificName/localityまで破棄する理由にならない。不正なeventDateだけを `null` に落とす。
+
+### JSON SchemaのregexでeventDate形式を完全に縛る
+
+不採用。llama.cpp側のstructured outputを必要以上に複雑にし、日付抽出追加前には存在しなかった失敗要因を増やすため。schemaは最低限の型とキー構造を固定し、日付形式はプロンプトとbackendの軽量sanitizationで扱う。
+
+### JSON SchemaでeventDateキーを必須にする
+
+不採用。日付が存在しないOccurrenceにも不要なstructured-output制約が掛かるため。プロンプトではeventDateを要求するが、schemaはscientificName/localityの成立を優先する。
+
+### LLM出力がSchemaから少し外れたら即座に全体失敗とする
+
+不採用。コードフェンス・補助フィールド・eventDate型崩れのように既知情報を安全に回収できるケースでは、backendで限定的に救済する。
 
 ### 長大なプロンプトを `llama.rs` にハードコードする
 
@@ -205,8 +317,17 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 プロンプト変更・外出しのような内部変更でも、少なくとも次を維持する。
 
 - request先頭に `OCCURRENCE_EXTRACTION_PROMPT` が入る
-- JSON Schemaが従来どおりである
+- JSON Schemaが `scientificName` と `locality` を必須にし、`eventDate` は任意である
+- JSON SchemaのeventDateにregex `pattern` を付けない
 - sampling設定が意図せず変わっていない
 - `prompt.txt` に属名略記の禁止と完全形への展開指示が存在する
 - `prompt.txt` に日本の都道府県補完ルールが存在する
+- `prompt.txt` に `eventDate` のISO形式正規化ルールが存在する
+- validなeventDateは保持される
+- missing / non-string / invalidなeventDateは `null` に変換され、Occurrence自体は失敗しない
+- Markdownコードフェンス等の前後文字があるJSONを救済できる
+- per-Occurrenceの未知フィールドがあっても既知フィールドを抽出できる
 - valid responseを従来どおりparseできる
+- 共通項目一括適用でpredicateがないOccurrenceには1行追加される
+- 共通項目一括適用で同predicateが既にあるOccurrenceには重複行を増やさず値が更新される
+- `dwciri:toTaxon` は単純な一括適用対象にならない

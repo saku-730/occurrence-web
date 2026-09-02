@@ -34,6 +34,7 @@
 | `16_server_setup.md` | 本番・開発サーバーの導入、マスターデータ投入、ABR/Nominatimセットアップ |
 | `17_darwin_core_candidates.md` | Darwin Core候補語彙、Bio-Database固有プロファイル |
 | `18_geocoding.md` | ABR住所分割、Nominatimジオコーディング、RDF provenance、キャッシュ、失敗時処理 |
+| `19_occurrence_map.md` | MapLibre地図表示、Nominatim Geocoding、GeoJSON API |
 
 ## 最重要方針
 

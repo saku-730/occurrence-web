@@ -178,6 +178,8 @@ pub struct UpdatePaperSourceMetadataResponse {
 pub struct PaperSourceOccurrenceCandidate {
     pub scientific_name: String,
     pub locality: Option<String>,
+    pub country: Option<String>,
+    pub event_date: Option<String>,
     pub decimal_latitude: Option<f64>,
     pub decimal_longitude: Option<f64>,
 }
@@ -497,6 +499,14 @@ pub async fn extract_occurrences(
                     .locality
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty()),
+                country: candidate
+                    .country
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
+                event_date: candidate
+                    .event_date
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
                 decimal_latitude: candidate.decimal_latitude,
                 decimal_longitude: candidate.decimal_longitude,
             })
@@ -740,6 +750,7 @@ fn requires_bibliographic_input(doi: Option<&str>, title: Option<&str>) -> bool 
         && !title.is_some_and(|value| !value.trim().is_empty())
 }
 
-fn map_extraction_error(_error: PaperLlmExtractionError) -> PaperSourceHandlerError {
+fn map_extraction_error(error: PaperLlmExtractionError) -> PaperSourceHandlerError {
+    eprintln!("paper occurrence extraction failed: {error:?}");
     PaperSourceHandlerError::ExtractionFailed
 }
