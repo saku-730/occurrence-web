@@ -162,6 +162,7 @@ impl PaperOccurrenceExtractor for RecordingExtractor {
             occurrences: vec![OccurrenceCandidate {
                 scientific_name: "Metaphire hilgendorfi".to_string(),
                 locality: Some("Tokyo".to_string()),
+                event_date: Some("1998-06".to_string()),
                 decimal_latitude: Some(35.0),
                 decimal_longitude: Some(139.0),
             }],
@@ -265,6 +266,7 @@ async fn service_downloads_staged_pdf_and_passes_it_to_extractor() {
     assert_eq!(output.import_id, import_id);
     assert_eq!(output.result.occurrences.len(), 1);
     assert_eq!(output.result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+    assert_eq!(output.result.occurrences[0].event_date.as_deref(), Some("1998-06"));
     assert_eq!(store.get_requests(), vec![(bucket, object_key)]);
     assert_eq!(extractor.calls(), vec![PDF_BYTES.to_vec()]);
 

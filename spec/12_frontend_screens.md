@@ -169,6 +169,42 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ---
 
+<<<<<<< HEAD
+## 論文インポート画面
+
+### LLM抽出後のレビュー
+
+論文からLLM抽出したOccurrence候補は、登録前に通常のOccurrence作成画面に近いフォームで確認・編集する。
+
+初期表示する項目。
+
+- GBIFで分類群を解決できた場合は `dwciri:toTaxon`（分類）
+- `dwc:scientificName`
+- `dwc:locality`
+- LLMが採集・観察年月日を取得できた場合のみ `dwc:eventDate`
+
+`eventDate` の扱い。
+
+- LLMからは `YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` として正規化済みの値を受け取る
+- `eventDate = null` の候補には空のeventDate行を自動追加しない
+- 表示されたeventDateはユーザーが登録前に編集・削除できる
+- `verbatimEventDate` はpaper importの初期項目として使用しない
+- 一括登録時は他の入力項目と同様にN-Quadsへ変換し、`dwc:eventDate` としてbackendへ送る
+
+### 全Occurrenceへの項目一括適用
+
+LLM抽出結果のレビュー画面上部に、現在の登録対象Occurrenceすべてへ共通の項目・値を適用するUIを設ける。
+
+- 項目名は既存のDarwin Core項目候補UIと同じ候補リストを利用する
+- 値は通常のOccurrence入力と同じ文字列/URI入力として扱う
+- 例: `dwc:basisOfRecord = PreservedSpecimen` のような論文内で共通する値を全件へ一度に設定できる
+- 選択したpredicateが存在しないOccurrenceには新しい入力行を追加する
+- 同じpredicateが既に存在するOccurrenceでは重複行を追加せず、そのpredicateの既存値を指定値へ置き換える
+- 一括適用後も各Occurrenceの個別フォームで値を再編集・削除できる
+- `dwciri:toTaxon` はGBIF照合結果と `dwc:scientificName` が連動する特殊項目のため、この単純な一括適用UIの対象外とする
+- 登録済みまたは一括登録処理中は一括適用UIを無効化する
+- 一括適用はfrontend上のレビュー状態だけを更新し、適用操作だけでbackendへ保存しない。最終的な一括登録時に他の項目と一緒にN-Quads化する
+=======
 ## Markdownコンテンツ表示
 
 - `frontend/content/` 配下のMarkdown表示には標準的なMarkdownパーサライブラリを使用し、正規表現ベースの独自Markdownパーサは実装しない。
@@ -187,6 +223,7 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 - 一覧は用語名の先頭文字ごとに整理する。
 - `template.md`、`list.csv`、一時ロックファイルなど、用語ページではない管理ファイルは一覧へ含めない。
 - 括弧などURL上でエンコードが必要な文字を含むファイル名は、表示名は元のファイル名を維持し、リンクURL側だけパーセントエンコードする。
+>>>>>>> main
 
 ---
 
