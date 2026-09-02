@@ -90,6 +90,9 @@ export function PaperOccurrenceBulkEditor({
   const nextEditorKey = useRef(candidates.length);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<TermsStatus>("idle");
+  const [bulkPredicate, setBulkPredicate] = useState("");
+  const [bulkValue, setBulkValue] = useState("");
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -133,12 +136,45 @@ export function PaperOccurrenceBulkEditor({
   function removeEditor(key: number) {
     setEditors((current) => current.filter((editor) => editor.key !== key));
     setErrorMessage(null);
+    setBulkMessage(null);
   }
 
   function addEditor() {
     const key = nextEditorKey.current++;
     setEditors((current) => [...current, buildEmptyEditorState(key)]);
     setErrorMessage(null);
+    setBulkMessage(null);
+  }
+
+  function handleApplyBulkField() {
+    if (isSubmitting || registered || editors.length === 0) return;
+
+    const predicate = bulkPredicate.trim();
+    const value = bulkValue.trim();
+    setErrorMessage(null);
+    setBulkMessage(null);
+
+    if (!predicate || !value) {
+      setErrorMessage("一括追加する項目名と値を両方入力してください");
+      return;
+    }
+    if (!isAbsoluteHttpUri(predicate) || hasUnsafeIriCharacter(predicate)) {
+      setErrorMessage("一括追加する項目名には有効な絶対URIを指定してください");
+      return;
+    }
+    if (predicate === DWCIRI_TO_TAXON_URI) {
+      setErrorMessage("分類(toTaxon)はGBIF照合とscientificNameが連動するため一括追加できません");
+      return;
+    }
+    if (isAbsoluteHttpUri(value) && hasUnsafeIriCharacter(value)) {
+      setErrorMessage("一括追加する値のURIに使用できない文字が含まれています");
+      return;
+    }
+
+    setEditors((current) => applyBulkStatement(current, predicate, value));
+    setBulkMessage(
+      `${editors.length}件のOccurrenceへ ${predicateLabelForUri(predicate, darwinCoreTerms)} を適用しました`,
+    );
   }
 
   async function handleBulkRegister() {
@@ -207,8 +243,65 @@ export function PaperOccurrenceBulkEditor({
     }
   }
 
+  const disabled = isSubmitting || Boolean(registered);
+
   return (
     <div>
+      <section className="mb-8 overflow-visible rounded-md border border-[#c9d2d6] bg-[#f7f9fa]">
+        <div className="border-b border-[#d8dfe2] px-5 py-3">
+          <h3 className="text-sm font-semibold text-[#344249]">全Occurrenceへ項目を一括追加</h3>
+          <p className="mt-1 text-xs leading-5 text-[#65737a]">
+            共通のDarwin Core項目と値を、現在の全Occurrenceへ適用します。同じ項目が既にある場合は値を置き換えます。
+          </p>
+        </div>
+        <div className="grid gap-4 px-5 py-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+          <div className="min-w-0">
+            <span className="mb-2 block text-sm font-medium text-[#526168]">項目名</span>
+            <PredicateCombobox
+              disabled={disabled || editors.length === 0}
+              onOpen={() => void loadDarwinCoreTerms()}
+              onSelect={(uri) => {
+                setBulkPredicate(uri);
+                setBulkMessage(null);
+              }}
+              terms={darwinCoreTerms}
+              termsStatus={termsStatus}
+              value={bulkPredicate}
+            />
+          </div>
+          <div className="min-w-0">
+            <span className="mb-2 block text-sm font-medium text-[#526168]">値</span>
+            <ObjectValueField
+              disabled={disabled || editors.length === 0}
+              onChange={(value) => {
+                setBulkValue(value);
+                setBulkMessage(null);
+              }}
+              predicate={bulkPredicate}
+              value={bulkValue}
+            />
+          </div>
+          <button
+            className="h-10 rounded-md bg-[#31434b] px-5 text-sm font-medium text-white hover:bg-[#26373e] disabled:cursor-not-allowed disabled:bg-[#9ca8ad]"
+            disabled={
+              disabled ||
+              editors.length === 0 ||
+              !bulkPredicate.trim() ||
+              !bulkValue.trim()
+            }
+            onClick={handleApplyBulkField}
+            type="button"
+          >
+            全{editors.length}件に適用
+          </button>
+        </div>
+        {bulkMessage ? (
+          <p className="border-t border-[#d8dfe2] px-5 py-3 text-sm text-[#345d40]" aria-live="polite">
+            {bulkMessage}
+          </p>
+        ) : null}
+      </section>
+
       {editors.length > 0 ? (
         <div className="space-y-8">
           {editors.map((editor, index) => (
@@ -216,7 +309,7 @@ export function PaperOccurrenceBulkEditor({
               key={editor.key}
               index={index}
               editor={editor}
-              disabled={isSubmitting || Boolean(registered)}
+              disabled={disabled}
               darwinCoreTerms={darwinCoreTerms}
               termsStatus={termsStatus}
               onLoadTerms={() => void loadDarwinCoreTerms()}
@@ -247,7 +340,7 @@ export function PaperOccurrenceBulkEditor({
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-[#d8dfe2] pt-6">
         <button
           className="h-11 rounded-md border border-[#176b57] bg-white px-5 text-sm font-medium text-[#176b57] hover:bg-[#f2f8f6] disabled:cursor-not-allowed disabled:border-[#aeb8bc] disabled:text-[#8a969b]"
-          disabled={isSubmitting || Boolean(registered)}
+          disabled={disabled}
           onClick={addEditor}
           type="button"
         >
@@ -255,7 +348,7 @@ export function PaperOccurrenceBulkEditor({
         </button>
         <button
           className="h-11 rounded-md bg-[#176b57] px-7 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
-          disabled={isSubmitting || Boolean(registered) || editors.length === 0}
+          disabled={disabled || editors.length === 0}
           onClick={() => void handleBulkRegister()}
           type="button"
         >
@@ -563,6 +656,26 @@ function OccurrenceEditorCard({
       </div>
     </section>
   );
+}
+
+function applyBulkStatement(editors: EditorState[], predicate: string, value: string): EditorState[] {
+  return editors.map((editor) => {
+    const hasPredicate = editor.rows.some((row) => row.predicate === predicate);
+    if (hasPredicate) {
+      return {
+        ...editor,
+        rows: editor.rows.map((row) =>
+          row.predicate === predicate ? { ...row, object: value } : row,
+        ),
+      };
+    }
+
+    return {
+      ...editor,
+      rows: [...editor.rows, { id: editor.nextId, predicate, object: value }],
+      nextId: editor.nextId + 1,
+    };
+  });
 }
 
 function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): EditorState {
