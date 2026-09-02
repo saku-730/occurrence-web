@@ -7,3 +7,5 @@ pub mod occurrence_map;
 pub mod media;
 // paper_importは論文PDFの受信から論文由来データのimport処理を担当する。
 pub mod paper_import;
+// user_searchはOccurrence検索UIからユーザー名をstable user URIへ解決する候補APIを担当する。
+pub mod user_search;
