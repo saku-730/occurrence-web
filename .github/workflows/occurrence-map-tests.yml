@@ -61,9 +61,9 @@ jobs:
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
       - name: Apply PostgreSQL migrations
         run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
-      - name: Check backend library and production binary
+      - name: Check backend library and binaries
         working-directory: backend
-        run: cargo check --lib --bin backend
+        run: cargo check --lib --bins
       - name: Run ABR client unit tests
         working-directory: backend
         run: cargo test infrastructure::abr --lib -- --test-threads=1
