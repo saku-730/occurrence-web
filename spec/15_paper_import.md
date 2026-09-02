@@ -16,7 +16,13 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
 
 この状態は `paper-import-baseline-d2c5e52` ブランチにも固定して保存する。
 
-今後プロンプトやLLM設定を試行して結果が悪化した場合、このコミットまたは基準ブランチへ戻せる状態を維持する。基準ブランチ上では新しい実験を直接行わない。
+また、`eventDate` 導入直前の状態を次のコミットで固定する。
+
+`d1b8af499bccee5efd6c3b9bc304b6331617e409`
+
+この状態は `paper-import-baseline-before-event-date` ブランチに保存する。`eventDate` 追加後に抽出エラーや品質悪化が発生した場合は、このブランチを「年月日情報を追加する直前の正常系」として比較・復旧に使用する。
+
+今後プロンプトやLLM設定を試行して結果が悪化した場合、これらの基準コミットまたは基準ブランチへ戻せる状態を維持する。基準ブランチ上では新しい実験を直接行わない。
 
 ---
 
@@ -166,6 +172,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 - `verbatimEventDate` は使用しない
 - LLMが論文中の日付表現を直接正規化して `eventDate` を返す
+- 全Occurrenceで `eventDate` キーを出力し、日付を特定できなければ `null` とする
 - 出版年ではなく、そのOccurrenceに対応する採集日・観察日・記録日を取得する
 - 年だけ分かる場合は `YYYY`
 - 年月まで分かる場合は `YYYY-MM`
@@ -174,9 +181,22 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 - 不明な月・日を `01` などで補完して精度を偽らない
 - 和暦などは西暦へ変換できる場合に変換する
 - `5月上旬` 等の曖昧な日付は、確実に表現できる精度まで落として `YYYY-MM` 等とする
-- そのOccurrenceに対応する日付を特定できなければ `null`
+- 上記形式へ安全に変換できない場合は、元表記をそのまま返さず `null` とする
+- eventDateの取得・正規化に失敗してもOccurrence自体を捨てない
 
-backendでは `eventDate` が存在する場合、`YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` であることを軽く検証する。
+### eventDateの耐障害性
+
+初期実装ではJSON Schemaの `pattern` とRust側の厳格な日付検証を二重に適用していた。このため、1件でも `1998-13` のような不正値が混ざると抽出全体が `InvalidOccurrence` となり、正常なscientificName/localityまで失う問題があった。
+
+現行実装では次の方針とする。
+
+- JSON Schemaでは `eventDate` を `string | null` とし、regex `pattern` は使用しない
+- 正規化形式の指示はプロンプトで明確に行う
+- backendはLLMレスポンスをparseした後に各eventDateを個別に確認する
+- `YYYY`、`YYYY-MM`、`YYYY-MM-DD`、または同形式の `開始/終了` として受理できる値はtrimして保持する
+- 明らかに不正なeventDateは、そのOccurrenceの `eventDate` だけを `null` にする
+- eventDate単独の不正を理由にOccurrence全体や抽出リクエストを失敗させない
+- scientificNameが空、JSONそのものが壊れている等、Occurrenceとして成立しないエラーは従来どおり失敗とする
 
 `eventDate` はLLM候補から抽出APIレスポンスへ引き継ぎ、review UIでは値が存在する場合のみ初期行として表示する。ユーザー確認後は通常のN-Quads生成に含め、既存のOccurrence登録処理へ渡す。backendの通常RDFルーティングにより `dwc:eventDate` はEvent側へ保存される前提とする。
 
@@ -219,6 +239,14 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 
 不採用。論文が持つ精度以上の日付を生成することになるため、年・年月など分かる精度のまま保存する。
 
+### eventDateの1件不正で抽出全体を失敗させる
+
+不採用。日付は追加情報であり、正しく抽出できたscientificName/localityまで破棄する理由にならない。不正なeventDateだけを `null` に落とす。
+
+### JSON SchemaのregexでeventDate形式を完全に縛る
+
+不採用。llama.cpp側のstructured outputを必要以上に複雑にし、日付抽出追加前には存在しなかった失敗要因を増やすため。schemaは型とキー構造を固定し、日付形式はプロンプトとbackendの軽量sanitizationで扱う。
+
 ### 長大なプロンプトを `llama.rs` にハードコードする
 
 不採用。プロンプト試行のたびにRustコード自体の編集が必要になり、差分確認もしにくいため `prompt.txt` へ分離する。
@@ -250,9 +278,11 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 
 - request先頭に `OCCURRENCE_EXTRACTION_PROMPT` が入る
 - JSON Schemaが `scientificName`、`locality`、`eventDate` を要求する
+- JSON SchemaのeventDateにregex `pattern` を付けない
 - sampling設定が意図せず変わっていない
 - `prompt.txt` に属名略記の禁止と完全形への展開指示が存在する
 - `prompt.txt` に日本の都道府県補完ルールが存在する
 - `prompt.txt` に `eventDate` のISO形式正規化ルールが存在する
-- `eventDate` の年・年月・年月日・期間形式を受理し、明らかな形式不正を拒否する
+- validなeventDateは保持される
+- invalidなeventDateは `null` に変換され、Occurrence自体は失敗しない
 - valid responseを従来どおりparseできる
