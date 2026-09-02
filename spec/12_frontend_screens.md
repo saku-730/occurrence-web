@@ -161,6 +161,29 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ---
 
+## 論文インポート画面
+
+### LLM抽出後のレビュー
+
+論文からLLM抽出したOccurrence候補は、登録前に通常のOccurrence作成画面に近いフォームで確認・編集する。
+
+初期表示する項目。
+
+- GBIFで分類群を解決できた場合は `dwciri:toTaxon`（分類）
+- `dwc:scientificName`
+- `dwc:locality`
+- LLMが採集・観察年月日を取得できた場合のみ `dwc:eventDate`
+
+`eventDate` の扱い。
+
+- LLMからは `YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` として正規化済みの値を受け取る
+- `eventDate = null` の候補には空のeventDate行を自動追加しない
+- 表示されたeventDateはユーザーが登録前に編集・削除できる
+- `verbatimEventDate` はpaper importの初期項目として使用しない
+- 一括登録時は他の入力項目と同様にN-Quadsへ変換し、`dwc:eventDate` としてbackendへ送る
+
+---
+
 ## メディアUI
 
 - ユーザー体験としてはオカレンス作成と同時にアップロードできる
