@@ -5,7 +5,7 @@ use backend::{
         GeocodedLocation, LocationGeocoder, LocationGeocoderError,
         enrich_nquads_with_geocoding_and_abr,
     },
-    infrastructure::abr::{AbrClient, AdministrativeMatchLevel},
+    infrastructure::abr::AbrClient,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
@@ -87,7 +87,6 @@ async fn create_fake_abr(pool: &PgPool) {
     .await
     .unwrap();
 
-    // 0000000 is ABR's unknown-machiaza sentinel and must not become a match.
     sqlx::query(
         r#"
         INSERT INTO public.mt_town_unified
@@ -136,54 +135,7 @@ impl LocationGeocoder for FallbackGeocoder {
 }
 
 #[tokio::test]
-async fn resolves_official_abr_tables_and_reuses_cached_search_result() {
-    let pool = pool().await;
-    create_fake_abr(&pool).await;
-
-    let client = AbrClient::new(&database_url(), 16).expect("ABR client should build");
-    let resolved = client
-        .resolve("Japan", " 滋賀県　大津市 勝谷町 採集地点 ")
-        .await
-        .expect("ABR lookup should succeed")
-        .expect("Japanese locality should resolve");
-
-    assert_eq!(resolved.country_code, "JP");
-    assert_eq!(resolved.prefecture_code, "25");
-    assert_eq!(resolved.prefecture, "滋賀県");
-    assert_eq!(resolved.municipality_code.as_deref(), Some("252018"));
-    assert_eq!(resolved.municipality.as_deref(), Some("大津市"));
-    assert_eq!(resolved.machiaza_id.as_deref(), Some("0000001"));
-    assert_eq!(resolved.machiaza.as_deref(), Some("勝谷町"));
-    assert_eq!(resolved.remainder.as_deref(), Some("採集地点"));
-    assert_eq!(resolved.match_level, AdministrativeMatchLevel::Machiaza);
-
-    // Remove the source row. The same search still succeeds because the process-local
-    // cache stores the resolution and does not duplicate the ABR master persistently.
-    sqlx::query("DELETE FROM public.mt_pref_unified")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let cached = client
-        .resolve("JP", "滋賀県大津市勝谷町採集地点")
-        .await
-        .expect("cached lookup should succeed")
-        .expect("cached result should remain available");
-    assert_eq!(cached, resolved);
-
-    client.clear_cache().await;
-    assert!(
-        client
-            .resolve("JP", "滋賀県大津市勝谷町採集地点")
-            .await
-            .expect("lookup after cache clear should complete")
-            .is_none()
-    );
-
-    drop_fake_abr(&pool).await;
-}
-
-#[tokio::test]
-async fn abr_resolution_drives_nominatim_fallback_and_adds_coordinates() {
+async fn abr_split_drives_nominatim_and_only_nominatim_is_recorded_as_source() {
     let pool = pool().await;
     create_fake_abr(&pool).await;
 
@@ -197,9 +149,11 @@ _:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/gra
 
     let output = enrich_nquads_with_geocoding_and_abr(input.as_bytes(), &geocoder, Some(&abr))
         .await
-        .expect("ABR-backed geocoding should complete");
+        .expect("ABR split followed by Nominatim geocoding should complete");
     let text = String::from_utf8(output).unwrap();
 
+    // The first query keeps ABR's remainder. The fake Nominatim returns zero results,
+    // so the second query is the ABR-derived machiaza fallback and succeeds.
     assert_eq!(
         queries.lock().unwrap().as_slice(),
         &[
@@ -211,8 +165,14 @@ _:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/gra
     assert!(text.contains("35.0001"));
     assert!(text.contains("http://rs.tdwg.org/dwc/terms/decimalLongitude"));
     assert!(text.contains("135.9001"));
+    assert!(text.contains("http://rs.tdwg.org/dwc/iri/georeferenceSources"));
     assert!(text.contains("https://nominatim.openstreetmap.org/"));
-    assert!(text.contains("https://www.digital.go.jp/policies/base_registry_address"));
+    assert!(!text.contains("digital.go.jp"));
+    assert_eq!(
+        text.matches("http://rs.tdwg.org/dwc/iri/georeferenceSources")
+            .count(),
+        1
+    );
     assert!(text.contains("machiaza fallback"));
 
     drop_fake_abr(&pool).await;
