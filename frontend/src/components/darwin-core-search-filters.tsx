@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 
+const DCTERMS_CREATOR = "http://purl.org/dc/terms/creator";
+const DCTERMS_CREATED = "http://purl.org/dc/terms/created";
+const DCTERMS_MODIFIED = "http://purl.org/dc/terms/modified";
+const USER_URI_BASE = "https://bio-database.net/users/";
+
 export interface DarwinCoreSearchFilter {
   predicate: string;
   value: string;
@@ -15,6 +20,28 @@ interface DarwinCoreTerm {
   uri: string;
   local_name: string;
 }
+
+interface SearchTerm extends DarwinCoreTerm {
+  source: "system" | "darwin-core";
+}
+
+const SYSTEM_SEARCH_TERMS: SearchTerm[] = [
+  {
+    uri: DCTERMS_CREATOR,
+    local_name: "作成者",
+    source: "system",
+  },
+  {
+    uri: DCTERMS_CREATED,
+    local_name: "データ作成日",
+    source: "system",
+  },
+  {
+    uri: DCTERMS_MODIFIED,
+    local_name: "データ更新日",
+    source: "system",
+  },
+];
 
 export function emptyDarwinCoreSearchFilter(
   predicate = "http://rs.tdwg.org/dwc/terms/scientificName",
@@ -33,7 +60,7 @@ export function activeDarwinCoreSearchFilters(
   return filters
     .map((filter) => {
       const predicate = filter.predicate.trim();
-      const value = filter.value.trim();
+      const value = normalizeSearchValue(predicate, filter.value.trim());
       return {
         predicate,
         value,
@@ -74,6 +101,11 @@ export function DarwinCoreSearchFilters({
     };
   }, []);
 
+  const searchTerms: SearchTerm[] = [
+    ...SYSTEM_SEARCH_TERMS,
+    ...terms.map((term) => ({ ...term, source: "darwin-core" as const })),
+  ];
+
   function replaceFilter(index: number, next: DarwinCoreSearchFilter) {
     onChange(filters.map((filter, currentIndex) => (currentIndex === index ? next : filter)));
   }
@@ -85,7 +117,7 @@ export function DarwinCoreSearchFilters({
   return (
     <div className="space-y-3">
       {filters.map((filter, index) => {
-        const selectedTerm = terms.find((term) => term.uri === filter.predicate);
+        const selectedTerm = searchTerms.find((term) => term.uri === filter.predicate);
         const customPredicate = selectedTerm ? "" : filter.predicate;
 
         return (
@@ -95,7 +127,7 @@ export function DarwinCoreSearchFilters({
           >
             <div className="min-w-0">
               <label>
-                <span className="mb-1 block text-xs font-medium text-[#526168]">Darwin Core項目</span>
+                <span className="mb-1 block text-xs font-medium text-[#526168]">検索項目</span>
                 <select
                   className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
                   disabled={disabled}
@@ -108,23 +140,32 @@ export function DarwinCoreSearchFilters({
                   value={selectedTerm?.uri ?? ""}
                 >
                   <option value="">項目を選択</option>
-                  {terms.map((term) => (
-                    <option key={term.uri} value={term.uri}>
-                      {term.local_name}
-                    </option>
-                  ))}
+                  <optgroup label="Bio-Database">
+                    {SYSTEM_SEARCH_TERMS.map((term) => (
+                      <option key={term.uri} value={term.uri}>
+                        {term.local_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Darwin Core">
+                    {terms.map((term) => (
+                      <option key={term.uri} value={term.uri}>
+                        {term.local_name}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </label>
 
               {selectedTerm ? (
                 <span className="mt-1 block truncate text-[11px] text-[#7a878c]" title={selectedTerm.uri}>
-                  IRI: {selectedTerm.uri}
+                  {selectedTerm.source === "system" ? "内部項目" : "IRI"}: {selectedTerm.uri}
                 </span>
               ) : null}
 
               <details className="mt-2 text-xs" open={customPredicate.length > 0}>
                 <summary className="cursor-pointer text-[#65747a] hover:text-[#176b57]">
-                  候補にないDwC IRIを直接指定
+                  候補にないIRIを直接指定
                 </summary>
                 <input
                   className="mt-2 h-9 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-xs outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
@@ -152,13 +193,18 @@ export function DarwinCoreSearchFilters({
                   replaceFilter(index, {
                     ...filter,
                     value,
-                    value_type: inferSearchValueType(value),
+                    value_type: inferSearchValueType(normalizeSearchValue(filter.predicate, value)),
                   });
                 }}
-                placeholder="検索する値"
+                placeholder={searchValuePlaceholder(filter.predicate)}
                 type="text"
                 value={filter.value}
               />
+              {filter.predicate === DCTERMS_CREATOR ? (
+                <span className="mt-1 block text-[11px] text-[#7a878c]">
+                  ユーザーUUIDを入力すると内部で作成者URIへ変換します。
+                </span>
+              ) : null}
             </label>
 
             <button
@@ -185,7 +231,7 @@ export function DarwinCoreSearchFilters({
         <span className="text-xs text-[#65747a]">複数条件はAND検索です。</span>
         {termLoadFailed ? (
           <span className="text-xs text-[#a53d32]">
-            用語候補を取得できませんでした。DwC IRIの直接入力は利用できます。
+            Darwin Core候補を取得できませんでした。Bio-Database項目とIRI直接入力は利用できます。
           </span>
         ) : null}
       </div>
@@ -193,7 +239,28 @@ export function DarwinCoreSearchFilters({
   );
 }
 
+function normalizeSearchValue(predicate: string, value: string): string {
+  if (predicate === DCTERMS_CREATOR && isUuid(value)) {
+    return `${USER_URI_BASE}${value}`;
+  }
+  return value;
+}
+
+function searchValuePlaceholder(predicate: string): string {
+  if (predicate === DCTERMS_CREATOR) return "ユーザーUUID または作成者URI";
+  if (predicate === DCTERMS_CREATED || predicate === DCTERMS_MODIFIED) {
+    return "例: 2026-09-02T08:00:00Z";
+  }
+  return "検索する値";
+}
+
 function inferSearchValueType(value: string): "literal" | "uri" {
   const trimmed = value.trim();
   return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$/.test(trimmed) ? "uri" : "literal";
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(
+    value,
+  );
 }
