@@ -132,6 +132,37 @@ RDF本文は N-Quads とする。
 
 ---
 
+## 論文Occurrence抽出API
+
+Endpoint。
+
+```http
+POST /paper-sources/paper/{paper_id}/extract-occurrences
+```
+
+各候補は少なくとも次のJSONキーを返す。
+
+```json
+{
+  "scientificName": "Metaphire hilgendorfi",
+  "locality": "奈良県香芝市真美ヶ丘",
+  "eventDate": "1998-06",
+  "decimalLatitude": null,
+  "decimalLongitude": null
+}
+```
+
+- `scientificName` は空文字を返さない
+- `locality` は取得できなければ `null`
+- `eventDate` は取得できなければ `null`
+- `eventDate` が存在する場合、LLM側で `YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` に正規化して返す
+- `verbatimEventDate` はpaper importでは使用しない
+- 日付の精度を勝手に上げない。年月しか分からない場合に日を補完しない
+
+現行paper source handlerは簡略化移行中で、OpenAPIへのutoipa登録は未完了である。paper import APIをOpenAPIへ再登録する際は上記 `eventDate` をschemaへ含める。
+
+---
+
 ## occurrence 検索・一覧API方針
 
 Endpoint。
@@ -234,3 +265,4 @@ Identification、Event、LocationのNamed Node、`rdf:type`、Occurrenceから�
 - DTO変更時は schema も更新する
 - エラーレスポンスも定義する
 - 認証が必要なAPIには security 要件を付ける
+- paper importのsource_handlerは現在簡略化移行中のためutoipa登録が未完了。再登録時に現行API契約へ追従させる
