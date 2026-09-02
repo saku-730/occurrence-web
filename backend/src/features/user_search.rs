@@ -31,14 +31,19 @@ enum UserSearchError {
 impl IntoResponse for UserSearchError {
     fn into_response(self) -> Response {
         match self {
-            Self::Database(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "internal_server_error",
-                    "message": "Internal server error"
-                })),
-            )
-                .into_response(),
+            Self::Database(error) => {
+                // DBの詳細はクライアントへ返さず、サーバー側の診断情報としてのみ残す。
+                eprintln!("user search database error: {error}");
+
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "internal_server_error",
+                        "message": "Internal server error"
+                    })),
+                )
+                    .into_response()
+            }
         }
     }
 }
