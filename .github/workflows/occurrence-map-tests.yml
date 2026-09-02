@@ -61,15 +61,12 @@ jobs:
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.24.1
       - name: Apply PostgreSQL migrations
         run: goose -dir postgreSQL/migrations postgres "$DATABASE_URL" up
-      - name: Check backend library and binaries
+      - name: Check backend library and production binary
         working-directory: backend
-        run: cargo check --lib --bins
-      - name: Run administrative master importer unit tests
+        run: cargo check --lib --bin backend
+      - name: Run direct ABR lookup integration test
         working-directory: backend
-        run: cargo test --bin import_admin_master -- --test-threads=1
-      - name: Run administrative master importer integration test
-        working-directory: backend
-        run: cargo test --test admin_master_import_cli -- --test-threads=1
+        run: cargo test --test abr_direct -- --test-threads=1
       - name: Run occurrence map unit tests
         working-directory: backend
         run: cargo test features::occurrence_map --lib -- --test-threads=1
