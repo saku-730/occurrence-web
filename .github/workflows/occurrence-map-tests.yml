@@ -67,6 +67,9 @@ jobs:
       - name: Run administrative master importer unit tests
         working-directory: backend
         run: cargo test --bin import_admin_master -- --test-threads=1
+      - name: Run administrative master importer integration test
+        working-directory: backend
+        run: cargo test --test admin_master_import_cli -- --test-threads=1
       - name: Run occurrence map unit tests
         working-directory: backend
         run: cargo test features::occurrence_map --lib -- --test-threads=1
