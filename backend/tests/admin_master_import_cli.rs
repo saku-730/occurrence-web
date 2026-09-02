@@ -1,6 +1,6 @@
 use std::process::Stdio;
 
-use sqlx::{PgPool, Postgres, QueryBuilder, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, QueryBuilder};
 use tokio::process::Command;
 
 fn database_url() -> String {
@@ -104,12 +104,15 @@ async fn create_fake_abrdb(pool: &PgPool) {
         r#"
         INSERT INTO public.mt_town_unified
             (lg_code, machiaza_id, oaza_cho, chome, koaza, rsdt_addr_flg, koaza_aka_code)
-        VALUES ('252018', '0000001', '勝谷町', NULL, NULL, 0, 0)
+        VALUES
+            ('252018', '0000000', NULL, NULL, NULL, 0, 0),
+            ('252018', '0000001', '勝谷町', NULL, NULL, 0, 0),
+            ('252018', '0000001', '勝谷町', NULL, NULL, 1, 0)
         "#,
     )
     .execute(pool)
     .await
-    .expect("fake Katsutani machiaza should be inserted");
+    .expect("fake ABR town rows should be inserted");
 }
 
 async fn drop_fake_abrdb(pool: &PgPool) {
@@ -148,6 +151,9 @@ async fn cli_imports_abrdb_basic_tables_into_admin_master() {
         );
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("skipped_unknown_machiaza=1"));
+
     let prefecture_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM admin_master.jp_prefectures")
             .fetch_one(&pool)
@@ -163,17 +169,29 @@ async fn cli_imports_abrdb_basic_tables_into_admin_master() {
     .expect("Otsu should be imported");
     assert_eq!(municipality, "大津市");
 
-    let machiaza: String = sqlx::query_scalar(
+    let katsutani_count: i64 = sqlx::query_scalar(
         r#"
-        SELECT match_name
+        SELECT COUNT(*)
         FROM admin_master.jp_machiaza
-        WHERE lg_code = '252018' AND machiaza_id = '0000001'
+        WHERE lg_code = '252018' AND machiaza_id = '0000001' AND match_name = '勝谷町'
         "#,
     )
     .fetch_one(&pool)
     .await
-    .expect("Katsutani should be imported");
-    assert_eq!(machiaza, "勝谷町");
+    .expect("Katsutani rows should be readable");
+    assert_eq!(katsutani_count, 2);
+
+    let unknown_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM admin_master.jp_machiaza
+        WHERE lg_code = '252018' AND machiaza_id = '0000000'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("unknown machiaza count should be readable");
+    assert_eq!(unknown_count, 0);
 
     let dataset_version: Option<String> = sqlx::query_scalar(
         "SELECT dataset_version FROM admin_master.datasets WHERE country_code = 'JP'",
