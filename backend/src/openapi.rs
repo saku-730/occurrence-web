@@ -11,7 +11,7 @@ use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, Uploa
 
 use crate::features::occurrence_map::dto::{
     OccurrenceMapFeature, OccurrenceMapFeatureCollection, OccurrenceMapGeometry,
-    OccurrenceMapProperties,
+    OccurrenceMapProperties, OccurrenceMapSearchRequest,
 };
 use crate::features::occurrences::dto::{
     CreateOccurrenceResponse, DarwinCoreTermResponse, DeleteOccurrenceResponse,
@@ -39,6 +39,7 @@ use crate::features::occurrences::dto::{
         crate::features::occurrences::handler::delete_occurrence,
         crate::features::occurrences::handler::update_occurrence,
         crate::features::occurrence_map::handler::get_occurrence_map,
+        crate::features::occurrence_map::handler::search_occurrence_map,
         crate::features::media::handler::upload_media,
         crate::features::media::handler::get_media,
         crate::features::media::handler::delete_media,
@@ -67,6 +68,7 @@ use crate::features::occurrences::dto::{
             SearchOccurrencesRequest,
             SearchOccurrenceFilter,
             SearchOccurrencesRequestPage,
+            OccurrenceMapSearchRequest,
             OccurrenceMapFeatureCollection,
             OccurrenceMapFeature,
             OccurrenceMapGeometry,
