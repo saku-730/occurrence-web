@@ -7,6 +7,7 @@ on:
     paths:
       - "backend/**"
       - "frontend/**"
+      - "spec/08_search.md"
       - "spec/18_occurrence_map.md"
       - ".github/workflows/occurrence-map-tests.yml"
   pull_request:
@@ -15,6 +16,7 @@ on:
     paths:
       - "backend/**"
       - "frontend/**"
+      - "spec/08_search.md"
       - "spec/18_occurrence_map.md"
       - ".github/workflows/occurrence-map-tests.yml"
   workflow_dispatch:
@@ -61,6 +63,9 @@ jobs:
       - name: Run occurrence map unit tests
         working-directory: backend
         run: cargo test features::occurrence_map --lib -- --test-threads=1
+      - name: Run arbitrary occurrence search query tests
+        working-directory: backend
+        run: cargo test infrastructure::fuseki::tests::build_search_filter_patterns_routes_predicates_through_intermediate_nodes --lib -- --test-threads=1
       - name: Run Nominatim unit tests
         working-directory: backend
         run: cargo test infrastructure::nominatim --lib -- --test-threads=1
@@ -82,6 +87,6 @@ jobs:
       - name: Typecheck frontend
         working-directory: frontend
         run: npm run typecheck
-      - name: Lint map frontend
+      - name: Lint search and map frontend
         working-directory: frontend
-        run: npx eslint src/app/map/occurrence-map.tsx src/app/map/page.tsx src/components/site-header.tsx
+        run: npx eslint src/app/occurrences/search/page.tsx src/app/map/occurrence-map.tsx src/app/map/page.tsx src/components/darwin-core-search-filters.tsx src/components/occurrence-label-preview.tsx src/components/site-header.tsx
