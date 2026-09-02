@@ -39,13 +39,30 @@
 
 これらはfrontendの固定候補として保持する。
 
-`dcterms:creator` はRDFではユーザーIRIを目的語として持つ。検索UIでUUIDだけが入力された場合はfrontendで次へ変換してURI検索する。
+##### 作成者検索
 
-```text
-https://bio-database.net/users/{uuid}
+`dcterms:creator` はRDFではユーザーIRIを目的語として持つが、ユーザーにはUUIDやIRIを入力させない。
+
+作成者を選択すると検索値欄をユーザー名入力に切り替え、入力文字列で次のAPIを呼び出す。
+
+```http
+GET /users/search?user_name={query}
 ```
 
-完全な作成者IRIを直接入力してもよい。
+- PostgreSQL `users.user_name` をcase-insensitiveな部分一致で検索する
+- 最大20件返す
+- emailなどの認証情報は返さない
+- レスポンスは `user_id` と `user_name` のみ
+- `user_name` はDB上UNIQUEではないため、同名ユーザーを1人へ決め打ちしない
+- 同名候補はuser UUIDを補助表示してユーザーが選択する
+
+ユーザーが候補を選択した後、frontendは内部的に次のURIへ変換して `dcterms:creator` のURI完全一致検索を行う。
+
+```text
+https://bio-database.net/users/{user_id}
+```
+
+入力したユーザー名だけでは検索条件を確定せず、候補選択によってuser IDが確定した条件だけをOccurrence検索APIへ送る。
 
 `dcterms:created` / `dcterms:modified` は現時点では保存されている日時文字列への完全一致検索とする。
 
@@ -87,6 +104,7 @@ frontendは検索実行時に値を次のように自動判定し、既存backen
 
 - `scheme:...` 形式のIRI値 -> `uri`
 - それ以外 -> `literal`
+- 作成者は候補選択後のuser URIを必ず `uri` として送る
 
 `match` もユーザーには選択させず、MVPでは常に `exact` とする。
 
@@ -249,6 +267,7 @@ Request。
 - bboxなどの空間filterは別機能として将来追加する
 - UIは通常検索と同じ日本語優先の項目選択を使い、値型選択は表示しない
 - Bio-Database管理項目も通常検索と同様に地図絞り込みで利用できる
+- 作成者条件も通常検索と同じユーザー名候補選択を利用する
 
 ---
 
