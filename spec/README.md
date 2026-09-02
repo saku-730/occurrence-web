@@ -30,6 +30,7 @@
 | `13_infra_and_env.md` | 環境変数、外部サービス、UTC、バックアップ |
 | `14_testing_strategy.md` | テスト戦略、TDD単位、必須テスト観点 |
 | `15_feature.md` | MVPでは省略し、将来実装する機能 |
+| `18_occurrence_map.md` | MapLibre地図表示、Nominatim Geocoding、GeoJSON API |
 
 ## 最重要方針
 
