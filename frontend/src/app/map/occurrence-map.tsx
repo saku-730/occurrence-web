@@ -1,8 +1,13 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
+import {
+  DarwinCoreSearchFilters,
+  type DarwinCoreSearchFilter,
+  activeDarwinCoreSearchFilters,
+  emptyDarwinCoreSearchFilter,
+} from "@/components/darwin-core-search-filters";
 import { apiFetch } from "@/lib/api";
 
 const MAPLIBRE_VERSION = "6.6.0";
@@ -142,18 +147,30 @@ function loadMapLibre(): Promise<MapLibreApi> {
 
 export function OccurrenceMap() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [filters, setFilters] = useState<DarwinCoreSearchFilter[]>([
+    emptyDarwinCoreSearchFilter(),
+  ]);
+  const [appliedFilters, setAppliedFilters] = useState<DarwinCoreSearchFilter[]>([]);
   const [status, setStatus] = useState("地図データを読み込んでいます…");
   const [featureCount, setFeatureCount] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     let map: MapLibreMap | null = null;
 
     async function initialize() {
+      setIsLoading(true);
+      setStatus("地図データを読み込んでいます…");
+
       try {
         const [maplibregl, data] = await Promise.all([
           loadMapLibre(),
-          apiFetch<OccurrenceMapFeatureCollection>("/occurrences/map"),
+          apiFetch<OccurrenceMapFeatureCollection>("/occurrences/map/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filters: appliedFilters }),
+          }),
         ]);
         if (!active || !containerRef.current) return;
 
@@ -208,10 +225,14 @@ export function OccurrenceMap() {
           }
 
           focusFeatures(map, data.features);
-          setStatus(data.features.length === 0 ? "座標付きOccurrenceはありません。" : "");
+          setStatus(data.features.length === 0 ? "条件に一致する座標付きOccurrenceはありません。" : "");
+          setIsLoading(false);
         });
       } catch {
-        if (active) setStatus("地図データの読み込みに失敗しました。");
+        if (active) {
+          setStatus("地図データの読み込みに失敗しました。");
+          setIsLoading(false);
+        }
       }
     }
 
@@ -221,10 +242,47 @@ export function OccurrenceMap() {
       active = false;
       map?.remove();
     };
-  }, []);
+  }, [appliedFilters]);
+
+  function applyFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAppliedFilters(activeDarwinCoreSearchFilters(filters));
+  }
+
+  function clearFilters() {
+    setFilters([emptyDarwinCoreSearchFilter()]);
+    setAppliedFilters([]);
+  }
 
   return (
     <div className="space-y-4">
+      <form className="space-y-3 rounded-lg border border-[#d8dfe2] bg-[#f8faf9] p-4" onSubmit={applyFilters}>
+        <div>
+          <h2 className="text-sm font-semibold">地図を絞り込む</h2>
+          <p className="mt-1 text-xs text-[#65747a]">
+            データ検索と同じDarwin Core条件を使用します。複数条件はANDです。
+          </p>
+        </div>
+        <DarwinCoreSearchFilters disabled={isLoading} filters={filters} onChange={setFilters} />
+        <div className="flex gap-3">
+          <button
+            className="h-10 rounded-md bg-[#176b57] px-5 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
+            disabled={isLoading}
+            type="submit"
+          >
+            地図に適用
+          </button>
+          <button
+            className="h-10 rounded-md border border-[#b8c3c8] bg-white px-4 text-sm font-medium hover:bg-[#eef2f3] disabled:cursor-not-allowed"
+            disabled={isLoading}
+            onClick={clearFilters}
+            type="button"
+          >
+            条件をクリア
+          </button>
+        </div>
+      </form>
+
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-[#526168]">
         <div className="flex flex-wrap gap-5">
           <span className="inline-flex items-center gap-2">
@@ -349,7 +407,3 @@ function stringProperty(properties: Record<string, unknown>, key: string): strin
   const value = properties[key];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
-
-// Keep Link imported in this client bundle so Next can prefetch the map page from navigation
-// without requiring the popup's runtime-created anchor to depend on React state.
-void Link;
