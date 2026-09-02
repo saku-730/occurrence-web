@@ -2,65 +2,118 @@
 
 ## 基本方針
 
-- MVPでは検索述語を選べるUIを想定する
-- ただし、MVPでUIから選択できる述語は `dwc:scientificName` のみ
-- backend API は任意の predicate URI を検索条件として受け取れる形にする
+- frontend / backend ともに任意の Darwin Core predicate を検索条件として扱えるようにする
+- 検索画面では Darwin Core 項目を複数追加できる
+- 複数条件は AND とする
 - 空検索は一覧取得として扱う
 - 検索結果は閲覧権限に従ってフィルタする
+- 同じ検索条件を地図表示にも利用できるようにする
 
 ---
 
-## MVP UI検索対象
+## 検索画面
+
+初期状態では `dwc:scientificName` の入力行を1つ表示するが、学名だけに限定しない。
+
+各検索条件は以下を持つ。
+
+- predicate
+- value
+- value type (`literal` / `uri`)
+- match (`exact`)
+
+Darwin Core 項目候補は以下から取得する。
 
 ```text
-http://rs.tdwg.org/dwc/terms/scientificName
+GET /vocabularies/darwin-core
 ```
 
-backend は `filters[].predicate` に絶対URIを受け取る。
-MVP UIでは `dwc:scientificName` のみを選択肢として出すが、API contract は将来の任意述語検索に備えて固定しない。
+候補は入力補助であり、検索可能な predicate を候補一覧だけに制限しない。
+ユーザーは `http://rs.tdwg.org/dwc/terms/...` や `http://rs.tdwg.org/dwc/iri/...` の絶対IRIを直接入力できる。
+
+空の条件行は frontend から検索APIへ送らない。
 
 ---
 
-## 中間ノードを含む検索
+## API
 
-検索APIのpredicate指定方法は変更しない。
-backendはpredicateの振り分け規則に応じて保存先ノードを透過的に辿る。
-
-- Identification対象述語は `hasIdentification` の先を検索する
-- Event対象述語は `hasEvent` の先を検索する
-- Location対象述語は `hasLocation` の先を検索する
-- Occurrence対象述語とunknown predicateはOccurrence直下を検索する
-
-`dwc:scientificName` の検索例。
-
-```sparql
-?occurrence <https://bio-database.net/terms/hasIdentification> ?identification .
-?identification <http://rs.tdwg.org/dwc/terms/scientificName> ?value .
+```http
+POST /occurrences/search
+Content-Type: application/json
 ```
 
-URI完全一致、リテラルのcase-insensitive比較、trim、taxonomy階層探索など既存動作は維持する。
+検索条件例。
+
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
+      "value": "Lumbricus terrestris",
+      "value_type": "literal",
+      "match": "exact"
+    },
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/stateProvince",
+      "value": "Kyoto",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ],
+  "page": {
+    "limit": 50,
+    "cursor": null
+  }
+}
+```
+
+`filters` の各要素は AND で評価する。
+
+backend は `filters[].predicate` に http/https の絶対IRIを受け取る。
+`value_type` は `literal` または `uri`、`match` は現時点では `exact` のみ許可する。
 
 ---
 
-## 値の形式
+## RDF構造を透過した検索
 
-`dwc:scientificName` の値は以下の両方を許可する。
+frontendは、指定したDwC項目がOccurrence直下・Identification・Event・Locationのどこに保存されているかを意識しない。
 
-- リテラル
-- URI
+backendは検索時に以下を透過的に探索する。
 
-ただし、taxonomy 階層探索は URI の場合のみ有効。
+- Occurrence root
+- `hasIdentification` で接続された Identification node
+- `hasEvent` で接続された Event node
+- `hasLocation` で接続された Location node
+
+特に任意DwC predicateについては、既知の保存先分類だけに依存せず、必要に応じて管理中間ノードも探索する。
+これにより、例えば以下のLocation項目も同じfilter形式で検索できる。
+
+- `dwc:locality`
+- `dwc:municipality`
+- `dwc:county`
+- `dwc:stateProvince`
+- `dwc:country`
+- `dwc:verbatimLocality`
+- `dwc:island`
+- `dwc:islandGroup`
+- `dwc:waterBody`
+- `dwc:georeferenceProtocol`
+- `dwc:georeferencedDate`
+- `dwciri:georeferenceSources`
+
+legacyのOccurrence直下に保存された値も検索対象に含める。
 
 ---
 
 ## リテラル検索
 
-リテラルの場合。
+`value_type = literal` の場合。
 
 - 完全一致
 - case-insensitive
-- 前後空白 trim
-- 連続空白の厳密な正規化は MVP では必須にしない
+- 検索値の前後空白をtrimする
+- RDF literalの文字列値を比較する
+- datatypeやlanguage tagの違いは文字列比較時には区別しない
 
 例。
 
@@ -69,21 +122,25 @@ URI完全一致、リテラルのcase-insensitive比較、trim、taxonomy階層�
 " lumbricus terrestris "
 ```
 
-上記は同じものとして扱う。
+上記は同じ検索値として扱う。
 
 ---
 
 ## URI検索
 
-URIの場合。
+`value_type = uri` の場合。
 
-- 完全一致
-- taxonomy graph の階層探索を行う
-- 指定 taxon 自身と下位分類群を含める
+- URI完全一致を行う
+- URI値は有効なIRIでなければならない
+- taxonomy graph の下位分類群探索も維持する
 
----
+分類群検索では指定taxon自身に加え、以下のproperty pathで下位分類群を含める。
 
-## taxonomy graph
+```sparql
+?taxon rdfs:subClassOf+ ?targetTaxon .
+```
+
+完全一致条件と組み合わせるため、target自身も結果に含む。
 
 taxonomy graph URI。
 
@@ -91,57 +148,47 @@ taxonomy graph URI。
 https://bio-database.net/graphs/taxonomy/gbif-backbone
 ```
 
-taxonomy ontology は GBIF Backbone Taxonomy から生成する。
-
 分類群URI。
 
 ```text
 https://bio-database.net/taxa/gbif/{id}
 ```
 
-- `{id}` は GBIF Backbone Taxonomy の taxon key とする
-- occurrenceが分類群をURIで保持する場合も、このURIを目的語として使う
-- 各分類群には `dcterms:source` として `https://www.gbif.org/species/{id}` を記録する
-- 学名、分類階級、表示ラベルなど検索候補に必要な値もtaxonomy graphへ格納する
-
 ---
 
-## 階層述語
+## 地図との共通検索
 
-MVPでは分類階層述語を `rdfs:subClassOf` 固定とする。
+地図では通常の全件取得に加え、検索画面と同じfilter contractを利用する。
 
-```text
-http://www.w3.org/2000/01/rdf-schema#subClassOf
+```http
+POST /occurrences/map/search
+Content-Type: application/json
 ```
 
-SKOS の `skos:broader` / `skos:narrower` は MVP 対象外。
+Request。
 
-GBIFの親子関係は、子分類群から親分類群への `rdfs:subClassOf` として生成する。
-
-```text
-<https://bio-database.net/taxa/gbif/{child_id}>
-  rdfs:subClassOf
-<https://bio-database.net/taxa/gbif/{parent_id}> .
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/locality",
+      "value": "Kyoto",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ]
+}
 ```
 
----
-
-## 推論エンジン
-
-MVPでは Jena の推論エンジンは使わない。  
-検索時に SPARQL property path で階層を辿る。
-
-例。
-
-```sparql
-?taxon rdfs:subClassOf* ?targetTaxon .
-```
+- filter semantics は `/occurrences/search` と同じ
+- 複数条件はAND
+- 閲覧権限も通常検索と同じ
+- 条件に一致したOccurrenceのうち、完全な緯度経度ペアを持つものだけGeoJSONとして返す
+- bboxなどの空間filterは別機能として将来追加する
 
 ---
 
 ## 検索結果の認可
-
-検索結果には閲覧可能な occurrence のみを含める。
 
 ### 非ログイン
 
@@ -156,109 +203,47 @@ MVPでは Jena の推論エンジンは使わない。
 
 - 全 occurrence
 
+認可filterはFuseki検索段階で適用し、limit/cursorや地図件数からprivate occurrenceの存在を推測できないようにする。
+
 ---
 
 ## ページネーション
 
-- cursor-based pagination を使う
-- default limit は 50
-- max limit は 100
-- `cursor` が `null` または未指定の場合は先頭ページを返す
-- cursor は opaque string とし、frontend は中身を解釈しない
-- 並び順は `created desc, occurrence_id desc` を基本とし、同一 `created` のデータでもページ境界が安定するようにする
+通常の一覧検索ではcursor-based paginationを使う。
+
+- default limit: 50
+- max limit: 100
+- `cursor = null` または未指定で先頭ページ
+- cursorはopaque string
+- frontendはcursor内部を解釈しない
+- 並び順は `created desc, occurrence_id desc` を基本とする
+
+地図検索はMVPでは一致する座標付きOccurrenceを全件GeoJSON化するため、内部でcursor paginationを繰り返して全ページを取得する。
 
 ---
 
 ## 空検索
 
-空検索は一覧取得として扱う。
+`filters: []` は一覧取得として扱う。
 
-- 非ログイン: public occurrence 一覧
-- editor: public + 自分の private occurrence 一覧
-- admin: 全 occurrence 一覧
+- 非ログイン: public occurrence一覧
+- editor: public + 自分のprivate occurrence一覧
+- admin: 全occurrence一覧
+
+地図では `filters: []` は `GET /occurrences/map` と同じ対象集合を意味する。
 
 ---
 
-## API例
+## テスト要件
 
-```http
-POST /occurrences/search
-Content-Type: application/json
-```
+最低限以下を確認する。
 
-空検索、つまり一覧取得。
-
-```json
-{
-  "filters": [],
-  "page": {
-    "limit": 50,
-    "cursor": null
-  }
-}
-```
-
-任意 predicate の検索。
-
-```json
-{
-  "filters": [
-    {
-      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
-      "value": "Lumbricus terrestris",
-      "value_type": "literal",
-      "match": "exact"
-    }
-  ],
-  "page": {
-    "limit": 50,
-    "cursor": null
-  }
-}
-```
-
-URI検索の例。
-
-```json
-{
-  "filters": [
-    {
-      "predicate": "http://rs.tdwg.org/dwc/terms/scientificName",
-      "value": "https://example.org/taxon/Mammalia",
-      "value_type": "uri",
-      "match": "exact"
-    }
-  ],
-  "page": {
-    "limit": 50,
-    "cursor": null
-  }
-}
-```
-
-Response。
-
-```json
-{
-  "items": [
-    {
-      "occurrence_id": "uuid",
-      "occurrence_uri": "https://bio-database.net/occurrences/uuid",
-      "scientific_name": "Quercus serrata",
-      "basis_of_record": "PreservedSpecimen",
-      "recorded_by": "Yamada Taro",
-      "created": "2026-06-02T10:20:30Z",
-      "modified": "2026-06-02T10:20:30Z",
-      "access_rights": "public"
-    }
-  ],
-  "page": {
-    "limit": 50,
-    "next_cursor": "opaque-cursor-string",
-    "has_next": true
-  }
-}
-```
-
-一覧用 response は表示に必要な代表フィールドのみ返す。
-RDF全文が必要な場合は `GET /occurrences/{occurrence_id}` で detail を取得する。
+- scientificName以外のDwC predicateを検索できる
+- Location nodeに保存された `stateProvince` 等を検索できる
+- 複数filterがANDになる
+- literal検索はcase-insensitiveかつtrimされる
+- URI完全一致が動く
+- taxonomy URI検索で下位分類群を含める
+- public/privateの認可を維持する
+- 地図検索へ同じfilterが渡される
+- 空検索が一覧取得になる
