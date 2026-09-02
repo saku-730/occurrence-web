@@ -2,6 +2,7 @@ use axum::{Router, routing::{get, post}};
 
 use crate::state::AppState;
 
+pub mod administrative_master;
 pub mod dto;
 pub mod geocoding;
 pub mod handler;
