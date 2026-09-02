@@ -443,26 +443,85 @@ Bio-Database の住所ジオコーディングは、**ABRで住所を正規化�
 ABRの座標は使用せず、最終的な緯度経度はNominatimだけから取得する。
 詳細仕様は `spec/18_geocoding.md` を参照する。
 
-#### ABR geocoder のインストール
+#### ABR geocoder のセットアップ
 
-ABR はデジタル庁の `@digital-go-jp/abr-geocoder` をローカルサービスとして使用する。
-Node.js / npm のインストール後に実行する。
+ABR は npm のグローバルインストールではなく、デジタル庁公式 `digital-go-jp/abr-geocoder` リポジトリの **Docker Compose 構成をそのまま使用する**。
+全国データを使うため、公式リポジトリ直下の `docker-compose.yml` で PostgreSQL、`abrdb_app`、`abrg_app` を管理する。
+
+公式リポジトリを取得する。
 
 ```bash
-sudo npm install -g @digital-go-jp/abr-geocoder
-abrg --help
+cd ~
+git clone https://github.com/digital-go-jp/abr-geocoder.git
+cd abr-geocoder
 ```
 
-初回はアドレス・ベース・レジストリのデータをダウンロードしてローカルDBを作成する。
+公式の `.env.example` をコピーする。
 
 ```bash
-abrg download
+cp .env.example .env
 ```
 
-Next.js の標準ポート `3000` と衝突しないよう、ABR server は例として `3001` で起動する。
+`.env` の `DB_PASSWORD` を必ず設定する。
+Bio-Database 本体の PostgreSQL と Next.js が標準ポートを使用している場合は衝突を避けるため、ABR 側の host port を変更する。
+
+例。
+
+```env
+DB_HOST=postgres
+DB_PORT=5433
+DB_USER=postgres
+DB_PASSWORD=<strong-password>
+DB_NAME=abrdb
+DB_SSLMODE=disable
+
+PORT=3001
+GIN_MODE=release
+CORS_ALLOW_ORIGIN=*
+LOG_LEVEL=INFO
+```
+
+`DB_PORT` は host 側公開ポートであり、ABR の compose network 内では PostgreSQL の `5432` を使用する。
+`PORT` は abrg API の host 側公開ポートである。
+
+全国データを利用する場合、公式 README に従い次の順番でセットアップする。
+
+まず ABR 専用 PostgreSQL を起動する。
 
 ```bash
-abrg serve start -p 3001
+docker compose up -d postgres
+```
+
+取り込むデータ範囲を初期化する。
+Bio-Database では住所の正規化・階層分割を目的とし、ABR の座標を利用しないため `--pos` は付けない。
+住所階層は全国・全カテゴリを対象とする。
+
+```bash
+docker compose run --rm abrdb_app init --pref all --category all
+```
+
+ABR データをダウンロードして PostgreSQL に取り込む。
+
+```bash
+docker compose run --rm abrdb_app import
+```
+
+PostgreSQL から abrg が使用する DuckDB キャッシュを構築する。
+
+```bash
+docker compose run --rm abrg_app cache build
+```
+
+API server を常駐起動する。
+
+```bash
+docker compose up -d abrg_app
+```
+
+状態確認。
+
+```bash
+docker compose ps
 ```
 
 動作確認。
@@ -473,13 +532,28 @@ curl -fsS --get \
   'http://127.0.0.1:3001/geocode'
 ```
 
-Bio-Database ではこのレスポンスの住所正規化・階層情報だけを使用する。ABR が返す latitude / longitude は RDF に保存しない。
+公式 compose ではデータを named volume に保持する。
 
-ABR のデータ更新時は、運用中のバージョンに対応する公式手順に従ってローカルDBを更新する。
+```text
+postgres_data  ABR用PostgreSQLデータ
+abrdb_data     ダウンロードしたABRアーカイブ
+abrg_cache     abrgが参照するDuckDBキャッシュ
+```
+
+通常の停止ではデータを維持する。
+
+```bash
+docker compose down
+```
+
+`docker compose down -v` は上記 named volume も削除するため、ABR データを完全に作り直す場合以外は使用しない。
+
+Bio-Database では ABR API の住所正規化・階層分割結果だけを使用する。
+ABR のレスポンスに latitude / longitude が含まれていても RDF へ保存しない。
 
 #### backend 設定
 
-backend からローカル ABR server と Nominatim を参照できるようにする。
+backend から Docker で起動したローカル ABR API と Nominatim を参照できるようにする。
 環境変数名は backend 実装と一致させる。
 
 推奨設定例。
