@@ -20,6 +20,8 @@ const DWC_DECIMAL_LATITUDE_URI = "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DWC_DECIMAL_LATITUDE_LABEL = "緯度";
 const DWC_LOCALITY_URI = "http://rs.tdwg.org/dwc/terms/locality";
 const DWC_LOCALITY_LABEL = "locality";
+const DWC_COUNTRY_URI = "http://rs.tdwg.org/dwc/terms/country";
+const DWC_COUNTRY_LABEL = "国";
 const DWC_EVENT_DATE_URI = "http://rs.tdwg.org/dwc/terms/eventDate";
 const DWC_EVENT_DATE_LABEL = "eventDate";
 const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
@@ -31,6 +33,7 @@ export type PaperOccurrenceCandidate = {
   toTaxon: string | null;
   taxonScientificName: string | null;
   locality: string | null;
+  country: string | null;
   eventDate: string | null;
   decimalLatitude: number | null;
   decimalLongitude: number | null;
@@ -110,6 +113,7 @@ export function PaperOccurrenceBulkEditor({
           term.uri !== DWC_DECIMAL_LONGITUDE_URI &&
           term.uri !== DWC_DECIMAL_LATITUDE_URI &&
           term.uri !== DWC_LOCALITY_URI &&
+          term.uri !== DWC_COUNTRY_URI &&
           term.uri !== DWC_EVENT_DATE_URI,
       );
       setDarwinCoreTerms([
@@ -118,6 +122,7 @@ export function PaperOccurrenceBulkEditor({
         { uri: DWC_DECIMAL_LONGITUDE_URI, local_name: DWC_DECIMAL_LONGITUDE_LABEL },
         { uri: DWC_DECIMAL_LATITUDE_URI, local_name: DWC_DECIMAL_LATITUDE_LABEL },
         { uri: DWC_LOCALITY_URI, local_name: DWC_LOCALITY_LABEL },
+        { uri: DWC_COUNTRY_URI, local_name: DWC_COUNTRY_LABEL },
         { uri: DWC_EVENT_DATE_URI, local_name: DWC_EVENT_DATE_LABEL },
         ...visibleTerms,
       ]);
@@ -332,7 +337,7 @@ export function PaperOccurrenceBulkEditor({
         <section className="mt-6 rounded-md border border-[#9dbeb4] bg-[#f3faf5] px-5 py-4" aria-live="polite">
           <p className="font-medium">{registered.length}件のデータを登録しました</p>
           <p className="mt-2 text-sm text-[#526168]">
-            確認画面に表示した分類・scientificName・locality・eventDateと論文出典情報を保存し、paperをregisteredに更新しました。
+            確認画面に表示した分類・scientificName・locality・country・eventDateと論文出典情報を保存し、paperをregisteredに更新しました。
           </p>
         </section>
       ) : null}
@@ -702,6 +707,15 @@ function buildEditorState(candidate: PaperOccurrenceCandidate, index: number): E
     object: candidate.locality?.trim() ?? "",
   });
 
+  const country = candidate.country?.trim() ?? "";
+  if (country) {
+    rows.push({
+      id: nextId++,
+      predicate: DWC_COUNTRY_URI,
+      object: country,
+    });
+  }
+
   const eventDate = candidate.eventDate?.trim() ?? "";
   if (eventDate) {
     rows.push({
@@ -982,6 +996,7 @@ function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): stri
   if (value === DWC_DECIMAL_LONGITUDE_URI) return DWC_DECIMAL_LONGITUDE_LABEL;
   if (value === DWC_DECIMAL_LATITUDE_URI) return DWC_DECIMAL_LATITUDE_LABEL;
   if (value === DWC_LOCALITY_URI) return DWC_LOCALITY_LABEL;
+  if (value === DWC_COUNTRY_URI) return DWC_COUNTRY_LABEL;
   if (value === DWC_EVENT_DATE_URI) return DWC_EVENT_DATE_LABEL;
   return terms.find((term) => term.uri === value)?.local_name ?? value;
 }
