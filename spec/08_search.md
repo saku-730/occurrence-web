@@ -3,7 +3,8 @@
 ## 基本方針
 
 - frontend / backend ともに任意の Darwin Core predicate を検索条件として扱えるようにする
-- 検索画面では Darwin Core 項目を複数追加できる
+- Darwin Core以外のBio-Database管理項目も検索条件として扱う
+- 検索画面では検索項目を複数追加できる
 - 複数条件は AND とする
 - 空検索は一覧取得として扱う
 - 検索結果は閲覧権限に従ってフィルタする
@@ -19,8 +20,36 @@
 
 ユーザーが操作する各検索条件は以下だけを持つ。
 
-- Darwin Core項目
+- 検索項目
 - 検索値
+
+### 検索項目候補の出所
+
+検索項目候補は2系統をUI上で統合する。
+
+#### Bio-Database管理項目
+
+以下はDarwin Coreではないが、Occurrence管理情報として常に検索候補へ含める。
+
+| 表示名 | predicate |
+| --- | --- |
+| 作成者 | `dcterms:creator` |
+| データ作成日 | `dcterms:created` |
+| データ更新日 | `dcterms:modified` |
+
+これらはfrontendの固定候補として保持する。
+
+`dcterms:creator` はRDFではユーザーIRIを目的語として持つ。検索UIでUUIDだけが入力された場合はfrontendで次へ変換してURI検索する。
+
+```text
+https://bio-database.net/users/{uuid}
+```
+
+完全な作成者IRIを直接入力してもよい。
+
+`dcterms:created` / `dcterms:modified` は現時点では保存されている日時文字列への完全一致検索とする。
+
+#### Darwin Core項目
 
 Darwin Core 項目候補は以下から取得する。
 
@@ -28,8 +57,19 @@ Darwin Core 項目候補は以下から取得する。
 GET /vocabularies/darwin-core
 ```
 
-項目選択UIでは、Fusekiの `occurrence-profile` graphにある `skos:prefLabel @ja` を優先した日本語表示名を主表示する。
-日本語表示名がない場合だけDarwin Coreの `localName` をfallbackとして使う。
+backendはFuseki内の以下2 graphをJOINして候補を返す。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+- Darwin Core vocabulary graphから語彙IRIと `localName` を取得する
+- occurrence-profile graphで `bio:useAtBioDatabase true` の語だけを候補にする
+- occurrence-profile graphの `skos:prefLabel @ja` があれば日本語表示名として優先する
+- 日本語表示名がなければDarwin Coreの `localName` をfallbackとして使う
+
+項目選択UIでは日本語表示名を主表示する。
 predicate IRIは識別・検索API送信用に内部保持し、通常UIでは小さな補助情報として表示する。
 
 例。
@@ -40,7 +80,7 @@ predicate IRIは識別・検索API送信用に内部保持し、通常UIでは�
 ```
 
 候補は入力補助であり、検索可能な predicate を候補一覧だけに制限しない。
-候補にないDarwin Core predicateは「候補にないDwC IRIを直接指定」から絶対IRIを入力できる。
+候補にないpredicateは「候補にないIRIを直接指定」から絶対IRIを入力できる。
 
 値の型を選択するUIは設けない。
 frontendは検索実行時に値を次のように自動判定し、既存backend contractの `value_type` へ変換する。
@@ -122,6 +162,8 @@ backendは検索時に以下を透過的に探索する。
 - `dwciri:georeferenceSources`
 
 legacyのOccurrence直下に保存された値も検索対象に含める。
+
+Bio-Database管理項目 `dcterms:creator` / `dcterms:created` / `dcterms:modified` はOccurrence root上を検索する。
 
 ---
 
@@ -206,6 +248,7 @@ Request。
 - 条件に一致したOccurrenceのうち、完全な緯度経度ペアを持つものだけGeoJSONとして返す
 - bboxなどの空間filterは別機能として将来追加する
 - UIは通常検索と同じ日本語優先の項目選択を使い、値型選択は表示しない
+- Bio-Database管理項目も通常検索と同様に地図絞り込みで利用できる
 
 ---
 
