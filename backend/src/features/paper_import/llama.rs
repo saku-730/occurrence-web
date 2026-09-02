@@ -56,6 +56,8 @@ pub struct OccurrenceCandidate {
     #[serde(rename = "scientificName")]
     pub scientific_name: String,
     pub locality: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    pub country: Option<String>,
     #[serde(
         rename = "eventDate",
         default,
@@ -182,6 +184,7 @@ impl LlamaClient {
             .ok_or(LlamaError::InvalidResponse)?;
 
         let mut result = parse_occurrence_result(&content)?;
+        sanitize_countries(&mut result);
         sanitize_event_dates(&mut result);
         validate_occurrences(&result)?;
         Ok(result)
@@ -285,10 +288,11 @@ fn occurrence_response_format() -> Value {
                     "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["scientificName", "locality"],
+                        "required": ["scientificName", "locality", "country"],
                         "properties": {
                             "scientificName": { "type": "string", "minLength": 1 },
                             "locality": { "type": ["string", "null"] },
+                            "country": { "type": ["string", "null"] },
                             "eventDate": { "type": ["string", "null"] }
                         }
                     }
@@ -296,6 +300,16 @@ fn occurrence_response_format() -> Value {
             }
         }
     })
+}
+
+fn sanitize_countries(result: &mut OccurrenceExtractionResult) {
+    for occurrence in &mut result.occurrences {
+        occurrence.country = occurrence
+            .country
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
 }
 
 fn sanitize_event_dates(result: &mut OccurrenceExtractionResult) {
@@ -475,7 +489,7 @@ mod tests {
         json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","eventDate":"1998-06-04"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","country":"Japan","eventDate":"1998-06-04"}]}"#
                 }
             }]
         })
@@ -510,6 +524,7 @@ mod tests {
         assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("同じOccurrenceを繰り返し出力しない"));
         assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("直ちに閉じて生成を終了"));
         assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("eventDate"));
+        assert!(OCCURRENCE_EXTRACTION_PROMPT.contains("country"));
         assert_eq!(content[1]["type"], "text");
         assert!(
             content[1]["text"]
@@ -530,7 +545,11 @@ mod tests {
             ["occurrences"]["items"];
         assert_eq!(
             occurrence_schema["required"],
-            json!(["scientificName", "locality"])
+            json!(["scientificName", "locality", "country"])
+        );
+        assert_eq!(
+            occurrence_schema["properties"]["country"]["type"],
+            json!(["string", "null"])
         );
         assert_eq!(
             occurrence_schema["properties"]["eventDate"]["type"],
@@ -567,6 +586,7 @@ mod tests {
 
         assert_eq!(result.occurrences.len(), 1);
         assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
         assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06-04"));
         let requests = requests
             .lock()
@@ -604,8 +624,8 @@ mod tests {
     async fn llama_client_accepts_missing_or_non_string_event_date() {
         let (_directory, pages) = test_page_images().await;
         for content in [
-            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo"}]}"#,
-            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","eventDate":["1998-06"]}]}"#,
+            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","country":"Japan"}]}"#,
+            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","country":"Japan","eventDate":["1998-06"]}]}"#,
         ] {
             let response = json!({"choices":[{"message":{"content":content}}]});
             let (endpoint, _, server) = start_mock_llama(StatusCode::OK, response).await;
@@ -627,7 +647,7 @@ mod tests {
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": "```json\n{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\",\"eventDate\":\"1998-06\"}]}\n```"
+                    "content": "```json\n{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\",\"country\":\"Japan\",\"eventDate\":\"1998-06\"}]}\n```"
                 }
             }]
         });
@@ -641,6 +661,7 @@ mod tests {
             .expect("JSON inside markdown fences should be recovered");
 
         assert_eq!(result.occurrences.len(), 1);
+        assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
         assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06"));
         server.abort();
     }
@@ -681,12 +702,12 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"eventDate":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"country":null,"eventDate":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
                 "invalid_occurrence",
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"eventDate":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"country":null,"eventDate":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
                 "invalid_occurrence",
             ),
         ];
@@ -715,7 +736,7 @@ mod tests {
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","eventDate":"1998-13"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","country":"Japan","eventDate":"1998-13"}]}"#
                 }
             }]
         });
@@ -740,7 +761,7 @@ mod tests {
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"eventDate":null,"inventedField":"ignored"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"country":"Japan","eventDate":null,"inventedField":"ignored"}]}"#
                 }
             }]
         });
@@ -755,6 +776,7 @@ mod tests {
 
         assert_eq!(result.occurrences.len(), 1);
         assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
         server.abort();
     }
 
@@ -792,6 +814,7 @@ mod tests {
             occurrences: vec![OccurrenceCandidate {
                 scientific_name: "Metaphire hilgendorfi".to_string(),
                 locality: Some("Tokyo".to_string()),
+                country: Some("Japan".to_string()),
                 event_date: Some("1998-06/1998-07".to_string()),
                 decimal_latitude: Some(35.0),
                 decimal_longitude: Some(139.0),
@@ -803,6 +826,7 @@ mod tests {
             occurrences: vec![OccurrenceCandidate {
                 scientific_name: "Metaphire hilgendorfi".to_string(),
                 locality: None,
+                country: None,
                 event_date: None,
                 decimal_latitude: Some(91.0),
                 decimal_longitude: None,
@@ -815,12 +839,13 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_event_dates_without_rejecting_occurrence() {
+    fn sanitizes_country_and_event_dates_without_rejecting_occurrence() {
         let mut result = OccurrenceExtractionResult {
             occurrences: vec![
                 OccurrenceCandidate {
                     scientific_name: "Metaphire hilgendorfi".to_string(),
                     locality: Some("Tokyo".to_string()),
+                    country: Some(" Japan ".to_string()),
                     event_date: Some(" 1998-06 ".to_string()),
                     decimal_latitude: None,
                     decimal_longitude: None,
@@ -828,6 +853,7 @@ mod tests {
                 OccurrenceCandidate {
                     scientific_name: "Amynthas corticis".to_string(),
                     locality: Some("Nara".to_string()),
+                    country: Some("   ".to_string()),
                     event_date: Some("June 1998".to_string()),
                     decimal_latitude: None,
                     decimal_longitude: None,
@@ -835,9 +861,12 @@ mod tests {
             ],
         };
 
+        sanitize_countries(&mut result);
         sanitize_event_dates(&mut result);
 
+        assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
         assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06"));
+        assert_eq!(result.occurrences[1].country, None);
         assert_eq!(result.occurrences[1].event_date, None);
     }
 
