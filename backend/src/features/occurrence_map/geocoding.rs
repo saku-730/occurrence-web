@@ -12,7 +12,10 @@ use oxrdf::{Literal, NamedNode, Quad, Term, vocab::xsd};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use serde_json::Value;
 
-use crate::infrastructure::nominatim::NominatimClient;
+use crate::infrastructure::{
+    abr::{AbrClient, AdministrativeResolution},
+    nominatim::NominatimClient,
+};
 
 const MAX_INTERCEPTED_BODY_BYTES: usize = 2 * 1024 * 1024;
 const DECIMAL_LATITUDE: &str = "http://rs.tdwg.org/dwc/terms/decimalLatitude";
@@ -30,6 +33,7 @@ const GEOREFERENCE_SOURCES: &str = "http://rs.tdwg.org/dwc/iri/georeferenceSourc
 const GEOREFERENCE_PROTOCOL: &str = "http://rs.tdwg.org/dwc/terms/georeferenceProtocol";
 const GEOREFERENCED_DATE: &str = "http://rs.tdwg.org/dwc/terms/georeferencedDate";
 pub const NOMINATIM_SOURCE_URI: &str = "https://nominatim.openstreetmap.org/";
+const ABR_SOURCE_URI: &str = "https://www.digital.go.jp/policies/base_registry_address";
 const NOMINATIM_PROTOCOL: &str = "Nominatim search; first-ranked result selected automatically";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,9 +55,19 @@ pub trait LocationGeocoder: Send + Sync {
     ) -> Result<Option<GeocodedLocation>, LocationGeocoderError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeocodingQuery {
+    query: String,
+    protocol: String,
+    used_abr: bool,
+}
+
 /// Apply Nominatim geocoding immediately before the existing occurrence handlers run.
-/// Geocoder failures are deliberately fail-open: the original request proceeds and the
-/// occurrence is stored without generated coordinates.
+///
+/// When ABR_DATABASE_URL is available, Japanese locality + country values are resolved
+/// against the official Digital Agency ABR PostgreSQL database first. Nominatim is then
+/// tried from the most specific ABR-derived query toward broader administrative fallbacks.
+/// ABR/Nominatim failures deliberately fail open so occurrence registration can continue.
 pub async fn geocoding_middleware(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let method = request.method().clone();
@@ -74,10 +88,12 @@ pub async fn geocoding_middleware(request: Request, next: Next) -> Response {
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
 
+    let geocoder = NominatimClient::global();
+    let abr = AbrClient::global();
     let rewritten = if is_batch {
-        geocode_batch_json(&original, NominatimClient::global()).await
+        geocode_batch_json(&original, geocoder, abr).await
     } else {
-        match enrich_nquads_with_geocoding(&original, NominatimClient::global()).await {
+        match enrich_nquads_with_geocoding_and_abr(&original, geocoder, abr).await {
             Ok(bytes) => bytes,
             Err(_) => original.to_vec(),
         }
@@ -90,7 +106,11 @@ pub async fn geocoding_middleware(request: Request, next: Next) -> Response {
     next.run(request).await
 }
 
-async fn geocode_batch_json(body: &[u8], geocoder: &dyn LocationGeocoder) -> Vec<u8> {
+async fn geocode_batch_json(
+    body: &[u8],
+    geocoder: &dyn LocationGeocoder,
+    abr: Option<&AbrClient>,
+) -> Vec<u8> {
     let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
         return body.to_vec();
     };
@@ -105,7 +125,9 @@ async fn geocode_batch_json(body: &[u8], geocoder: &dyn LocationGeocoder) -> Vec
         let Some(nquads) = occurrence.as_str() else {
             continue;
         };
-        if let Ok(enriched) = enrich_nquads_with_geocoding(nquads.as_bytes(), geocoder).await {
+        if let Ok(enriched) =
+            enrich_nquads_with_geocoding_and_abr(nquads.as_bytes(), geocoder, abr).await
+        {
             if let Ok(text) = String::from_utf8(enriched) {
                 *occurrence = Value::String(text);
             }
@@ -115,9 +137,24 @@ async fn geocode_batch_json(body: &[u8], geocoder: &dyn LocationGeocoder) -> Vec
     serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec())
 }
 
+/// Geocode without an administrative resolver. Kept as the small reusable entry point
+/// for callers/tests that only need ordinary Nominatim behavior.
 pub async fn enrich_nquads_with_geocoding<G>(
     nquads: &[u8],
     geocoder: &G,
+) -> Result<Vec<u8>, ()>
+where
+    G: LocationGeocoder + ?Sized,
+{
+    enrich_nquads_with_geocoding_and_abr(nquads, geocoder, None).await
+}
+
+/// Geocode an occurrence using the official ABR as an optional Japanese administrative
+/// resolver and Nominatim as the coordinate provider.
+pub async fn enrich_nquads_with_geocoding_and_abr<G>(
+    nquads: &[u8],
+    geocoder: &G,
+    abr: Option<&AbrClient>,
 ) -> Result<Vec<u8>, ()>
 where
     G: LocationGeocoder + ?Sized,
@@ -143,11 +180,26 @@ where
         return Ok(nquads.to_vec());
     }
 
-    let Some(query) = build_geocoding_query(&quads) else {
+    let queries = build_geocoding_queries(&quads, abr).await;
+    if queries.is_empty() {
         return Ok(nquads.to_vec());
-    };
+    }
 
-    let Some(result) = geocoder.geocode(&query).await.unwrap_or(None) else {
+    let mut selected = None;
+    for candidate in queries {
+        match geocoder.geocode(&candidate.query).await {
+            Ok(Some(result)) => {
+                selected = Some((result, candidate));
+                break;
+            }
+            Ok(None) => continue,
+            // A service/transport failure is different from a valid zero-result response.
+            // Do not issue more Nominatim calls for the same occurrence after a failure.
+            Err(_) => return Ok(nquads.to_vec()),
+        }
+    }
+
+    let Some((result, selected_query)) = selected else {
         return Ok(nquads.to_vec());
     };
 
@@ -174,14 +226,25 @@ where
     ));
     quads.push(Quad::new(
         subject.clone(),
-        georeference_sources,
+        georeference_sources.clone(),
         nominatim,
         graph_name.clone(),
     ));
+
+    if selected_query.used_abr {
+        let abr_source = NamedNode::new(ABR_SOURCE_URI).map_err(|_| ())?;
+        quads.push(Quad::new(
+            subject.clone(),
+            georeference_sources,
+            abr_source,
+            graph_name.clone(),
+        ));
+    }
+
     quads.push(Quad::new(
         subject.clone(),
         georeference_protocol,
-        Literal::new_simple_literal(NOMINATIM_PROTOCOL),
+        Literal::new_simple_literal(selected_query.protocol),
         graph_name.clone(),
     ));
     quads.push(Quad::new(
@@ -194,33 +257,129 @@ where
     serialize_nquads(&quads)
 }
 
-fn build_geocoding_query(quads: &[Quad]) -> Option<String> {
-    let locality = first_literal(quads, LOCALITY).or_else(|| first_literal(quads, VERBATIM_LOCALITY));
-    let ordered = [
-        locality,
-        first_literal(quads, ISLAND),
-        first_literal(quads, ISLAND_GROUP),
-        first_literal(quads, WATER_BODY),
-        first_literal(quads, MUNICIPALITY),
-        first_literal(quads, COUNTY),
-        first_literal(quads, STATE_PROVINCE),
-        first_literal(quads, COUNTRY),
-    ];
+async fn build_geocoding_queries(quads: &[Quad], abr: Option<&AbrClient>) -> Vec<GeocodingQuery> {
+    let legacy = build_geocoding_query(quads).map(|query| GeocodingQuery {
+        query,
+        protocol: NOMINATIM_PROTOCOL.to_string(),
+        used_abr: false,
+    });
 
+    let Some(abr) = abr else {
+        return legacy.into_iter().collect();
+    };
+    let Some(locality) =
+        first_literal(quads, LOCALITY).or_else(|| first_literal(quads, VERBATIM_LOCALITY))
+    else {
+        return legacy.into_iter().collect();
+    };
+    let Some(country) = first_literal(quads, COUNTRY) else {
+        return legacy.into_iter().collect();
+    };
+
+    let resolution = match abr.resolve(&country, &locality).await {
+        Ok(Some(resolution)) => resolution,
+        // Unsupported country, no ABR prefix match, or ABR DB failure: preserve the old behavior.
+        Ok(None) | Err(_) => return legacy.into_iter().collect(),
+    };
+
+    let mut queries = build_abr_geocoding_queries(&resolution);
+    if let Some(legacy) = legacy {
+        push_unique_query(&mut queries, legacy);
+    }
+    queries
+}
+
+fn build_abr_geocoding_queries(resolution: &AdministrativeResolution) -> Vec<GeocodingQuery> {
+    let mut queries = Vec::new();
+    let prefecture = Some(resolution.prefecture.as_str());
+    let municipality = resolution.municipality.as_deref();
+    let machiaza = resolution.machiaza.as_deref();
+    let remainder = resolution.remainder.as_deref();
+    let country = Some("Japan");
+
+    if remainder.is_some() {
+        push_abr_query(
+            &mut queries,
+            join_unique_parts([remainder, machiaza, municipality, prefecture, country]),
+            "Nominatim search after Digital Agency ABR resolution; locality detail retained",
+        );
+    }
+    if machiaza.is_some() {
+        push_abr_query(
+            &mut queries,
+            join_unique_parts([machiaza, municipality, prefecture, country]),
+            "Nominatim search after Digital Agency ABR resolution; machiaza fallback",
+        );
+    }
+    if municipality.is_some() {
+        push_abr_query(
+            &mut queries,
+            join_unique_parts([municipality, prefecture, country]),
+            "Nominatim search after Digital Agency ABR resolution; municipality fallback",
+        );
+    }
+    push_abr_query(
+        &mut queries,
+        join_unique_parts([prefecture, country]),
+        "Nominatim search after Digital Agency ABR resolution; prefecture fallback",
+    );
+
+    queries
+}
+
+fn push_abr_query(queries: &mut Vec<GeocodingQuery>, query: Option<String>, protocol: &str) {
+    let Some(query) = query else {
+        return;
+    };
+    push_unique_query(
+        queries,
+        GeocodingQuery {
+            query,
+            protocol: protocol.to_string(),
+            used_abr: true,
+        },
+    );
+}
+
+fn push_unique_query(queries: &mut Vec<GeocodingQuery>, candidate: GeocodingQuery) {
+    if queries
+        .iter()
+        .any(|existing| existing.query.eq_ignore_ascii_case(&candidate.query))
+    {
+        return;
+    }
+    queries.push(candidate);
+}
+
+fn build_geocoding_query(quads: &[Quad]) -> Option<String> {
+    let locality =
+        first_literal(quads, LOCALITY).or_else(|| first_literal(quads, VERBATIM_LOCALITY));
+    join_unique_parts([
+        locality.as_deref(),
+        first_literal(quads, ISLAND).as_deref(),
+        first_literal(quads, ISLAND_GROUP).as_deref(),
+        first_literal(quads, WATER_BODY).as_deref(),
+        first_literal(quads, MUNICIPALITY).as_deref(),
+        first_literal(quads, COUNTY).as_deref(),
+        first_literal(quads, STATE_PROVINCE).as_deref(),
+        first_literal(quads, COUNTRY).as_deref(),
+    ])
+}
+
+fn join_unique_parts<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
     let mut seen = HashSet::new();
-    let mut parts = Vec::new();
-    for value in ordered.into_iter().flatten() {
+    let mut values = Vec::new();
+    for value in parts.into_iter().flatten() {
         let value = value.trim();
         if value.is_empty() {
             continue;
         }
         let key = value.to_lowercase();
         if seen.insert(key) {
-            parts.push(value.to_string());
+            values.push(value.to_string());
         }
     }
-
-    (!parts.is_empty()).then(|| parts.join(", "))
+    (!values.is_empty()).then(|| values.join(", "))
 }
 
 fn first_literal(quads: &[Quad], predicate_uri: &str) -> Option<String> {
@@ -287,6 +446,35 @@ _:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/gra
         assert_eq!(
             build_geocoding_query(&quads).as_deref(),
             Some("Arashiyama, Kyoto, Japan")
+        );
+    }
+
+    #[test]
+    fn abr_queries_fall_back_from_detail_to_prefecture() {
+        let resolution = AdministrativeResolution {
+            country_code: "JP".into(),
+            prefecture_code: "25".into(),
+            prefecture: "滋賀県".into(),
+            municipality_code: Some("252018".into()),
+            municipality: Some("大津市".into()),
+            machiaza_id: Some("0000001".into()),
+            machiaza: Some("勝谷町".into()),
+            remainder: Some("採集地点".into()),
+            match_level: crate::infrastructure::abr::AdministrativeMatchLevel::Machiaza,
+        };
+
+        let queries = build_abr_geocoding_queries(&resolution)
+            .into_iter()
+            .map(|query| query.query)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            queries,
+            vec![
+                "採集地点, 勝谷町, 大津市, 滋賀県, Japan",
+                "勝谷町, 大津市, 滋賀県, Japan",
+                "大津市, 滋賀県, Japan",
+                "滋賀県, Japan",
+            ]
         );
     }
 
