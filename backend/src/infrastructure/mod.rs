@@ -1,6 +1,4 @@
 // 外部システムとの接続実装。occurrence RDF storeとしてFusekiを使う。
-// Digital Agency ABR PostgreSQLを行政区分マスターとして直接参照する。
-pub mod abr;
 // Darwin Core候補取得はBio-Database固有のoccurrence-profile graphを適用する。
 #[path = "fuseki_profiled.rs"]
 pub mod fuseki;
