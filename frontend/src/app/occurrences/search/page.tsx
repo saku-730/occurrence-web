@@ -89,10 +89,7 @@ export default function OccurrenceSearchPage() {
       ),
     ];
 
-    if (creatorIds.length === 0) {
-      setCreatorNames({});
-      return;
-    }
+    if (creatorIds.length === 0) return;
 
     let active = true;
 
@@ -123,10 +120,6 @@ export default function OccurrenceSearchPage() {
     };
   }, [result]);
 
-  useEffect(() => {
-    setSelectedOccurrenceIds(new Set());
-  }, [result]);
-
   async function runSearch(
     searchFilters: DarwinCoreSearchFilter[],
     cursor: string | null,
@@ -138,6 +131,8 @@ export default function OccurrenceSearchPage() {
     try {
       const response = await searchOccurrences(normalizedFilters, cursor, searchOwnOnly);
       setResult(response);
+      setSelectedOccurrenceIds(new Set());
+      setIsLabelPreviewOpen(false);
       if (cursor === null) {
         setAppliedFilters(normalizedFilters);
         setAppliedOwnOnly(searchOwnOnly);
