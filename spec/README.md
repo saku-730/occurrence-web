@@ -30,6 +30,10 @@
 | `13_infra_and_env.md` | 環境変数、外部サービス、UTC、バックアップ |
 | `14_testing_strategy.md` | テスト戦略、TDD単位、必須テスト観点 |
 | `15_feature.md` | MVPでは省略し、将来実装する機能 |
+| `15_paper_import.md` | 論文PDF import、書誌情報抽出、Occurrence候補抽出 |
+| `16_server_setup.md` | 本番・開発サーバーの導入、マスターデータ投入、ABR/Nominatimセットアップ |
+| `17_darwin_core_candidates.md` | Darwin Core候補語彙、Bio-Database固有プロファイル |
+| `18_geocoding.md` | ABR住所分割、Nominatimジオコーディング、RDF provenance、キャッシュ、失敗時処理 |
 
 ## 最重要方針
 
@@ -39,4 +43,6 @@
 - オカレンス本体は Apache Jena に RDF として保存する
 - 認証・ユーザー・セッション・監査ログ・メディアメタデータは PostgreSQL に保存する
 - メディア本体は Garage に保存する
+- 住所は ABR で正規化・分割した後に Nominatim でジオコーディングする
+- ABR は座標ソースとして使わず、Nominatim 成功時だけ `dwciri:georeferenceSources` に Nominatim を記録する
 - すべての機能追加・仕様変更はテスト駆動で行う
