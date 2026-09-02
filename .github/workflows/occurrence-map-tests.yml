@@ -64,6 +64,9 @@ jobs:
       - name: Check backend library and binaries
         working-directory: backend
         run: cargo check --lib --bins
+      - name: Run paper import prompt policy test
+        working-directory: backend
+        run: cargo test --test paper_import_prompt -- --test-threads=1
       - name: Run ABR client unit tests
         working-directory: backend
         run: cargo test infrastructure::abr --lib -- --test-threads=1
