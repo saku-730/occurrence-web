@@ -8,7 +8,7 @@ import { apiFetch } from "@/lib/api";
 const MAPLIBRE_VERSION = "6.6.0";
 const MAPLIBRE_MODULE_URL = `https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.mjs`;
 const MAPLIBRE_CSS_URL = `https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.css`;
-const DEFAULT_MAP_STYLE_URL = "https://demotiles.maplibre.org/style.json";
+const DEFAULT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 const MAP_STYLE_URL = process.env.NEXT_PUBLIC_MAP_STYLE_URL ?? DEFAULT_MAP_STYLE_URL;
 
 interface OccurrenceMapFeatureCollection {
