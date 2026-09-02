@@ -1,4 +1,12 @@
-use backend::infrastructure::abr::{AbrClient, AdministrativeMatchLevel};
+use std::sync::{Arc, Mutex};
+
+use backend::{
+    features::occurrence_map::geocoding::{
+        GeocodedLocation, LocationGeocoder, LocationGeocoderError,
+        enrich_nquads_with_geocoding_and_abr,
+    },
+    infrastructure::abr::{AbrClient, AdministrativeMatchLevel},
+};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 fn database_url() -> String {
@@ -104,6 +112,29 @@ async fn drop_fake_abr(pool: &PgPool) {
     }
 }
 
+#[derive(Clone)]
+struct FallbackGeocoder {
+    queries: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl LocationGeocoder for FallbackGeocoder {
+    async fn geocode(
+        &self,
+        query: &str,
+    ) -> Result<Option<GeocodedLocation>, LocationGeocoderError> {
+        self.queries.lock().unwrap().push(query.to_string());
+        if query == "勝谷町, 大津市, 滋賀県, Japan" {
+            Ok(Some(GeocodedLocation {
+                latitude: "35.0001".into(),
+                longitude: "135.9001".into(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 #[tokio::test]
 async fn resolves_official_abr_tables_and_reuses_cached_search_result() {
     let pool = pool().await;
@@ -147,6 +178,42 @@ async fn resolves_official_abr_tables_and_reuses_cached_search_result() {
             .expect("lookup after cache clear should complete")
             .is_none()
     );
+
+    drop_fake_abr(&pool).await;
+}
+
+#[tokio::test]
+async fn abr_resolution_drives_nominatim_fallback_and_adds_coordinates() {
+    let pool = pool().await;
+    create_fake_abr(&pool).await;
+
+    let abr = AbrClient::new(&database_url(), 16).expect("ABR client should build");
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let geocoder = FallbackGeocoder {
+        queries: queries.clone(),
+    };
+    let input = br#"_:o <http://rs.tdwg.org/dwc/terms/locality> "滋賀県大津市勝谷町採集地点" <https://bio-database.net/graphs/occurrences> .
+_:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/graphs/occurrences> ."#;
+
+    let output = enrich_nquads_with_geocoding_and_abr(input, &geocoder, Some(&abr))
+        .await
+        .expect("ABR-backed geocoding should complete");
+    let text = String::from_utf8(output).unwrap();
+
+    assert_eq!(
+        queries.lock().unwrap().as_slice(),
+        &[
+            "採集地点, 勝谷町, 大津市, 滋賀県, Japan",
+            "勝谷町, 大津市, 滋賀県, Japan",
+        ]
+    );
+    assert!(text.contains("http://rs.tdwg.org/dwc/terms/decimalLatitude"));
+    assert!(text.contains("35.0001"));
+    assert!(text.contains("http://rs.tdwg.org/dwc/terms/decimalLongitude"));
+    assert!(text.contains("135.9001"));
+    assert!(text.contains("https://nominatim.openstreetmap.org/"));
+    assert!(text.contains("https://www.digital.go.jp/policies/base_registry_address"));
+    assert!(text.contains("machiaza fallback"));
 
     drop_fake_abr(&pool).await;
 }
