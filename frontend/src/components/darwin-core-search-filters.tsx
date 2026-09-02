@@ -14,6 +14,9 @@ export interface DarwinCoreSearchFilter {
   value: string;
   value_type: "literal" | "uri";
   match: "exact";
+  // UI-only label. The backend contract is built by activeDarwinCoreSearchFilters and
+  // never includes this field.
+  display_value?: string;
 }
 
 interface DarwinCoreTerm {
@@ -23,6 +26,11 @@ interface DarwinCoreTerm {
 
 interface SearchTerm extends DarwinCoreTerm {
   source: "system" | "darwin-core";
+}
+
+interface UserSearchItem {
+  user_id: string;
+  user_name: string;
 }
 
 const SYSTEM_SEARCH_TERMS: SearchTerm[] = [
@@ -60,11 +68,12 @@ export function activeDarwinCoreSearchFilters(
   return filters
     .map((filter) => {
       const predicate = filter.predicate.trim();
-      const value = normalizeSearchValue(predicate, filter.value.trim());
+      const value = filter.value.trim();
       return {
         predicate,
         value,
-        value_type: inferSearchValueType(value),
+        value_type:
+          predicate === DCTERMS_CREATOR ? ("uri" as const) : inferSearchValueType(value),
         match: filter.match,
       };
     })
@@ -135,6 +144,9 @@ export function DarwinCoreSearchFilters({
                     replaceFilter(index, {
                       ...filter,
                       predicate: event.target.value,
+                      value: "",
+                      value_type: "literal",
+                      display_value: undefined,
                     })
                   }
                   value={selectedTerm?.uri ?? ""}
@@ -174,6 +186,8 @@ export function DarwinCoreSearchFilters({
                     replaceFilter(index, {
                       ...filter,
                       predicate: event.target.value,
+                      value: "",
+                      display_value: undefined,
                     })
                   }
                   placeholder="http://rs.tdwg.org/dwc/terms/..."
@@ -183,29 +197,32 @@ export function DarwinCoreSearchFilters({
               </details>
             </div>
 
-            <label className="min-w-0">
-              <span className="mb-1 block text-xs font-medium text-[#526168]">検索値</span>
-              <input
-                className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+            {filter.predicate === DCTERMS_CREATOR ? (
+              <CreatorSearchInput
                 disabled={disabled}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  replaceFilter(index, {
-                    ...filter,
-                    value,
-                    value_type: inferSearchValueType(normalizeSearchValue(filter.predicate, value)),
-                  });
-                }}
-                placeholder={searchValuePlaceholder(filter.predicate)}
-                type="text"
-                value={filter.value}
+                filter={filter}
+                onChange={(next) => replaceFilter(index, next)}
               />
-              {filter.predicate === DCTERMS_CREATOR ? (
-                <span className="mt-1 block text-[11px] text-[#7a878c]">
-                  ユーザーUUIDを入力すると内部で作成者URIへ変換します。
-                </span>
-              ) : null}
-            </label>
+            ) : (
+              <label className="min-w-0">
+                <span className="mb-1 block text-xs font-medium text-[#526168]">検索値</span>
+                <input
+                  className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+                  disabled={disabled}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    replaceFilter(index, {
+                      ...filter,
+                      value,
+                      value_type: inferSearchValueType(value),
+                    });
+                  }}
+                  placeholder={searchValuePlaceholder(filter.predicate)}
+                  type="text"
+                  value={filter.value}
+                />
+              </label>
+            )}
 
             <button
               className="h-10 rounded-md border border-[#b8c3c8] px-3 text-sm hover:bg-[#eef2f3] disabled:cursor-not-allowed disabled:text-[#9aa5a9]"
@@ -239,15 +256,108 @@ export function DarwinCoreSearchFilters({
   );
 }
 
-function normalizeSearchValue(predicate: string, value: string): string {
-  if (predicate === DCTERMS_CREATOR && isUuid(value)) {
-    return `${USER_URI_BASE}${value}`;
-  }
-  return value;
+function CreatorSearchInput({
+  filter,
+  onChange,
+  disabled,
+}: {
+  filter: DarwinCoreSearchFilter;
+  onChange: (filter: DarwinCoreSearchFilter) => void;
+  disabled: boolean;
+}) {
+  const [suggestions, setSuggestions] = useState<UserSearchItem[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const query = filter.display_value ?? "";
+  const selected = filter.value.startsWith(USER_URI_BASE) && query.length > 0;
+
+  useEffect(() => {
+    if (query.trim().length === 0 || selected) return;
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      apiFetch<UserSearchItem[]>(`/users/search?user_name=${encodeURIComponent(query.trim())}`)
+        .then((response) => {
+          if (!active) return;
+          setSuggestions(response);
+          setLoadFailed(false);
+        })
+        .catch(() => {
+          if (!active) return;
+          setSuggestions([]);
+          setLoadFailed(true);
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [query, selected]);
+
+  return (
+    <div className="relative min-w-0">
+      <label>
+        <span className="mb-1 block text-xs font-medium text-[#526168]">ユーザー名</span>
+        <input
+          autoComplete="off"
+          className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+          disabled={disabled}
+          onChange={(event) => {
+            setSuggestions([]);
+            setLoadFailed(false);
+            onChange({
+              ...filter,
+              value: "",
+              value_type: "uri",
+              display_value: event.target.value,
+            });
+          }}
+          placeholder="ユーザー名を入力"
+          type="text"
+          value={query}
+        />
+      </label>
+
+      {selected ? (
+        <span className="mt-1 block text-[11px] text-[#176b57]">選択済み</span>
+      ) : query.trim().length > 0 ? (
+        <span className="mt-1 block text-[11px] text-[#7a878c]">候補から作成者を選択してください。</span>
+      ) : null}
+
+      {!selected && suggestions.length > 0 ? (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-[#c7d0d4] bg-white p-1 shadow-lg">
+          {suggestions.map((user) => (
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm hover:bg-[#eef2f3]"
+              key={user.user_id}
+              onClick={() => {
+                setSuggestions([]);
+                onChange({
+                  ...filter,
+                  value: `${USER_URI_BASE}${user.user_id}`,
+                  value_type: "uri",
+                  display_value: user.user_name,
+                });
+              }}
+              type="button"
+            >
+              <span className="truncate">{user.user_name}</span>
+              <span className="shrink-0 font-mono text-[10px] text-[#7a878c]">
+                {user.user_id.slice(0, 8)}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {loadFailed ? (
+        <span className="mt-1 block text-[11px] text-[#a53d32]">ユーザー候補を取得できませんでした。</span>
+      ) : null}
+    </div>
+  );
 }
 
 function searchValuePlaceholder(predicate: string): string {
-  if (predicate === DCTERMS_CREATOR) return "ユーザーUUID または作成者URI";
   if (predicate === DCTERMS_CREATED || predicate === DCTERMS_MODIFIED) {
     return "例: 2026-09-02T08:00:00Z";
   }
@@ -257,10 +367,4 @@ function searchValuePlaceholder(predicate: string): string {
 function inferSearchValueType(value: string): "literal" | "uri" {
   const trimmed = value.trim();
   return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$/.test(trimmed) ? "uri" : "literal";
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(
-    value,
-  );
 }
