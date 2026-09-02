@@ -1,0 +1,80 @@
+{{ define "main" }}
+<section class="section container-fluid mt-n3 pb-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-10 col-xl-8 text-center">
+      <h1>{{ .Title }}</h1>
+      <p class="lead">{{ .Params.lead | safeHTML }}</p>
+      {{ .Content }}
+    </div>
+  </div>
+</section>
+{{ end }}
+
+{{ define "sidebar-prefooter" }}
+  <section class="section section-md pt-0">
+    <div class="container">
+      <div class="row justify-content-center text-center g-4">
+      <div class="col-md-6 col-lg-4"><h2 class="h4">オカレンス登録</h2><p>採集・観察・標本情報を一つのレコードとして登録します。</p></div>
+      <div class="col-md-6 col-lg-4"><h2 class="h4">分類群検索</h2><p>GBIF Backbone Taxonomyを利用して分類群候補を表示します。</p></div>
+      <div class="col-md-6 col-lg-4"><h2 class="h4">柔軟なデータモデル</h2><p>Identification、Event、Locationなどを分離して管理します。</p></div>
+      <div class="col-md-6 col-lg-4"><h2 class="h4">画像管理</h2><p>GarageによるS3互換オブジェクトストレージでファイルを管理します。</p></div>
+      <div class="col-md-6 col-lg-4"><h2 class="h4">検索・閲覧</h2><p>登録済みオカレンスを条件指定して検索・閲覧できます。</p></div>
+      <div class="col-md-6 col-lg-4"><h2 class="h4">公開範囲管理</h2><p>公開・非公開データと、その所有者情報を管理します。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-md pt-0">
+    <div class="container">
+      <div class="row justify-content-center">
+        <div class="col-lg-10">
+          <h2 class="text-center mb-4">システム構成</h2>
+          <div class="system-diagram" aria-label="Bio Databaseのシステム構成図">
+            <div class="system-entry">
+              <article class="system-node system-node-edge">
+                <h3>Cloudflare Tunnel / nginx</h3>
+                <p>外部公開とリバースプロキシ</p>
+              </article>
+              <span class="system-arrow" aria-hidden="true">↓</span>
+              <article class="system-node system-node-web">
+                <h3>Next.js</h3>
+                <p>Webフロントエンド</p>
+              </article>
+              <span class="system-arrow" aria-hidden="true">↓</span>
+              <article class="system-node system-node-api">
+                <h3>Rust</h3>
+                <p>APIサーバー</p>
+              </article>
+            </div>
+
+            <div class="system-services">
+              <article class="system-node system-node-postgres">
+                <h3>PostgreSQL</h3>
+                <p>ユーザー・認証情報管理</p>
+              </article>
+              <article class="system-node system-node-fuseki">
+                <h3>Apache Jena Fuseki</h3>
+                <p>オカレンス・語彙・分類のRDF保存</p>
+              </article>
+              <article class="system-node system-node-garage">
+                <h3>Garage</h3>
+                <p>S3互換の画像・ファイル保存</p>
+              </article>
+            </div>
+
+            <div class="taxonomy-flow">
+              <span class="system-arrow taxonomy-arrow" aria-hidden="true">↑</span>
+              <article class="system-node system-node-gbif">
+                <h3>GBIF Backbone Taxonomy</h3>
+                <p>約20GB規模の分類データをRDFへ変換・投入</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+{{ end }}
+
+{{ define "sidebar-footer" }}
+{{ end }}

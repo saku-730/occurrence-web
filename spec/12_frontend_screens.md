@@ -106,6 +106,14 @@ MVP対象外。
 項目は固定必須ではない。  
 ユーザーが必要な述語・値を追加できるUIを想定する。
 
+Darwin Coreの入力候補は `GET /vocabularies/darwin-core` から取得する。
+
+- backendはFusekiの `https://bio-database.net/graphs/app/occurrence-profile` を参照し、`https://bio-database.net/terms/useAtBioDatabase true` の語彙だけを候補として返す。
+- 候補の表示名は同graphの `skos:prefLabel` のうち言語タグが `@ja` の値を優先する。
+- 日本語 `skos:prefLabel` が存在しない場合のみ、Darwin Core vocabulary graphの `localName` を表示名として使用する。
+- 保存時のpredicateは表示名ではなく、候補に対応するIRIを使用する。
+- この表示方針はオカレンス新規作成、オカレンス編集、論文取り込み後のOccurrence編集で共通とする。
+
 MVPでは最低限、以下のような入力補助を用意してよい。
 
 - `dwc:scientificName`
@@ -161,6 +169,7 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ---
 
+<<<<<<< HEAD
 ## 論文インポート画面
 
 ### LLM抽出後のレビュー
@@ -195,6 +204,26 @@ LLM抽出結果のレビュー画面上部に、現在の登録対象Occurrence�
 - `dwciri:toTaxon` はGBIF照合結果と `dwc:scientificName` が連動する特殊項目のため、この単純な一括適用UIの対象外とする
 - 登録済みまたは一括登録処理中は一括適用UIを無効化する
 - 一括適用はfrontend上のレビュー状態だけを更新し、適用操作だけでbackendへ保存しない。最終的な一括登録時に他の項目と一緒にN-Quads化する
+=======
+## Markdownコンテンツ表示
+
+- `frontend/content/` 配下のMarkdown表示には標準的なMarkdownパーサライブラリを使用し、正規表現ベースの独自Markdownパーサは実装しない。
+- CommonMark/GFM相当の基本構文として、見出し、段落、順序付き・順序なしリスト、リンク、引用、インラインコード、コードブロック、水平線、表を表示できるようにする。
+- `/...`、`#...` などサイト内リンクは通常の同一タブ遷移とする。
+- `http://`、`https://` の外部リンクだけを別タブで開き、`rel="noopener noreferrer"` を付与する。
+- Markdown本文中の生HTMLは解釈せず、コンテンツファイルから任意HTMLを直接描画しない。
+
+---
+
+## Darwin Core用語集
+
+- `/terms/darwin-core` は `frontend/content/terms/darwin-core.md` を表示する。
+- 同ページには `frontend/content/terms/darwin-core/` 配下に存在する各Darwin Core用語Markdownへのリンク一覧を掲載する。
+- 用語ページのURLは `/terms/darwin-core/{Markdownファイル名から.mdを除いた値}` とする。
+- 一覧は用語名の先頭文字ごとに整理する。
+- `template.md`、`list.csv`、一時ロックファイルなど、用語ページではない管理ファイルは一覧へ含めない。
+- 括弧などURL上でエンコードが必要な文字を含むファイル名は、表示名は元のファイル名を維持し、リンクURL側だけパーセントエンコードする。
+>>>>>>> main
 
 ---
 

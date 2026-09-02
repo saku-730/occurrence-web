@@ -1686,7 +1686,7 @@ mod tests {
         );
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_nquads = format!(
-            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+            "<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
              <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <{graph_uri}> .
 "
         );
@@ -1775,7 +1775,7 @@ mod tests {
         );
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_nquads = format!(
-            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+            "<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
              <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <{graph_uri}> .
 "
         );
@@ -1859,7 +1859,7 @@ mod tests {
         );
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_nquads = format!(
-            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+            "<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
              <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/private> <{graph_uri}> .
 "
         );
@@ -1949,7 +1949,7 @@ mod tests {
         );
         let graph_uri = "https://bio-database.net/graphs/occurrences";
         let occurrence_nquads = format!(
-            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
+            "<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <{graph_uri}> .
              <{occurrence_uri}> <http://purl.org/dc/terms/accessRights> <https://bio-database.net/terms/access-rights/public> <{graph_uri}> .
 "
         );
@@ -2463,7 +2463,7 @@ mod tests {
             uuid::Uuid::new_v4()
         );
         let occurrence_nquads = format!(
-            "<{occurrence_uri}> <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+            "<{occurrence_uri}> <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
 "
         );
         occurrence_store.insert_occurrence_nquads(&occurrence_uri, occurrence_nquads.into_bytes());
@@ -2970,7 +2970,7 @@ mod tests {
         // Register through the public API so Fuseki receives backend-managed
         // creator, timestamps, and the default public accessRights statement.
         let occurrence_nquads = format!(
-            "_:occurrence <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+            "_:occurrence <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
 "
         );
         let occurrence_response = app
@@ -4538,7 +4538,7 @@ mod tests {
         .expect("other user's media metadata should be inserted");
 
         let frontend_nquads = format!(
-            "_:occurrence <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+            "_:occurrence <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
 "
         );
         let app = build_app(state);
@@ -6625,7 +6625,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
 
         let frontend_nquads = format!(
             r#"_:updated <http://rs.tdwg.org/dwc/terms/scientificName> "Updated name" <https://bio-database.net/graphs/occurrences> .
-_:updated <http://rs.tdwg.org/ac/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
+_:updated <http://rs.tdwg.org/dwc/terms/associatedMedia> <{media_uri}> <https://bio-database.net/graphs/occurrences> .
 "#
         );
         let app = build_app(state);

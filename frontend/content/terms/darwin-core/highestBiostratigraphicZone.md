@@ -1,0 +1,46 @@
+# highestBiostratigraphicZone
+
+## 基本情報
+
+IRI
+`http://rs.tdwg.org/dwc/terms/highestBiostratigraphicZone`
+
+ラベル
+`Highest Biostratigraphic Zone`
+
+種別
+`Property`
+
+目的語の形式: リテラルを主に使用
+
+## 定義
+
+- 原文 -
+
+The full name of the highest possible geological biostratigraphic zone of the stratigraphic horizon from which the dwc:MaterialEntity was collected.
+
+- 日本語訳 -
+
+地質学的文脈に関する最上位生層序帯を記録するための用語です。
+
+## 説明
+
+最上位生層序帯の値を記録し、オカレンスの意味を明確にします。値の表記は、可能な限り標準的な形式又は統制語彙にそろえます。
+
+## Bio-Databaseでの使い方
+
+データ登録・編集画面で最上位生層序帯を記録する必要がある場合に、項目名として選択して値を入力します。
+
+## 関連用語
+
+- `dwc:GeologicalContext`：地質文脈
+- `dwc:formation`：累層
+- `dwc:member`：部層
+
+## 別名（日本語）
+
+- 最上位生層序帯
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwc_highestBiostratigraphicZone)

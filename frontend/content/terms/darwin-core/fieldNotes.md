@@ -1,0 +1,46 @@
+# fieldNotes
+
+## 基本情報
+
+IRI
+`http://rs.tdwg.org/dwc/terms/fieldNotes`
+
+ラベル
+`Field Notes`
+
+種別
+`Property`
+
+目的語の形式: リテラルを主に使用
+
+## 定義
+
+- 原文 -
+
+One of a) an indicator of the existence of, b) a reference to (publication, URI), or c) the text of notes taken in the field about the dwc:Event.
+
+- 日本語訳 -
+
+採集・観察イベントに関する野外注記を記録するための用語です。
+
+## 説明
+
+野外注記の値を記録し、オカレンスの意味を明確にします。値の表記は、可能な限り標準的な形式又は統制語彙にそろえます。
+
+## Bio-Databaseでの使い方
+
+データ登録・編集画面で野外注記を記録する必要がある場合に、項目名として選択して値を入力します。
+
+## 関連用語
+
+- `dwc:eventDate`：イベント日
+- `dwc:recordedBy`：記録者
+- `dwc:samplingProtocol`：採集手順
+
+## 別名（日本語）
+
+- 野外注記
+
+## リンク
+
+[公式の用語一覧](https://dwc.tdwg.org/list/#dwc_fieldNotes)
