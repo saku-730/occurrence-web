@@ -52,12 +52,15 @@ impl From<LlamaError> for PaperLlmExtractionError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct OccurrenceCandidate {
     #[serde(rename = "scientificName")]
     pub scientific_name: String,
     pub locality: Option<String>,
-    #[serde(rename = "eventDate")]
+    #[serde(
+        rename = "eventDate",
+        default,
+        deserialize_with = "deserialize_optional_string"
+    )]
     pub event_date: Option<String>,
     #[serde(rename = "decimalLatitude")]
     pub decimal_latitude: Option<f64>,
@@ -69,6 +72,17 @@ pub struct OccurrenceCandidate {
 #[serde(deny_unknown_fields)]
 pub struct OccurrenceExtractionResult {
     pub occurrences: Vec<OccurrenceCandidate>,
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::String(value)) => Some(value),
+        _ => None,
+    })
 }
 
 /// Complete local-PDF to llama.cpp extraction path used by the paper-import
@@ -167,12 +181,33 @@ impl LlamaClient {
             .filter(|content| !content.trim().is_empty())
             .ok_or(LlamaError::InvalidResponse)?;
 
-        let mut result: OccurrenceExtractionResult =
-            serde_json::from_str(&content).map_err(|_| LlamaError::InvalidResponse)?;
+        let mut result = parse_occurrence_result(&content)?;
         sanitize_event_dates(&mut result);
         validate_occurrences(&result)?;
         Ok(result)
     }
+}
+
+fn parse_occurrence_result(content: &str) -> Result<OccurrenceExtractionResult, LlamaError> {
+    let trimmed = content.trim();
+    match serde_json::from_str(trimmed) {
+        Ok(result) => return Ok(result),
+        Err(direct_error) => {
+            if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                if start < end {
+                    let json_slice = &trimmed[start..=end];
+                    if let Ok(result) = serde_json::from_str(json_slice) {
+                        return Ok(result);
+                    }
+                }
+            }
+            eprintln!(
+                "paper llama response JSON parse failed: {direct_error}; content_bytes={}",
+                trimmed.len()
+            );
+        }
+    }
+    Err(LlamaError::InvalidResponse)
 }
 
 async fn build_request_parts(
@@ -250,7 +285,7 @@ fn occurrence_response_format() -> Value {
                     "items": {
                         "type": "object",
                         "additionalProperties": false,
-                        "required": ["scientificName", "locality", "eventDate"],
+                        "required": ["scientificName", "locality"],
                         "properties": {
                             "scientificName": { "type": "string", "minLength": 1 },
                             "locality": { "type": ["string", "null"] },
@@ -495,7 +530,7 @@ mod tests {
             ["occurrences"]["items"];
         assert_eq!(
             occurrence_schema["required"],
-            json!(["scientificName", "locality", "eventDate"])
+            json!(["scientificName", "locality"])
         );
         assert_eq!(
             occurrence_schema["properties"]["eventDate"]["type"],
@@ -562,6 +597,51 @@ mod tests {
         assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
         assert_eq!(content[4]["text"], "## PDF page 2");
         assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn llama_client_accepts_missing_or_non_string_event_date() {
+        let (_directory, pages) = test_page_images().await;
+        for content in [
+            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo"}]}"#,
+            r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","eventDate":["1998-06"]}]}"#,
+        ] {
+            let response = json!({"choices":[{"message":{"content":content}}]});
+            let (endpoint, _, server) = start_mock_llama(StatusCode::OK, response).await;
+            let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+                .expect("llama client should initialize");
+            let result = client
+                .extract_occurrences_from_parts("text", &pages)
+                .await
+                .expect("eventDate must be best effort");
+            assert_eq!(result.occurrences.len(), 1);
+            assert_eq!(result.occurrences[0].event_date, None);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn llama_client_salvages_json_wrapped_in_markdown() {
+        let (_directory, pages) = test_page_images().await;
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": "```json\n{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\",\"eventDate\":\"1998-06\"}]}\n```"
+                }
+            }]
+        });
+        let (endpoint, _, server) = start_mock_llama(StatusCode::OK, response).await;
+        let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+            .expect("llama client should initialize");
+
+        let result = client
+            .extract_occurrences_from_parts("text", &pages)
+            .await
+            .expect("JSON inside markdown fences should be recovered");
+
+        assert_eq!(result.occurrences.len(), 1);
+        assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06"));
         server.abort();
     }
 
@@ -655,12 +735,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn llama_client_rejects_unknown_occurrence_json_fields() {
+    async fn llama_client_ignores_unknown_occurrence_json_fields() {
         let (_directory, pages) = test_page_images().await;
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"eventDate":null,"decimalLatitude":null,"decimalLongitude":null,"inventedField":"must not be accepted"}]}"#
+                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"eventDate":null,"inventedField":"ignored"}]}"#
                 }
             }]
         });
@@ -668,9 +748,13 @@ mod tests {
         let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
             .expect("llama client should initialize");
 
-        let result = client.extract_occurrences_from_parts("text", &pages).await;
+        let result = client
+            .extract_occurrences_from_parts("text", &pages)
+            .await
+            .expect("unknown per-occurrence fields must not abort extraction");
 
-        assert!(matches!(result, Err(LlamaError::InvalidResponse)));
+        assert_eq!(result.occurrences.len(), 1);
+        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
         server.abort();
     }
 
