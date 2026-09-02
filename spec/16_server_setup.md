@@ -506,18 +506,6 @@ ABR データをダウンロードして PostgreSQL に取り込む。
 docker compose run --rm abrdb_app import
 ```
 
-PostgreSQL から abrg が使用する DuckDB キャッシュを構築する。
-
-```bash
-docker compose run --rm abrg_app cache build
-```
-
-API server を常駐起動する。
-
-```bash
-docker compose up -d abrg_app
-```
-
 状態確認。
 
 ```bash
