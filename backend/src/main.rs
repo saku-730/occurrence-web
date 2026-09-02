@@ -37,7 +37,8 @@ async fn main() {
     );
     let app = build_app(state.clone())
         .merge(backend::features::paper_import::router(state.clone()))
-        .merge(occurrence_map::router(state))
+        .merge(occurrence_map::router(state.clone()))
+        .merge(backend::features::user_search::router(state))
         .layer(axum::middleware::from_fn(geocoding_middleware));
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
