@@ -9,6 +9,8 @@
 - Garage
 - GROBID
 - ABR geocoder
+  - デジタル庁公式 `digital-go-jp/abr-geocoder` の Docker Compose 構成で稼働
+  - ABR 専用 PostgreSQL / abrdb / abrg を公式 compose で管理
 - Nominatim
 - 外部メール送信サービス
 - 開発用 Mailpit
@@ -72,7 +74,7 @@ GROBID_BASE_URL=http://127.0.0.1:8070
 ABR が返す緯度経度は使用しない。
 Nominatim 成功時だけ `dwc:decimalLatitude` / `dwc:decimalLongitude` と `dwciri:georeferenceSources <https://nominatim.openstreetmap.org/>` を Location RDF に追加する。
 
-設定例。
+backend 側の設定例。
 
 ```env
 ABR_BASE_URL=http://127.0.0.1:3001
@@ -80,13 +82,16 @@ NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
 NOMINATIM_USER_AGENT=bio-database/1.0
 ```
 
-- ABR はローカルサービスとして利用する
+ABR 自体は npm で直接起動せず、デジタル庁公式 `digital-go-jp/abr-geocoder` リポジトリの Docker Compose 構成を使用する。
+公式 compose 内の ABR 専用 PostgreSQL は Bio-Database 本体の PostgreSQL とは別サービスとして扱う。
+ホスト側ポートが衝突する場合は公式 `.env.example` に従って `DB_PORT` / `PORT` を変更する。
+
 - Nominatim 公開APIへのアクセスは直列化する
 - 同一の ABR 正規化住所は backend でキャッシュする
 - 公開 Nominatim 利用時は最大 1 request / second を超えない
 - Nominatim へはアプリケーションを識別できる `User-Agent` を送信する
 
-詳細は `spec/18_geocoding.md`、サーバー導入手順は `spec/16_server_setup.md` を参照する。
+詳細は `spec/18_geocoding.md`、ABR の公式 Docker Compose 導入手順は `spec/16_server_setup.md` を参照する。
 
 ### Mail
 
@@ -135,6 +140,8 @@ COOKIE_SECURE=false
   - GROBIDで抽出した論文書誌情報
 - audit_logs
 - app settings
+
+ABR の公式 Docker Compose が使用する PostgreSQL は ABR データ専用であり、この Bio-Database アプリケーション用 PostgreSQL には含めない。
 
 ---
 
@@ -273,6 +280,7 @@ MVP段階では詳細な自動化は必須ではないが、以下をバック�
 - Next.js
 
 - ABR geocoder
+  - 公式 Docker Compose 構成を使用する
 
 - Nominatim は公開APIを利用するためローカルインストール不要
 
