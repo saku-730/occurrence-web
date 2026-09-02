@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api";
 const navigationItems = [
   { href: "/", label: "Top" },
   { href: "/occurrences/search", label: "データ検索" },
+  { href: "/map", label: "地図" },
   { href: "/occurrences/new", label: "データ登録" },
   { href: "/paper-import", label: "論文インポート" },
   { href: "/contact", label: "問い合わせ" },
