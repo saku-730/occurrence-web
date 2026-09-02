@@ -4,6 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header::COOKIE},
     response::{IntoResponse, Response},
 };
+use oxrdf::NamedNode;
 
 use crate::{
     features::{
@@ -11,16 +12,22 @@ use crate::{
             dto::ErrorResponse,
             service::{AuthService, AuthServiceError},
         },
-        occurrences::service::{OccurrenceServiceError, SearchVisibility},
+        occurrences::service::{
+            OccurrenceServiceError, SearchOccurrenceFilterInput, SearchVisibility,
+        },
     },
     state::AppState,
 };
 
-use super::{dto::OccurrenceMapFeatureCollection, service::list_occurrence_map};
+use super::{
+    dto::{OccurrenceMapFeatureCollection, OccurrenceMapSearchRequest},
+    service::list_occurrence_map,
+};
 
 #[derive(Debug)]
 pub enum OccurrenceMapHandlerError {
     Database(sqlx::Error),
+    InvalidSearchFilter,
     StoreFailed,
 }
 
@@ -38,6 +45,14 @@ impl IntoResponse for OccurrenceMapHandlerError {
                 Json(ErrorResponse {
                     error: "internal_server_error".to_string(),
                     message: "Internal server error".to_string(),
+                }),
+            )
+                .into_response(),
+            Self::InvalidSearchFilter => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_search_filter".to_string(),
+                    message: "Invalid search filter".to_string(),
                 }),
             )
                 .into_response(),
@@ -59,7 +74,7 @@ impl IntoResponse for OccurrenceMapHandlerError {
     responses(
         (
             status = 200,
-            description = "GeoJSON FeatureCollection of viewable occurrences with complete coordinates",
+            description = "GeoJSON FeatureCollection of all viewable occurrences with complete coordinates",
             body = OccurrenceMapFeatureCollection
         ),
         (
@@ -79,23 +94,91 @@ pub async fn get_occurrence_map(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<OccurrenceMapFeatureCollection>, OccurrenceMapHandlerError> {
-    let visibility = match optional_session_token(&headers) {
-        None => SearchVisibility::PublicOnly,
-        Some(session_token) => match AuthService::current_user(&state.posgre, session_token).await {
-            Ok(current_user) if current_user.role == "admin" => SearchVisibility::All,
-            Ok(current_user) => SearchVisibility::PublicOrOwnPrivate {
-                user_id: current_user.user_id,
-            },
-            Err(AuthServiceError::InvalidSession) => SearchVisibility::PublicOnly,
-            Err(AuthServiceError::Database(error)) => {
-                return Err(OccurrenceMapHandlerError::Database(error));
-            }
-            Err(_) => SearchVisibility::PublicOnly,
-        },
-    };
-
-    let map = list_occurrence_map(state.occurrence_rdf_store.as_ref(), visibility).await?;
+    let visibility = resolve_visibility(&state, &headers).await?;
+    let map = list_occurrence_map(state.occurrence_rdf_store.as_ref(), visibility, Vec::new()).await?;
     Ok(Json(map))
+}
+
+#[utoipa::path(
+    post,
+    path = "/occurrences/map/search",
+    request_body(
+        content = OccurrenceMapSearchRequest,
+        content_type = "application/json",
+        description = "Filter map occurrences with the same arbitrary predicate filters used by /occurrences/search. Multiple filters are ANDed."
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Filtered GeoJSON FeatureCollection of viewable occurrences with complete coordinates",
+            body = OccurrenceMapFeatureCollection
+        ),
+        (status = 400, description = "Invalid search filter", body = ErrorResponse),
+        (status = 502, description = "Failed to read occurrence RDF store", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    ),
+    tag = "occurrences"
+)]
+pub async fn search_occurrence_map(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<OccurrenceMapSearchRequest>,
+) -> Result<Json<OccurrenceMapFeatureCollection>, OccurrenceMapHandlerError> {
+    let filters = normalize_search_filters(request)?;
+    let visibility = resolve_visibility(&state, &headers).await?;
+    let map = list_occurrence_map(state.occurrence_rdf_store.as_ref(), visibility, filters).await?;
+    Ok(Json(map))
+}
+
+fn normalize_search_filters(
+    request: OccurrenceMapSearchRequest,
+) -> Result<Vec<SearchOccurrenceFilterInput>, OccurrenceMapHandlerError> {
+    request
+        .filters
+        .into_iter()
+        .map(|filter| {
+            if !(filter.predicate.starts_with("http://")
+                || filter.predicate.starts_with("https://"))
+                || NamedNode::new(filter.predicate.as_str()).is_err()
+            {
+                return Err(OccurrenceMapHandlerError::InvalidSearchFilter);
+            }
+            if filter.value_type != "literal" && filter.value_type != "uri" {
+                return Err(OccurrenceMapHandlerError::InvalidSearchFilter);
+            }
+            if filter.r#match != "exact" {
+                return Err(OccurrenceMapHandlerError::InvalidSearchFilter);
+            }
+            if filter.value_type == "uri" && NamedNode::new(filter.value.as_str()).is_err() {
+                return Err(OccurrenceMapHandlerError::InvalidSearchFilter);
+            }
+
+            Ok(SearchOccurrenceFilterInput {
+                predicate: filter.predicate,
+                value: filter.value,
+                value_type: filter.value_type,
+                match_type: filter.r#match,
+            })
+        })
+        .collect()
+}
+
+async fn resolve_visibility(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<SearchVisibility, OccurrenceMapHandlerError> {
+    match optional_session_token(headers) {
+        None => Ok(SearchVisibility::PublicOnly),
+        Some(session_token) => match AuthService::current_user(&state.posgre, session_token).await {
+            Ok(current_user) if current_user.role == "admin" => Ok(SearchVisibility::All),
+            Ok(current_user) => Ok(SearchVisibility::PublicOrOwnPrivate {
+                user_id: current_user.user_id,
+            }),
+            Err(AuthServiceError::InvalidSession) => Ok(SearchVisibility::PublicOnly),
+            Err(AuthServiceError::Database(error)) => Err(OccurrenceMapHandlerError::Database(error)),
+            Err(_) => Ok(SearchVisibility::PublicOnly),
+        },
+    }
 }
 
 fn optional_session_token(headers: &HeaderMap) -> Option<String> {
