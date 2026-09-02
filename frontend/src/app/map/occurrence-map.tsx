@@ -76,6 +76,7 @@ interface MapLibreMap {
   fitBounds(bounds: [[number, number], [number, number]], options: Record<string, unknown>): void;
   jumpTo(options: Record<string, unknown>): void;
   getCanvas(): MapLibreCanvas;
+  resize(): void;
   remove(): void;
 }
 
@@ -147,6 +148,8 @@ function loadMapLibre(): Promise<MapLibreApi> {
 
 export function OccurrenceMap() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
   const [filters, setFilters] = useState<DarwinCoreSearchFilter[]>([
     emptyDarwinCoreSearchFilter(),
   ]);
@@ -154,6 +157,17 @@ export function OccurrenceMap() {
   const [status, setStatus] = useState("地図データを読み込んでいます…");
   const [featureCount, setFeatureCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === fullscreenRef.current);
+      window.requestAnimationFrame(() => mapRef.current?.resize());
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -181,6 +195,7 @@ export function OccurrenceMap() {
           center: [138, 36],
           zoom: 4,
         });
+        mapRef.current = map;
 
         map.on("load", () => {
           if (!map || !active) return;
@@ -240,6 +255,7 @@ export function OccurrenceMap() {
 
     return () => {
       active = false;
+      if (mapRef.current === map) mapRef.current = null;
       map?.remove();
     };
   }, [appliedFilters]);
@@ -252,6 +268,21 @@ export function OccurrenceMap() {
   function clearFilters() {
     setFilters([emptyDarwinCoreSearchFilter()]);
     setAppliedFilters([]);
+  }
+
+  async function toggleFullscreen() {
+    const element = fullscreenRef.current;
+    if (!element) return;
+
+    try {
+      if (document.fullscreenElement === element) {
+        await document.exitFullscreen();
+      } else {
+        await element.requestFullscreen();
+      }
+    } catch {
+      setStatus("全画面表示への切り替えに失敗しました。");
+    }
   }
 
   return (
@@ -297,8 +328,27 @@ export function OccurrenceMap() {
         {featureCount !== null ? <span>{featureCount} 件表示</span> : null}
       </div>
 
-      <div className="relative overflow-hidden rounded-lg border border-[#d8dfe2] bg-[#eef2f3]">
-        <div ref={containerRef} className="h-[640px] min-h-[420px] w-full" aria-label="Occurrence map" />
+      <div
+        ref={fullscreenRef}
+        className={
+          isFullscreen
+            ? "relative h-screen w-screen overflow-hidden bg-[#eef2f3]"
+            : "relative overflow-hidden rounded-lg border border-[#d8dfe2] bg-[#eef2f3]"
+        }
+      >
+        <div
+          ref={containerRef}
+          className={isFullscreen ? "h-full w-full" : "h-[640px] min-h-[420px] w-full"}
+          aria-label="Occurrence map"
+        />
+        <button
+          aria-label={isFullscreen ? "全画面表示を終了" : "地図を全画面表示"}
+          className="absolute right-3 top-3 z-10 rounded-md border border-[#b8c3c8] bg-white/95 px-3 py-2 text-sm font-medium text-[#263238] shadow-sm hover:bg-white"
+          onClick={() => void toggleFullscreen()}
+          type="button"
+        >
+          {isFullscreen ? "全画面を終了" : "全画面表示"}
+        </button>
         {status ? (
           <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-md bg-white/95 px-4 py-2 text-sm shadow-sm">
             {status}
