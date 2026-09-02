@@ -6,6 +6,7 @@ use sqlx::{
 };
 
 const COUNTRY_CODE_JP: &str = "JP";
+const UNKNOWN_MACHIAZA_ID: &str = "0000000";
 const SOURCE_NAME: &str = "Digital Agency Address Base Registry (ABR)";
 const SOURCE_URL: &str = "https://www.digital.go.jp/policies/base_registry_address";
 const BATCH_SIZE: usize = 1_000;
@@ -46,6 +47,13 @@ struct ImportCounts {
     prefectures: u64,
     municipalities: u64,
     machiaza: u64,
+    skipped_unknown_machiaza: u64,
+}
+
+#[derive(Debug)]
+struct MachiazaStageCounts {
+    imported: u64,
+    skipped_unknown: u64,
 }
 
 #[derive(Debug)]
@@ -116,8 +124,11 @@ async fn main() -> Result<(), DynError> {
     println!("Importing JP administrative master from abrdb...");
     let counts = import_japan(&abr, &target, dataset_version.as_deref()).await?;
     println!(
-        "Administrative master import completed: prefectures={}, municipalities={}, machiaza={}",
-        counts.prefectures, counts.municipalities, counts.machiaza
+        "Administrative master import completed: prefectures={}, municipalities={}, machiaza={}, skipped_unknown_machiaza={}",
+        counts.prefectures,
+        counts.municipalities,
+        counts.machiaza,
+        counts.skipped_unknown_machiaza
     );
 
     Ok(())
@@ -200,6 +211,7 @@ async fn validate_columns(pool: &PgPool, table: &str, required: &[&str]) -> Resu
             missing.join(", ")
         )));
     }
+
     Ok(())
 }
 
@@ -243,14 +255,21 @@ async fn import_japan(
     let municipalities = stage_municipalities(source, &mut transaction).await?;
     let machiaza = stage_machiaza(source, &mut transaction).await?;
 
-    validate_staged_data(&mut transaction, prefectures, municipalities, machiaza).await?;
+    validate_staged_data(
+        &mut transaction,
+        prefectures,
+        municipalities,
+        machiaza.imported,
+    )
+    .await?;
     replace_master(&mut transaction, dataset_version).await?;
     transaction.commit().await?;
 
     Ok(ImportCounts {
         prefectures,
         municipalities,
-        machiaza,
+        machiaza: machiaza.imported,
+        skipped_unknown_machiaza: machiaza.skipped_unknown,
     })
 }
 
@@ -280,7 +299,7 @@ async fn create_staging_tables(transaction: &mut Transaction<'_, Postgres>) -> R
             oaza_cho TEXT,
             chome TEXT,
             koaza TEXT,
-            rsdt_addr_flg SMALLINT
+            rsdt_addr_flg SMALLINT NOT NULL
         ) ON COMMIT DROP
         "#,
     ] {
@@ -320,6 +339,7 @@ async fn stage_prefectures(
     if !batch.is_empty() {
         insert_prefecture_batch(transaction, &batch).await?;
     }
+
     Ok(count)
 }
 
@@ -338,6 +358,7 @@ async fn stage_municipalities(
         let county: Option<String> = row.try_get("county")?;
         let city: String = row.try_get("city")?;
         let ward: Option<String> = row.try_get("ward")?;
+
         let lg_code = validate_lg_code(&lg_code)?;
         let county = normalize_optional(county);
         let city = required_component(&city, "city", &lg_code)?;
@@ -371,24 +392,26 @@ async fn stage_municipalities(
     if !batch.is_empty() {
         insert_municipality_batch(transaction, &batch).await?;
     }
+
     Ok(count)
 }
 
 async fn stage_machiaza(
     source: &PgPool,
     transaction: &mut Transaction<'_, Postgres>,
-) -> Result<u64, DynError> {
+) -> Result<MachiazaStageCounts, DynError> {
     let mut rows = sqlx::query(
         r#"
         SELECT lg_code, machiaza_id, oaza_cho, chome, koaza,
                rsdt_addr_flg, koaza_aka_code
         FROM public.mt_town_unified
-        ORDER BY lg_code, machiaza_id
+        ORDER BY lg_code, machiaza_id, rsdt_addr_flg
         "#,
     )
     .fetch(source);
     let mut batch = Vec::with_capacity(BATCH_SIZE);
-    let mut count = 0_u64;
+    let mut imported = 0_u64;
+    let mut skipped_unknown = 0_u64;
 
     while let Some(row) = rows.try_next().await? {
         let lg_code: String = row.try_get("lg_code")?;
@@ -401,6 +424,16 @@ async fn stage_machiaza(
 
         let lg_code = validate_lg_code(&lg_code)?;
         let machiaza_id = validate_machiaza_id(&machiaza_id, &lg_code)?;
+
+        // ABR reserves 0000000 for "unknown machiaza". It is useful to the
+        // official geocoder as a sentinel, but it has no town/aza prefix for
+        // Bio-Database to match. Municipality-level resolution already covers
+        // this case, so do not put the sentinel into the prefix dictionary.
+        if machiaza_id == UNKNOWN_MACHIAZA_ID {
+            skipped_unknown += 1;
+            continue;
+        }
+
         let oaza_cho = normalize_optional(oaza_cho);
         let chome = normalize_optional(chome);
         let koaza = normalize_optional(koaza);
@@ -425,7 +458,7 @@ async fn stage_machiaza(
             koaza,
             rsdt_addr_flg,
         });
-        count += 1;
+        imported += 1;
 
         if batch.len() >= BATCH_SIZE {
             insert_machiaza_batch(transaction, &batch).await?;
@@ -435,7 +468,11 @@ async fn stage_machiaza(
     if !batch.is_empty() {
         insert_machiaza_batch(transaction, &batch).await?;
     }
-    Ok(count)
+
+    Ok(MachiazaStageCounts {
+        imported,
+        skipped_unknown,
+    })
 }
 
 async fn insert_prefecture_batch(
@@ -505,7 +542,7 @@ async fn validate_staged_data(
     }
     if municipalities == 0 || machiaza == 0 {
         return Err(import_error(
-            "abrdb returned no municipality or machiaza rows; import category basic before running this CLI",
+            "abrdb returned no municipality or usable machiaza rows; import category basic before running this CLI",
         ));
     }
 
@@ -537,11 +574,14 @@ async fn validate_staged_data(
     )?;
 
     let duplicate_machiaza: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM (SELECT lg_code, machiaza_id FROM jp_machiaza_stage GROUP BY lg_code, machiaza_id HAVING COUNT(*) > 1) duplicated",
+        "SELECT COUNT(*) FROM (SELECT lg_code, machiaza_id, rsdt_addr_flg FROM jp_machiaza_stage GROUP BY lg_code, machiaza_id, rsdt_addr_flg HAVING COUNT(*) > 1) duplicated",
     )
     .fetch_one(&mut **transaction)
     .await?;
-    ensure_zero(duplicate_machiaza, "duplicate machiaza identifiers")?;
+    ensure_zero(
+        duplicate_machiaza,
+        "duplicate lg_code + machiaza_id + rsdt_addr_flg values",
+    )?;
 
     let orphan_municipalities: i64 = sqlx::query_scalar(
         r#"
@@ -579,8 +619,6 @@ async fn replace_master(
     transaction: &mut Transaction<'_, Postgres>,
     dataset_version: Option<&str>,
 ) -> Result<(), DynError> {
-    // The staging tables are fully loaded and validated before this point.
-    // Permanent tables are locked/replaced only for this short final section.
     sqlx::query(
         "TRUNCATE admin_master.jp_machiaza, admin_master.jp_municipalities, admin_master.jp_prefectures",
     )
@@ -616,7 +654,7 @@ async fn replace_master(
             (lg_code, machiaza_id, match_name, oaza_cho, chome, koaza, rsdt_addr_flg)
         SELECT lg_code, machiaza_id, match_name, oaza_cho, chome, koaza, rsdt_addr_flg
         FROM jp_machiaza_stage
-        ORDER BY lg_code, machiaza_id
+        ORDER BY lg_code, machiaza_id, rsdt_addr_flg
         "#,
     )
     .execute(&mut **transaction)
@@ -686,8 +724,6 @@ fn build_machiaza_match_name(
     koaza: Option<&str>,
     koaza_aka_code: Option<i16>,
 ) -> String {
-    // This mirrors the current official ABR geocoder ordering: Kyoto street
-    // names (koaza_aka_code=2) precede oaza/chome and are not appended again.
     if koaza_aka_code == Some(2) {
         concat_components([koaza, oaza_cho, chome])
     } else {
@@ -755,12 +791,21 @@ mod tests {
     }
 
     #[test]
+    fn abr_unknown_machiaza_id_is_explicitly_recognized() {
+        assert_eq!(UNKNOWN_MACHIAZA_ID, "0000000");
+    }
+
+    #[test]
     fn identifiers_are_strictly_validated() {
         assert_eq!(validate_lg_code("252018").unwrap(), "252018");
         assert!(validate_lg_code("25").is_err());
         assert_eq!(
             validate_machiaza_id("0000001", "252018").unwrap(),
             "0000001"
+        );
+        assert_eq!(
+            validate_machiaza_id(UNKNOWN_MACHIAZA_ID, "252018").unwrap(),
+            UNKNOWN_MACHIAZA_ID
         );
         assert!(validate_machiaza_id("abc", "252018").is_err());
     }
