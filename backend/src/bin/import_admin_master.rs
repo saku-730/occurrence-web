@@ -2,8 +2,7 @@ use std::{collections::HashSet, env, error::Error, fmt};
 
 use futures_util::TryStreamExt;
 use sqlx::{
-    PgPool, Postgres, QueryBuilder, Row, Transaction,
-    postgres::PgPoolOptions,
+    postgres::PgPoolOptions, PgPool, Postgres, QueryBuilder, Row, Transaction,
 };
 
 const COUNTRY_CODE_JP: &str = "JP";
@@ -93,7 +92,9 @@ async fn main() -> Result<(), DynError> {
         )
     })?;
     let database_url = env::var("DATABASE_URL").map_err(|_| {
-        import_error("DATABASE_URL is required and must point to the Bio-Database PostgreSQL database")
+        import_error(
+            "DATABASE_URL is required and must point to the Bio-Database PostgreSQL database",
+        )
     })?;
     let dataset_version = options
         .dataset_version
@@ -146,8 +147,8 @@ fn parse_args() -> Result<CliOptions, DynError> {
                 println!(
                     "Usage: import_admin_master [--country JP] [--dataset-version VERSION]\n\n\
                      Environment:\n\
-                       ABR_DATABASE_URL   PostgreSQL URL populated by official abrdb\n\
-                       DATABASE_URL       Bio-Database PostgreSQL URL\n\
+                       ABR_DATABASE_URL    PostgreSQL URL populated by official abrdb\n\
+                       DATABASE_URL        Bio-Database PostgreSQL URL\n\
                        ABR_DATASET_VERSION optional version label (CLI flag takes precedence)"
                 );
                 std::process::exit(0);
@@ -203,7 +204,12 @@ async fn validate_columns(pool: &PgPool, table: &str, required: &[&str]) -> Resu
 }
 
 async fn validate_target_schema(pool: &PgPool) -> Result<(), DynError> {
-    for table in ["datasets", "jp_prefectures", "jp_municipalities", "jp_machiaza"] {
+    for table in [
+        "datasets",
+        "jp_prefectures",
+        "jp_municipalities",
+        "jp_machiaza",
+    ] {
         let exists: bool = sqlx::query_scalar(
             r#"
             SELECT EXISTS (
@@ -249,13 +255,14 @@ async fn import_japan(
 }
 
 async fn create_staging_tables(transaction: &mut Transaction<'_, Postgres>) -> Result<(), DynError> {
-    sqlx::query(
+    for statement in [
         r#"
         CREATE TEMP TABLE jp_prefectures_stage (
             pref_code TEXT NOT NULL,
             name TEXT NOT NULL
-        ) ON COMMIT DROP;
-
+        ) ON COMMIT DROP
+        "#,
+        r#"
         CREATE TEMP TABLE jp_municipalities_stage (
             lg_code TEXT NOT NULL,
             pref_code TEXT NOT NULL,
@@ -263,8 +270,9 @@ async fn create_staging_tables(transaction: &mut Transaction<'_, Postgres>) -> R
             county TEXT,
             city TEXT NOT NULL,
             ward TEXT
-        ) ON COMMIT DROP;
-
+        ) ON COMMIT DROP
+        "#,
+        r#"
         CREATE TEMP TABLE jp_machiaza_stage (
             lg_code TEXT NOT NULL,
             machiaza_id TEXT NOT NULL,
@@ -273,11 +281,13 @@ async fn create_staging_tables(transaction: &mut Transaction<'_, Postgres>) -> R
             chome TEXT,
             koaza TEXT,
             rsdt_addr_flg SMALLINT
-        ) ON COMMIT DROP;
+        ) ON COMMIT DROP
         "#,
-    )
-    .execute(&mut **transaction)
-    .await?;
+    ] {
+        sqlx::query(statement)
+            .execute(&mut **transaction)
+            .await?;
+    }
     Ok(())
 }
 
@@ -285,10 +295,9 @@ async fn stage_prefectures(
     source: &PgPool,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<u64, DynError> {
-    let mut rows = sqlx::query(
-        "SELECT lg_code, pref FROM public.mt_pref_unified ORDER BY lg_code",
-    )
-    .fetch(source);
+    let mut rows =
+        sqlx::query("SELECT lg_code, pref FROM public.mt_pref_unified ORDER BY lg_code")
+            .fetch(source);
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut count = 0_u64;
 
@@ -318,10 +327,9 @@ async fn stage_municipalities(
     source: &PgPool,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<u64, DynError> {
-    let mut rows = sqlx::query(
-        "SELECT lg_code, county, city, ward FROM public.mt_city_unified ORDER BY lg_code",
-    )
-    .fetch(source);
+    let mut rows =
+        sqlx::query("SELECT lg_code, county, city, ward FROM public.mt_city_unified ORDER BY lg_code")
+            .fetch(source);
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut count = 0_u64;
 
@@ -396,15 +404,12 @@ async fn stage_machiaza(
         let oaza_cho = normalize_optional(oaza_cho);
         let chome = normalize_optional(chome);
         let koaza = normalize_optional(koaza);
-
-        // Match the official ABR geocoder's component order. Kyoto street
-        // names (koaza_aka_code=2) appear before oaza/chome and must not be
-        // appended again as an ordinary koaza.
-        let match_name = if koaza_aka_code == Some(2) {
-            concat_components([koaza.as_deref(), oaza_cho.as_deref(), chome.as_deref()])
-        } else {
-            concat_components([oaza_cho.as_deref(), chome.as_deref(), koaza.as_deref()])
-        };
+        let match_name = build_machiaza_match_name(
+            oaza_cho.as_deref(),
+            chome.as_deref(),
+            koaza.as_deref(),
+            koaza_aka_code,
+        );
         if match_name.is_empty() {
             return Err(import_error(format!(
                 "machiaza {lg_code}/{machiaza_id} produced an empty match_name"
@@ -516,7 +521,10 @@ async fn validate_staged_data(
     )
     .fetch_one(&mut **transaction)
     .await?;
-    ensure_zero(duplicate_municipality_codes, "duplicate municipality lg_code values")?;
+    ensure_zero(
+        duplicate_municipality_codes,
+        "duplicate municipality lg_code values",
+    )?;
 
     let duplicate_municipality_names: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM (SELECT pref_code, match_name FROM jp_municipalities_stage GROUP BY pref_code, match_name HAVING COUNT(*) > 1) duplicated",
@@ -546,7 +554,10 @@ async fn validate_staged_data(
     )
     .fetch_one(&mut **transaction)
     .await?;
-    ensure_zero(orphan_municipalities, "municipalities without a prefecture")?;
+    ensure_zero(
+        orphan_municipalities,
+        "municipalities without a prefecture",
+    )?;
 
     let orphan_machiaza: i64 = sqlx::query_scalar(
         r#"
@@ -669,6 +680,21 @@ fn nonempty_string(value: String) -> Option<String> {
     (!normalized.is_empty()).then(|| normalized.to_string())
 }
 
+fn build_machiaza_match_name(
+    oaza_cho: Option<&str>,
+    chome: Option<&str>,
+    koaza: Option<&str>,
+    koaza_aka_code: Option<i16>,
+) -> String {
+    // This mirrors the current official ABR geocoder ordering: Kyoto street
+    // names (koaza_aka_code=2) precede oaza/chome and are not appended again.
+    if koaza_aka_code == Some(2) {
+        concat_components([koaza, oaza_cho, chome])
+    } else {
+        concat_components([oaza_cho, chome, koaza])
+    }
+}
+
 fn concat_components<'a>(components: impl IntoIterator<Item = Option<&'a str>>) -> String {
     components
         .into_iter()
@@ -715,12 +741,16 @@ mod tests {
     #[test]
     fn machiaza_match_name_uses_abr_component_order() {
         assert_eq!(
-            concat_components([Some("勝谷町"), None, None]),
+            build_machiaza_match_name(Some("勝谷町"), None, None, Some(0)),
             "勝谷町"
         );
         assert_eq!(
-            concat_components([Some("紀尾井町"), Some("一丁目"), Some("小字")]),
+            build_machiaza_match_name(Some("紀尾井町"), Some("一丁目"), Some("小字"), Some(0)),
             "紀尾井町一丁目小字"
+        );
+        assert_eq!(
+            build_machiaza_match_name(Some("下京町"), Some("一丁目"), Some("室町通"), Some(2)),
+            "室町通下京町一丁目"
         );
     }
 
