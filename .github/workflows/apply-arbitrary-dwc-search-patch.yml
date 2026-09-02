@@ -1,0 +1,193 @@
+name: Apply Arbitrary DwC Search Patch
+
+on:
+  push:
+    branches:
+      - feature-map
+    paths:
+      - ".github/workflows/apply-arbitrary-dwc-search-patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature-map
+      - name: Apply focused source and spec patches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected text not found in {path}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "backend/src/infrastructure/fuseki.rs",
+              '''        let predicate_pattern = match OccurrenceTarget::for_predicate(&filter.predicate)
+              .intermediate_definition()
+          {
+              None => format!("?occurrence <{predicate}> {object_var} ."),
+              Some((_, link_predicate_uri, _)) => {
+                  let target_var = format!("?filterTarget{index}");
+                  // Keep legacy star-shaped records searchable during migration.
+                  format!(
+                      "{{ ?occurrence <{predicate}> {object_var} . }} UNION {{ ?occurrence <{link_predicate_uri}> {target_var} . {target_var} <{predicate}> {object_var} . }}"
+                  )
+              }
+          };''',
+              '''        let predicate_pattern = match OccurrenceTarget::for_predicate(&filter.predicate)
+              .intermediate_definition()
+          {
+              None if filter.predicate.starts_with("http://rs.tdwg.org/dwc/terms/")
+                  || filter.predicate.starts_with("http://rs.tdwg.org/dwc/iri/") =>
+              {
+                  // Arbitrary Darwin Core predicates may be stored on any backend-managed
+                  // intermediate node. Search all three nodes as well as the legacy/root form.
+                  let target_var = format!("?filterTarget{index}");
+                  let link_var = format!("?filterLink{index}");
+                  let links = intermediate_link_values();
+                  format!(
+                      "{{ ?occurrence <{predicate}> {object_var} . }} UNION {{ VALUES {link_var} {{ {links} }} ?occurrence {link_var} {target_var} . {target_var} <{predicate}> {object_var} . }}"
+                  )
+              }
+              None => format!("?occurrence <{predicate}> {object_var} ."),
+              Some((_, link_predicate_uri, _)) => {
+                  let target_var = format!("?filterTarget{index}");
+                  // Keep legacy star-shaped records searchable during migration.
+                  format!(
+                      "{{ ?occurrence <{predicate}> {object_var} . }} UNION {{ ?occurrence <{link_predicate_uri}> {target_var} . {target_var} <{predicate}> {object_var} . }}"
+                  )
+              }
+          };'''
+          )
+
+          replace_once(
+              "backend/src/infrastructure/fuseki.rs",
+              '''            (
+                  "http://rs.tdwg.org/dwc/terms/locality",
+                  HAS_LOCATION_PREDICATE_URI,
+              ),
+          ];''',
+              '''            (
+                  "http://rs.tdwg.org/dwc/terms/locality",
+                  HAS_LOCATION_PREDICATE_URI,
+              ),
+              // stateProvince is normalized to the Location node by the production store
+              // even though it is not part of the older hard-coded OccurrenceTarget list.
+              // Arbitrary DwC search must still find it there.
+              (
+                  "http://rs.tdwg.org/dwc/terms/stateProvince",
+                  HAS_LOCATION_PREDICATE_URI,
+              ),
+          ];'''
+          )
+
+          replace_once(
+              "spec/18_occurrence_map.md",
+              "- bbox、taxon、年代などによる地図APIフィルターは将来拡張とする",
+              "- 任意の Darwin Core predicate による地図filterは通常のデータ検索と同じcontractで提供する\n- bboxなどの空間filterは将来拡張とする"
+          )
+
+          replace_once(
+              "spec/18_occurrence_map.md",
+              '''### Endpoint
+
+```text
+GET /occurrences/map
+```
+
+### 基本動作''',
+              '''### Endpoint
+
+全件取得。
+
+```text
+GET /occurrences/map
+```
+
+任意Darwin Core条件での絞り込み。
+
+```text
+POST /occurrences/map/search
+Content-Type: application/json
+```
+
+`POST /occurrences/map/search` の `filters` は `POST /occurrences/search` と同じ形式を使う。
+複数filterはANDで評価する。
+
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/stateProvince",
+      "value": "Kyoto",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ]
+}
+```
+
+### 基本動作'''
+          )
+
+          replace_once(
+              "spec/18_occurrence_map.md",
+              "- `GET /occurrences/map` を読み込む",
+              "- 初期表示は全件相当の地図データを読み込む\n- 任意DwC条件を適用する場合は `POST /occurrences/map/search` を使う\n- 検索条件UIはデータ検索画面と共通化し、複数条件はANDとする"
+          )
+
+          replace_once(
+              "spec/18_occurrence_map.md",
+              "`GET /occurrences/map` をOpenAPIへ追加する。",
+              "`GET /occurrences/map` と `POST /occurrences/map/search` をOpenAPIへ追加する。"
+          )
+
+          replace_once(
+              "spec/12_frontend_screens.md",
+              '''## 検索画面
+
+### MVP
+
+- 検索述語選択
+- MVPでは選択肢は `dwc:scientificName` のみ
+- 検索値入力
+- 空検索で一覧表示
+- cursor-based pagination''',
+              '''## 検索画面
+
+### MVP
+
+- 任意のDarwin Core predicateを検索条件として追加できる
+- 初期行は `dwc:scientificName` とするが、学名検索だけに限定しない
+- 項目候補は `GET /vocabularies/darwin-core` から取得する
+- 候補にないDarwin Core IRIも直接入力できる
+- 値はliteralまたはURIとして指定できる
+- 複数条件はAND検索とする
+- 空検索で一覧表示
+- cursor-based pagination
+- 同じfilter UI/contractを地図の絞り込みにも利用する'''
+          )
+
+          replace_once(
+              "frontend/src/components/darwin-core-search-filters.tsx",
+              'key={`${index}-${filter.predicate}`}',
+              'key={index}'
+          )
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/src/infrastructure/fuseki.rs spec/18_occurrence_map.md spec/12_frontend_screens.md frontend/src/components/darwin-core-search-filters.tsx
+          git commit -m "feat: search arbitrary Darwin Core predicates across occurrence nodes"
+          git push origin HEAD:feature-map
