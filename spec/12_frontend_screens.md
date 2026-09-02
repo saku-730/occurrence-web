@@ -182,6 +182,20 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 - `verbatimEventDate` はpaper importの初期項目として使用しない
 - 一括登録時は他の入力項目と同様にN-Quadsへ変換し、`dwc:eventDate` としてbackendへ送る
 
+### 全Occurrenceへの項目一括適用
+
+LLM抽出結果のレビュー画面上部に、現在の登録対象Occurrenceすべてへ共通の項目・値を適用するUIを設ける。
+
+- 項目名は既存のDarwin Core項目候補UIと同じ候補リストを利用する
+- 値は通常のOccurrence入力と同じ文字列/URI入力として扱う
+- 例: `dwc:basisOfRecord = PreservedSpecimen` のような論文内で共通する値を全件へ一度に設定できる
+- 選択したpredicateが存在しないOccurrenceには新しい入力行を追加する
+- 同じpredicateが既に存在するOccurrenceでは重複行を追加せず、そのpredicateの既存値を指定値へ置き換える
+- 一括適用後も各Occurrenceの個別フォームで値を再編集・削除できる
+- `dwciri:toTaxon` はGBIF照合結果と `dwc:scientificName` が連動する特殊項目のため、この単純な一括適用UIの対象外とする
+- 登録済みまたは一括登録処理中は一括適用UIを無効化する
+- 一括適用はfrontend上のレビュー状態だけを更新し、適用操作だけでbackendへ保存しない。最終的な一括登録時に他の項目と一緒にN-Quads化する
+
 ---
 
 ## メディアUI
