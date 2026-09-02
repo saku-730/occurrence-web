@@ -33,7 +33,6 @@ const GEOREFERENCE_SOURCES: &str = "http://rs.tdwg.org/dwc/iri/georeferenceSourc
 const GEOREFERENCE_PROTOCOL: &str = "http://rs.tdwg.org/dwc/terms/georeferenceProtocol";
 const GEOREFERENCED_DATE: &str = "http://rs.tdwg.org/dwc/terms/georeferencedDate";
 pub const NOMINATIM_SOURCE_URI: &str = "https://nominatim.openstreetmap.org/";
-const ABR_SOURCE_URI: &str = "https://www.digital.go.jp/policies/base_registry_address";
 const NOMINATIM_PROTOCOL: &str = "Nominatim search; first-ranked result selected automatically";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,15 +58,14 @@ pub trait LocationGeocoder: Send + Sync {
 struct GeocodingQuery {
     query: String,
     protocol: String,
-    used_abr: bool,
 }
 
-/// Apply Nominatim geocoding immediately before the existing occurrence handlers run.
+/// Apply occurrence geocoding immediately before the existing occurrence handlers run.
 ///
-/// When ABR_DATABASE_URL is available, Japanese locality + country values are resolved
-/// against the official Digital Agency ABR PostgreSQL database first. Nominatim is then
-/// tried from the most specific ABR-derived query toward broader administrative fallbacks.
-/// ABR/Nominatim failures deliberately fail open so occurrence registration can continue.
+/// For Japanese locality values, ABR is used only to split the address into administrative
+/// components. Coordinates are always obtained from Nominatim, and only Nominatim is recorded
+/// as georeferenceSources. If ABR cannot resolve the address, the existing free-form query is
+/// kept as a fallback so occurrence registration itself does not fail.
 pub async fn geocoding_middleware(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let method = request.method().clone();
@@ -99,8 +97,6 @@ pub async fn geocoding_middleware(request: Request, next: Next) -> Response {
         }
     };
 
-    // The body can grow after coordinates/provenance are added, so a stale Content-Length
-    // must not be forwarded to the downstream extractor.
     parts.headers.remove(CONTENT_LENGTH);
     let request = Request::from_parts(parts, Body::from(rewritten));
     next.run(request).await
@@ -137,8 +133,7 @@ async fn geocode_batch_json(
     serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec())
 }
 
-/// Geocode without an administrative resolver. Kept as the small reusable entry point
-/// for callers/tests that only need ordinary Nominatim behavior.
+/// Entry point for callers/tests that only need ordinary Nominatim behavior.
 pub async fn enrich_nquads_with_geocoding<G>(
     nquads: &[u8],
     geocoder: &G,
@@ -149,8 +144,8 @@ where
     enrich_nquads_with_geocoding_and_abr(nquads, geocoder, None).await
 }
 
-/// Geocode an occurrence using the official ABR as an optional Japanese administrative
-/// resolver and Nominatim as the coordinate provider.
+/// Use ABR only as an address splitter, then send the ABR-derived address candidates to
+/// Nominatim. ABR never supplies the stored coordinates.
 pub async fn enrich_nquads_with_geocoding_and_abr<G>(
     nquads: &[u8],
     geocoder: &G,
@@ -175,7 +170,7 @@ where
         .iter()
         .any(|quad| quad.predicate.as_str() == DECIMAL_LONGITUDE);
 
-    // Complete source coordinates always win. Partial coordinates are not silently completed.
+    // Source coordinates always win. Partial coordinates are not silently completed.
     if has_latitude || has_longitude {
         return Ok(nquads.to_vec());
     }
@@ -193,8 +188,6 @@ where
                 break;
             }
             Ok(None) => continue,
-            // A service/transport failure is different from a valid zero-result response.
-            // Do not issue more Nominatim calls for the same occurrence after a failure.
             Err(_) => return Ok(nquads.to_vec()),
         }
     }
@@ -226,21 +219,10 @@ where
     ));
     quads.push(Quad::new(
         subject.clone(),
-        georeference_sources.clone(),
+        georeference_sources,
         nominatim,
         graph_name.clone(),
     ));
-
-    if selected_query.used_abr {
-        let abr_source = NamedNode::new(ABR_SOURCE_URI).map_err(|_| ())?;
-        quads.push(Quad::new(
-            subject.clone(),
-            georeference_sources,
-            abr_source,
-            graph_name.clone(),
-        ));
-    }
-
     quads.push(Quad::new(
         subject.clone(),
         georeference_protocol,
@@ -261,7 +243,6 @@ async fn build_geocoding_queries(quads: &[Quad], abr: Option<&AbrClient>) -> Vec
     let legacy = build_geocoding_query(quads).map(|query| GeocodingQuery {
         query,
         protocol: NOMINATIM_PROTOCOL.to_string(),
-        used_abr: false,
     });
 
     let Some(abr) = abr else {
@@ -278,7 +259,6 @@ async fn build_geocoding_queries(quads: &[Quad], abr: Option<&AbrClient>) -> Vec
 
     let resolution = match abr.resolve(&country, &locality).await {
         Ok(Some(resolution)) => resolution,
-        // Unsupported country, no ABR prefix match, or ABR DB failure: preserve the old behavior.
         Ok(None) | Err(_) => return legacy.into_iter().collect(),
     };
 
@@ -301,27 +281,27 @@ fn build_abr_geocoding_queries(resolution: &AdministrativeResolution) -> Vec<Geo
         push_abr_query(
             &mut queries,
             join_unique_parts([remainder, machiaza, municipality, prefecture, country]),
-            "Nominatim search after Digital Agency ABR resolution; locality detail retained",
+            "Nominatim search after Digital Agency ABR address split; locality detail retained",
         );
     }
     if machiaza.is_some() {
         push_abr_query(
             &mut queries,
             join_unique_parts([machiaza, municipality, prefecture, country]),
-            "Nominatim search after Digital Agency ABR resolution; machiaza fallback",
+            "Nominatim search after Digital Agency ABR address split; machiaza fallback",
         );
     }
     if municipality.is_some() {
         push_abr_query(
             &mut queries,
             join_unique_parts([municipality, prefecture, country]),
-            "Nominatim search after Digital Agency ABR resolution; municipality fallback",
+            "Nominatim search after Digital Agency ABR address split; municipality fallback",
         );
     }
     push_abr_query(
         &mut queries,
         join_unique_parts([prefecture, country]),
-        "Nominatim search after Digital Agency ABR resolution; prefecture fallback",
+        "Nominatim search after Digital Agency ABR address split; prefecture fallback",
     );
 
     queries
@@ -336,7 +316,6 @@ fn push_abr_query(queries: &mut Vec<GeocodingQuery>, query: Option<String>, prot
         GeocodingQuery {
             query,
             protocol: protocol.to_string(),
-            used_abr: true,
         },
     );
 }
@@ -450,7 +429,7 @@ _:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/gra
     }
 
     #[test]
-    fn abr_queries_fall_back_from_detail_to_prefecture() {
+    fn abr_split_is_used_to_build_nominatim_queries_from_detail_to_prefecture() {
         let resolution = AdministrativeResolution {
             country_code: "JP".into(),
             prefecture_code: "25".into(),
@@ -510,7 +489,7 @@ _:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <https://bio-database.net/gr
     }
 
     #[tokio::test]
-    async fn generated_coordinates_and_nominatim_source_are_added() {
+    async fn generated_coordinates_record_only_nominatim_as_source() {
         let input = br#"_:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto City" <https://bio-database.net/graphs/occurrences> ."#;
         let geocoder = fake(Ok(Some(GeocodedLocation {
             latitude: "35.0116".into(),
@@ -526,6 +505,8 @@ _:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <https://bio-database.net/gr
         assert!(text.contains("135.7681"));
         assert!(text.contains(GEOREFERENCE_SOURCES));
         assert!(text.contains(NOMINATIM_SOURCE_URI));
+        assert!(!text.contains("digital.go.jp"));
+        assert_eq!(text.matches(GEOREFERENCE_SOURCES).count(), 1);
         assert_eq!(geocoder.queries.lock().unwrap().as_slice(), &["Kyoto City"]);
     }
 
