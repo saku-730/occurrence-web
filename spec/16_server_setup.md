@@ -437,4 +437,93 @@ npm run build
 npm run start
 ```
 
+### Geocoding: ABR + Nominatim
 
+Bio-Database の住所ジオコーディングは、**ABRで住所を正規化・分割し、その結果をNominatimへ渡す**。
+ABRの座標は使用せず、最終的な緯度経度はNominatimだけから取得する。
+詳細仕様は `spec/18_geocoding.md` を参照する。
+
+#### ABR geocoder のインストール
+
+ABR はデジタル庁の `@digital-go-jp/abr-geocoder` をローカルサービスとして使用する。
+Node.js / npm のインストール後に実行する。
+
+```bash
+sudo npm install -g @digital-go-jp/abr-geocoder
+abrg --help
+```
+
+初回はアドレス・ベース・レジストリのデータをダウンロードしてローカルDBを作成する。
+
+```bash
+abrg download
+```
+
+Next.js の標準ポート `3000` と衝突しないよう、ABR server は例として `3001` で起動する。
+
+```bash
+abrg serve start -p 3001
+```
+
+動作確認。
+
+```bash
+curl -fsS --get \
+  --data-urlencode 'address=東京都千代田区紀尾井町1-3' \
+  'http://127.0.0.1:3001/geocode'
+```
+
+Bio-Database ではこのレスポンスの住所正規化・階層情報だけを使用する。ABR が返す latitude / longitude は RDF に保存しない。
+
+ABR のデータ更新時は、運用中のバージョンに対応する公式手順に従ってローカルDBを更新する。
+
+#### backend 設定
+
+backend からローカル ABR server と Nominatim を参照できるようにする。
+環境変数名は backend 実装と一致させる。
+
+推奨設定例。
+
+```env
+ABR_BASE_URL=http://127.0.0.1:3001
+NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
+NOMINATIM_USER_AGENT=bio-database/1.0
+```
+
+`NOMINATIM_USER_AGENT` は、運用時にはアプリケーションを識別できる値にする。
+
+#### Nominatim
+
+公開 Nominatim を使用する場合、Nominatim 自体をサーバーへインストールする必要はない。
+backend から `https://nominatim.openstreetmap.org/` への HTTPS outbound 通信を許可する。
+
+公開サービス利用時は次を守る。
+
+- Nominatim へのリクエストを backend 内で直列化する
+- 最大 1 request / second を超えない
+- アプリケーションを識別できる `User-Agent` を必ず送る
+- 同じ ABR 正規化住所の結果をキャッシュし、不要な再問い合わせをしない
+
+疎通確認例。
+
+```bash
+curl -fsS \
+  -H 'User-Agent: bio-database-setup-check/1.0' \
+  --get \
+  --data-urlencode 'q=東京都千代田区紀尾井町1-3' \
+  --data-urlencode 'format=jsonv2' \
+  --data-urlencode 'limit=1' \
+  'https://nominatim.openstreetmap.org/search'
+```
+
+この確認を連続実行して負荷をかけない。
+
+Nominatim 成功時だけ、Location RDF に次を追加する。
+
+```text
+dwc:decimalLatitude
+dwc:decimalLongitude
+dwciri:georeferenceSources <https://nominatim.openstreetmap.org/>
+```
+
+ABR を `georeferenceSources` として記録しない。
