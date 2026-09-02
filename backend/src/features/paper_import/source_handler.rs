@@ -745,6 +745,7 @@ fn requires_bibliographic_input(doi: Option<&str>, title: Option<&str>) -> bool 
         && !title.is_some_and(|value| !value.trim().is_empty())
 }
 
-fn map_extraction_error(_error: PaperLlmExtractionError) -> PaperSourceHandlerError {
+fn map_extraction_error(error: PaperLlmExtractionError) -> PaperSourceHandlerError {
+    eprintln!("paper occurrence extraction failed: {error:?}");
     PaperSourceHandlerError::ExtractionFailed
 }
