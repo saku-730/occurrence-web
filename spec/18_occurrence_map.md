@@ -16,11 +16,14 @@ Occurrence を地図上に表示する。
 
 ### フロントエンド
 
-- 地図描画は MapLibre GL JS を使う
-- backend から GeoJSON `FeatureCollection` を取得して描画する
-- 背景地図の style URL は環境変数で差し替え可能にする
-- 開発時は MapLibre のデモstyleを既定値としてよい
-- 本番では運用可能なタイル/style providerを別途設定する
+- 地図描画エンジンは MapLibre GL JS を使う
+- backend から GeoJSON `FeatureCollection` を取得してOccurrenceを描画する
+- 背景地図は OpenFreeMap の Liberty style を既定値として使う
+- 既定 style URL は `https://tiles.openfreemap.org/styles/liberty` とする
+- OpenFreeMap の背景地図データは OpenStreetMap 由来で、OpenMapTiles schema のvector tileとして提供される
+- 道路、街路、建物、地名、河川、公園など、国レベルより詳細な背景地図をズームに応じて表示する
+- `NEXT_PUBLIC_MAP_STYLE_URL` が設定されている場合は、そのstyle URLで既定値を上書きする
+- 将来自前tile配信や別providerへ移行する場合も、MapLibre側のOccurrence描画ロジックは維持する
 
 ### Geocoder
 
@@ -29,6 +32,7 @@ Occurrence を地図上に表示する。
 - `countrycodes` は使用しない
 - 検索結果が複数あってもユーザー選択は行わず、Nominatim の先頭結果だけを採用する
 - request は `limit=1` とする
+- Nominatimは地名から座標を得るGeocoderであり、背景地図の描画には使わない
 
 ---
 
@@ -299,6 +303,8 @@ GeoJSON座標順は `[longitude, latitude]` とする。
 ### MVP表示
 
 - MapLibre GL JS で地図を表示する
+- 背景地図は OpenFreeMap Liberty style を使う
+- 背景地図は OpenStreetMap 由来の詳細なvector mapを表示する
 - `GET /occurrences/map` を読み込む
 - GeoJSONのPointを描画する
 - `coordinateSource=original` と `coordinateSource=nominatim` は別layerにする
@@ -314,8 +320,18 @@ GeoJSON座標順は `[longitude, latitude]` とする。
 
 ### 地図style
 
-- `NEXT_PUBLIC_MAP_STYLE_URL` で差し替え可能にする
-- 未指定時は開発用 MapLibre demo style を使ってよい
+既定値は以下とする。
+
+```text
+https://tiles.openfreemap.org/styles/liberty
+```
+
+- `NEXT_PUBLIC_MAP_STYLE_URL` で別のMapLibre style URLへ差し替え可能にする
+- 環境変数未指定時は OpenFreeMap Liberty を使う
+- OpenFreeMap public instanceを利用するためAPI keyは不要
+- 背景地図の描画エンジンは MapLibre、背景データ/style providerは OpenFreeMap と役割を分離する
+- Nominatimは背景地図providerではなく、座標を持たないOccurrenceの地名Geocoding専用とする
+- 将来自前OpenMapTiles等へ移行する場合は `NEXT_PUBLIC_MAP_STYLE_URL` を差し替える方針とする
 
 ---
 
@@ -357,6 +373,7 @@ GeoJSON response schemaはbackend DTOとして定義する。
 - map APIのFeatureCollectionを読み込める
 - original / nominatim を別layerとして描画する
 - popupからOccurrence詳細へ遷移できる
+- `NEXT_PUBLIC_MAP_STYLE_URL` 未指定時に OpenFreeMap Liberty を既定styleとして使用する
 
 ---
 
