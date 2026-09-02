@@ -46,7 +46,7 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
 - GROBID等で抽出した論文テキスト
 - PDF各ページをレンダリングした画像
 
-出力はJSON Schemaで制約し、基本形は次とする。
+出力の基本形は次とする。
 
 ```json
 {
@@ -60,7 +60,7 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
 }
 ```
 
-LLMレスポンスschemaでは `scientificName`、`locality`、`eventDate` を各Occurrenceのキーとして要求する。`locality` と `eventDate` は情報がない場合 `null` を許可する。
+LLMレスポンスのJSON Schemaでは、各Occurrenceについて `scientificName` と `locality` を必須とする。`eventDate` はプロンプト上では全Occurrenceで出力し、不明なら `null` とするよう要求するが、structured outputの失敗率を上げないためSchema上は任意プロパティとする。`eventDate` が欠落した場合もbackendでは `null` と同等に扱う。
 
 現時点ではLLMレスポンスschemaに緯度経度を要求しない。`OccurrenceCandidate` に座標用Optionフィールドが残っていても、LLMの基本出力は `scientificName`、`locality`、`eventDate` とする。
 
@@ -172,7 +172,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 - `verbatimEventDate` は使用しない
 - LLMが論文中の日付表現を直接正規化して `eventDate` を返す
-- 全Occurrenceで `eventDate` キーを出力し、日付を特定できなければ `null` とする
+- プロンプトでは全Occurrenceで `eventDate` キーを出力し、日付を特定できなければ `null` とする
 - 出版年ではなく、そのOccurrenceに対応する採集日・観察日・記録日を取得する
 - 年だけ分かる場合は `YYYY`
 - 年月まで分かる場合は `YYYY-MM`
@@ -188,15 +188,25 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 初期実装ではJSON Schemaの `pattern` とRust側の厳格な日付検証を二重に適用していた。このため、1件でも `1998-13` のような不正値が混ざると抽出全体が `InvalidOccurrence` となり、正常なscientificName/localityまで失う問題があった。
 
+その後 `pattern` を外して日付単独の不正を `null` にするようにしたが、Schema上で `eventDate` キー自体を必須にしていたため、日付情報のないOccurrenceにもstructured outputで余分な生成制約が掛かっていた。また、モデルがSchemaから少し外れてMarkdownコードフェンス、前後説明、補助フィールド、文字列以外のeventDateを返した場合、生成自体は完了していてもbackendのdeserializeで抽出全体が失敗する余地が残っていた。
+
 現行実装では次の方針とする。
 
-- JSON Schemaでは `eventDate` を `string | null` とし、regex `pattern` は使用しない
-- 正規化形式の指示はプロンプトで明確に行う
+- JSON Schemaでは `scientificName` と `locality` のみを必須にする
+- `eventDate` は `string | null` の任意プロパティとし、regex `pattern` は使用しない
+- プロンプトでは従来どおりeventDate出力を要求するため、正常時はeventDateを取得する
+- eventDateキーが欠落した場合は `null` として扱う
+- eventDateが配列・数値など文字列以外の場合も、その日付だけ `null` として扱う
 - backendはLLMレスポンスをparseした後に各eventDateを個別に確認する
 - `YYYY`、`YYYY-MM`、`YYYY-MM-DD`、または同形式の `開始/終了` として受理できる値はtrimして保持する
 - 明らかに不正なeventDateは、そのOccurrenceの `eventDate` だけを `null` にする
+- per-Occurrenceに未知の補助フィールドが混ざっても、既知フィールドを安全に取得できる場合は未知フィールドを無視して抽出を継続する
+- message.content全体が直接JSONとしてparseできない場合、最初の `{` から最後の `}` までをJSON候補としてもう一度parseする。これによりMarkdownコードフェンスや短い前後説明が混ざった出力を救済する
+- JSON救済にも失敗した場合は、serdeのparse errorとcontent byte数をbackendログへ出し、原因を判別できるようにする。LLM本文自体はログへ出さない
 - eventDate単独の不正を理由にOccurrence全体や抽出リクエストを失敗させない
-- scientificNameが空、JSONそのものが壊れている等、Occurrenceとして成立しないエラーは従来どおり失敗とする
+- scientificNameが空、JSONの構造自体を救済できない等、Occurrenceとして成立しないエラーは失敗とする
+
+この耐障害化は、llama.cppログで `truncated = 0` かつ生成完了しているにもかかわらずpaper importが失敗するケースへの対策である。生成完了ログだけではbackend deserialize成功を意味しないため、structured outputの拘束を最小限にし、取得できたscientificName/localityを日付の失敗に巻き込まない。
 
 `eventDate` はLLM候補から抽出APIレスポンスへ引き継ぎ、review UIでは値が存在する場合のみ初期行として表示する。ユーザー確認後は通常のN-Quads生成に含め、既存のOccurrence登録処理へ渡す。backendの通常RDFルーティングにより `dwc:eventDate` はEvent側へ保存される前提とする。
 
@@ -245,7 +255,15 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 
 ### JSON SchemaのregexでeventDate形式を完全に縛る
 
-不採用。llama.cpp側のstructured outputを必要以上に複雑にし、日付抽出追加前には存在しなかった失敗要因を増やすため。schemaは型とキー構造を固定し、日付形式はプロンプトとbackendの軽量sanitizationで扱う。
+不採用。llama.cpp側のstructured outputを必要以上に複雑にし、日付抽出追加前には存在しなかった失敗要因を増やすため。schemaは最低限の型とキー構造を固定し、日付形式はプロンプトとbackendの軽量sanitizationで扱う。
+
+### JSON SchemaでeventDateキーを必須にする
+
+不採用。日付が存在しないOccurrenceにも不要なstructured-output制約が掛かるため。プロンプトではeventDateを要求するが、schemaはscientificName/localityの成立を優先する。
+
+### LLM出力がSchemaから少し外れたら即座に全体失敗とする
+
+不採用。コードフェンス・補助フィールド・eventDate型崩れのように既知情報を安全に回収できるケースでは、backendで限定的に救済する。
 
 ### 長大なプロンプトを `llama.rs` にハードコードする
 
@@ -277,12 +295,14 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 プロンプト変更・外出しのような内部変更でも、少なくとも次を維持する。
 
 - request先頭に `OCCURRENCE_EXTRACTION_PROMPT` が入る
-- JSON Schemaが `scientificName`、`locality`、`eventDate` を要求する
+- JSON Schemaが `scientificName` と `locality` を必須にし、`eventDate` は任意である
 - JSON SchemaのeventDateにregex `pattern` を付けない
 - sampling設定が意図せず変わっていない
 - `prompt.txt` に属名略記の禁止と完全形への展開指示が存在する
 - `prompt.txt` に日本の都道府県補完ルールが存在する
 - `prompt.txt` に `eventDate` のISO形式正規化ルールが存在する
 - validなeventDateは保持される
-- invalidなeventDateは `null` に変換され、Occurrence自体は失敗しない
+- missing / non-string / invalidなeventDateは `null` に変換され、Occurrence自体は失敗しない
+- Markdownコードフェンス等の前後文字があるJSONを救済できる
+- per-Occurrenceの未知フィールドがあっても既知フィールドを抽出できる
 - valid responseを従来どおりparseできる
