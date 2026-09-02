@@ -8,6 +8,7 @@ on:
       - "backend/**"
       - "frontend/**"
       - "spec/08_search.md"
+      - "spec/12_frontend_screens.md"
       - "spec/18_occurrence_map.md"
       - ".github/workflows/occurrence-map-tests.yml"
   pull_request:
@@ -17,6 +18,7 @@ on:
       - "backend/**"
       - "frontend/**"
       - "spec/08_search.md"
+      - "spec/12_frontend_screens.md"
       - "spec/18_occurrence_map.md"
       - ".github/workflows/occurrence-map-tests.yml"
   workflow_dispatch:
