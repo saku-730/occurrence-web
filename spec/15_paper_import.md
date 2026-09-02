@@ -47,13 +47,16 @@ LLM抽出について、以下のコミットを「ある程度まともに抽�
   "occurrences": [
     {
       "scientificName": "Metaphire hilgendorfi",
-      "locality": "Tokyo"
+      "locality": "奈良県香芝市真美ヶ丘",
+      "eventDate": "1998-06"
     }
   ]
 }
 ```
 
-現時点ではLLMレスポンスschemaに緯度経度を要求しない。`OccurrenceCandidate` に座標用Optionフィールドが残っていても、LLMの基本出力は `scientificName` と `locality` とする。
+LLMレスポンスschemaでは `scientificName`、`locality`、`eventDate` を各Occurrenceのキーとして要求する。`locality` と `eventDate` は情報がない場合 `null` を許可する。
+
+現時点ではLLMレスポンスschemaに緯度経度を要求しない。`OccurrenceCandidate` に座標用Optionフィールドが残っていても、LLMの基本出力は `scientificName`、`locality`、`eventDate` とする。
 
 ### 生成設定
 
@@ -117,7 +120,7 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 - scientificName + locality が同一なら重複排除する
 - JSONを一度出力したら繰り返し生成しない
 
-この基準点では、日本のlocalityに都道府県名を推測補完するルールはまだ採用していない。
+この基準点では、日本のlocalityに都道府県名を推測補完するルールと `eventDate` 抽出はまだ採用していない。
 
 ---
 
@@ -157,6 +160,39 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
 ---
 
+## eventDate抽出と正規化
+
+論文中の採集・観察・記録年月日は Darwin Core の `dwc:eventDate` として扱う。
+
+- `verbatimEventDate` は使用しない
+- LLMが論文中の日付表現を直接正規化して `eventDate` を返す
+- 出版年ではなく、そのOccurrenceに対応する採集日・観察日・記録日を取得する
+- 年だけ分かる場合は `YYYY`
+- 年月まで分かる場合は `YYYY-MM`
+- 年月日まで分かる場合は `YYYY-MM-DD`
+- 明示された期間は `開始/終了` とする。例: `1998-05/1998-07`
+- 不明な月・日を `01` などで補完して精度を偽らない
+- 和暦などは西暦へ変換できる場合に変換する
+- `5月上旬` 等の曖昧な日付は、確実に表現できる精度まで落として `YYYY-MM` 等とする
+- そのOccurrenceに対応する日付を特定できなければ `null`
+
+backendでは `eventDate` が存在する場合、`YYYY`、`YYYY-MM`、`YYYY-MM-DD` または同形式の `開始/終了` であることを軽く検証する。
+
+`eventDate` はLLM候補から抽出APIレスポンスへ引き継ぎ、review UIでは値が存在する場合のみ初期行として表示する。ユーザー確認後は通常のN-Quads生成に含め、既存のOccurrence登録処理へ渡す。backendの通常RDFルーティングにより `dwc:eventDate` はEvent側へ保存される前提とする。
+
+---
+
+## review UIの初期項目
+
+LLM抽出後の各Occurrenceは次を初期表示する。
+
+- GBIF解決あり: `分類`、`scientificName`、`locality`、および取得できた場合 `eventDate`
+- GBIF解決なし: `scientificName`、`locality`、および取得できた場合 `eventDate`
+- `eventDate = null` の場合は空のeventDate行を自動追加しない
+- ユーザーは従来どおり任意のDarwin Core項目を追加・削除・編集できる
+
+---
+
 ## 不採用・変更済み案
 
 ### 学名省略を確証不足ならそのまま残す
@@ -174,6 +210,14 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 ### 属名略記・地点分割をすぐ複雑なbackend後処理で補正する
 
 現時点では不採用。高性能モデルへの変更で実用上改善したため、まずは速度低下を許容して単純な構成を維持する。再発率が高くなった場合に再検討する。
+
+### `verbatimEventDate` を併用する
+
+現時点では不採用。paper importではLLMが日付を `eventDate` へ正規化して返す単純な構成を採用し、原表記を別フィールドには保存しない。
+
+### 不明な月日を補って完全な日付にする
+
+不採用。論文が持つ精度以上の日付を生成することになるため、年・年月など分かる精度のまま保存する。
 
 ### 長大なプロンプトを `llama.rs` にハードコードする
 
@@ -205,8 +249,10 @@ pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 プロンプト変更・外出しのような内部変更でも、少なくとも次を維持する。
 
 - request先頭に `OCCURRENCE_EXTRACTION_PROMPT` が入る
-- JSON Schemaが従来どおりである
+- JSON Schemaが `scientificName`、`locality`、`eventDate` を要求する
 - sampling設定が意図せず変わっていない
 - `prompt.txt` に属名略記の禁止と完全形への展開指示が存在する
 - `prompt.txt` に日本の都道府県補完ルールが存在する
+- `prompt.txt` に `eventDate` のISO形式正規化ルールが存在する
+- `eventDate` の年・年月・年月日・期間形式を受理し、明らかな形式不正を拒否する
 - valid responseを従来どおりparseできる
