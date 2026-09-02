@@ -8,6 +8,8 @@
 - 空検索は一覧取得として扱う
 - 検索結果は閲覧権限に従ってフィルタする
 - 同じ検索条件を地図表示にも利用できるようにする
+- ユーザー向けUIではIRIではなく日本語項目名を主表示する
+- literal / URI の型選択はユーザーに要求せずfrontendで自動判定する
 
 ---
 
@@ -15,12 +17,10 @@
 
 初期状態では `dwc:scientificName` の入力行を1つ表示するが、学名だけに限定しない。
 
-各検索条件は以下を持つ。
+ユーザーが操作する各検索条件は以下だけを持つ。
 
-- predicate
-- value
-- value type (`literal` / `uri`)
-- match (`exact`)
+- Darwin Core項目
+- 検索値
 
 Darwin Core 項目候補は以下から取得する。
 
@@ -28,8 +28,27 @@ Darwin Core 項目候補は以下から取得する。
 GET /vocabularies/darwin-core
 ```
 
+項目選択UIでは、Fusekiの `occurrence-profile` graphにある `skos:prefLabel @ja` を優先した日本語表示名を主表示する。
+日本語表示名がない場合だけDarwin Coreの `localName` をfallbackとして使う。
+predicate IRIは識別・検索API送信用に内部保持し、通常UIでは小さな補助情報として表示する。
+
+例。
+
+```text
+学名
+  IRI: http://rs.tdwg.org/dwc/terms/scientificName
+```
+
 候補は入力補助であり、検索可能な predicate を候補一覧だけに制限しない。
-ユーザーは `http://rs.tdwg.org/dwc/terms/...` や `http://rs.tdwg.org/dwc/iri/...` の絶対IRIを直接入力できる。
+候補にないDarwin Core predicateは「候補にないDwC IRIを直接指定」から絶対IRIを入力できる。
+
+値の型を選択するUIは設けない。
+frontendは検索実行時に値を次のように自動判定し、既存backend contractの `value_type` へ変換する。
+
+- `scheme:...` 形式のIRI値 -> `uri`
+- それ以外 -> `literal`
+
+`match` もユーザーには選択させず、MVPでは常に `exact` とする。
 
 空の条件行は frontend から検索APIへ送らない。
 
@@ -71,6 +90,7 @@ Content-Type: application/json
 
 backend は `filters[].predicate` に http/https の絶対IRIを受け取る。
 `value_type` は `literal` または `uri`、`match` は現時点では `exact` のみ許可する。
+これらはfrontendが自動生成する内部contractであり、通常ユーザーには選択させない。
 
 ---
 
@@ -107,7 +127,7 @@ legacyのOccurrence直下に保存された値も検索対象に含める。
 
 ## リテラル検索
 
-`value_type = literal` の場合。
+frontendが `value_type = literal` と判定した場合。
 
 - 完全一致
 - case-insensitive
@@ -128,7 +148,7 @@ legacyのOccurrence直下に保存された値も検索対象に含める。
 
 ## URI検索
 
-`value_type = uri` の場合。
+frontendが `value_type = uri` と判定した場合。
 
 - URI完全一致を行う
 - URI値は有効なIRIでなければならない
@@ -185,6 +205,7 @@ Request。
 - 閲覧権限も通常検索と同じ
 - 条件に一致したOccurrenceのうち、完全な緯度経度ペアを持つものだけGeoJSONとして返す
 - bboxなどの空間filterは別機能として将来追加する
+- UIは通常検索と同じ日本語優先の項目選択を使い、値型選択は表示しない
 
 ---
 
@@ -217,33 +238,3 @@ Request。
 - cursorはopaque string
 - frontendはcursor内部を解釈しない
 - 並び順は `created desc, occurrence_id desc` を基本とする
-
-地図検索はMVPでは一致する座標付きOccurrenceを全件GeoJSON化するため、内部でcursor paginationを繰り返して全ページを取得する。
-
----
-
-## 空検索
-
-`filters: []` は一覧取得として扱う。
-
-- 非ログイン: public occurrence一覧
-- editor: public + 自分のprivate occurrence一覧
-- admin: 全occurrence一覧
-
-地図では `filters: []` は `GET /occurrences/map` と同じ対象集合を意味する。
-
----
-
-## テスト要件
-
-最低限以下を確認する。
-
-- scientificName以外のDwC predicateを検索できる
-- Location nodeに保存された `stateProvince` 等を検索できる
-- 複数filterがANDになる
-- literal検索はcase-insensitiveかつtrimされる
-- URI完全一致が動く
-- taxonomy URI検索で下位分類群を含める
-- public/privateの認可を維持する
-- 地図検索へ同じfilterが渡される
-- 空検索が一覧取得になる
