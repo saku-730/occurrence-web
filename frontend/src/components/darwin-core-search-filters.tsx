@@ -89,7 +89,7 @@ export function DarwinCoreSearchFilters({
       {filters.map((filter, index) => (
         <div
           className="grid gap-2 rounded-md border border-[#d8dfe2] bg-white p-3 md:grid-cols-[minmax(16rem,1.4fr)_7rem_minmax(12rem,1fr)_auto] md:items-end"
-          key={`${index}-${filter.predicate}`}
+          key={index}
         >
           <label className="min-w-0">
             <span className="mb-1 block text-xs font-medium text-[#526168]">Darwin Core項目</span>

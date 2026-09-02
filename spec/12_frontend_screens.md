@@ -161,11 +161,15 @@ MVPでは最低限、以下のような入力補助を用意してよい。
 
 ### MVP
 
-- 検索述語選択
-- MVPでは選択肢は `dwc:scientificName` のみ
-- 検索値入力
+- 任意のDarwin Core predicateを検索条件として追加できる
+- 初期行は `dwc:scientificName` とするが、学名検索だけに限定しない
+- 項目候補は `GET /vocabularies/darwin-core` から取得する
+- 候補にないDarwin Core IRIも直接入力できる
+- 値はliteralまたはURIとして指定できる
+- 複数条件はAND検索とする
 - 空検索で一覧表示
 - cursor-based pagination
+- 同じfilter UI/contractを地図の絞り込みにも利用する
 
 ---
 

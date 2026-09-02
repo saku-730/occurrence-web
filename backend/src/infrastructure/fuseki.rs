@@ -644,6 +644,18 @@ fn build_search_filter_patterns(
         let predicate_pattern = match OccurrenceTarget::for_predicate(&filter.predicate)
             .intermediate_definition()
         {
+            None if filter.predicate.starts_with("http://rs.tdwg.org/dwc/terms/")
+                || filter.predicate.starts_with("http://rs.tdwg.org/dwc/iri/") =>
+            {
+                // Arbitrary Darwin Core predicates may be stored on any backend-managed
+                // intermediate node. Search all three nodes as well as the legacy/root form.
+                let target_var = format!("?filterTarget{index}");
+                let link_var = format!("?filterLink{index}");
+                let links = intermediate_link_values();
+                format!(
+                    "{{ ?occurrence <{predicate}> {object_var} . }} UNION {{ VALUES {link_var} {{ {links} }} ?occurrence {link_var} {target_var} . {target_var} <{predicate}> {object_var} . }}"
+                )
+            }
             None => format!("?occurrence <{predicate}> {object_var} ."),
             Some((_, link_predicate_uri, _)) => {
                 let target_var = format!("?filterTarget{index}");
@@ -796,6 +808,10 @@ mod tests {
             ),
             (
                 "http://rs.tdwg.org/dwc/terms/locality",
+                HAS_LOCATION_PREDICATE_URI,
+            ),
+            (
+                "http://rs.tdwg.org/dwc/terms/stateProvince",
                 HAS_LOCATION_PREDICATE_URI,
             ),
         ];

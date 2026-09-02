@@ -8,7 +8,8 @@ Occurrence を地図上に表示する。
 - 元データに緯度経度がなく、地名情報だけがある記録は、Occurrence登録時に Nominatim で Geocoding して表示用座標を付与する
 - 元座標と Nominatim 由来座標は、RDF上の由来とフロント表示の両方で区別する
 - MVP の地図APIは、閲覧権限のある座標付きOccurrenceを基本的に全件返す
-- bbox、taxon、年代などによる地図APIフィルターは将来拡張とする
+- 任意の Darwin Core predicate による地図filterは通常のデータ検索と同じcontractで提供する
+- bboxなどの空間filterは将来拡張とする
 
 ---
 
@@ -236,8 +237,33 @@ georeferenceSources == https://nominatim.openstreetmap.org/
 
 ### Endpoint
 
+全件取得。
+
 ```text
 GET /occurrences/map
+```
+
+任意Darwin Core条件での絞り込み。
+
+```text
+POST /occurrences/map/search
+Content-Type: application/json
+```
+
+`POST /occurrences/map/search` の `filters` は `POST /occurrences/search` と同じ形式を使う。
+複数filterはANDで評価する。
+
+```json
+{
+  "filters": [
+    {
+      "predicate": "http://rs.tdwg.org/dwc/terms/stateProvince",
+      "value": "Kyoto",
+      "value_type": "literal",
+      "match": "exact"
+    }
+  ]
+}
 ```
 
 ### 基本動作
@@ -305,7 +331,9 @@ GeoJSON座標順は `[longitude, latitude]` とする。
 - MapLibre GL JS で地図を表示する
 - 背景地図は OpenFreeMap Liberty style を使う
 - 背景地図は OpenStreetMap 由来の詳細なvector mapを表示する
-- `GET /occurrences/map` を読み込む
+- 初期表示は全件相当の地図データを読み込む
+- 任意DwC条件を適用する場合は `POST /occurrences/map/search` を使う
+- 検索条件UIはデータ検索画面と共通化し、複数条件はANDとする
 - GeoJSONのPointを描画する
 - `coordinateSource=original` と `coordinateSource=nominatim` は別layerにする
 - 両layerは見た目を変える
@@ -337,7 +365,7 @@ https://tiles.openfreemap.org/styles/liberty
 
 ## OpenAPI
 
-`GET /occurrences/map` をOpenAPIへ追加する。
+`GET /occurrences/map` と `POST /occurrences/map/search` をOpenAPIへ追加する。
 
 GeoJSON response schemaはbackend DTOとして定義する。
 
