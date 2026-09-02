@@ -178,6 +178,7 @@ pub struct UpdatePaperSourceMetadataResponse {
 pub struct PaperSourceOccurrenceCandidate {
     pub scientific_name: String,
     pub locality: Option<String>,
+    pub country: Option<String>,
     pub event_date: Option<String>,
     pub decimal_latitude: Option<f64>,
     pub decimal_longitude: Option<f64>,
@@ -496,6 +497,10 @@ pub async fn extract_occurrences(
                 scientific_name,
                 locality: candidate
                     .locality
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
+                country: candidate
+                    .country
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty()),
                 event_date: candidate
