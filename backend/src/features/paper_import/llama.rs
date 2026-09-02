@@ -167,8 +167,9 @@ impl LlamaClient {
             .filter(|content| !content.trim().is_empty())
             .ok_or(LlamaError::InvalidResponse)?;
 
-        let result: OccurrenceExtractionResult =
+        let mut result: OccurrenceExtractionResult =
             serde_json::from_str(&content).map_err(|_| LlamaError::InvalidResponse)?;
+        sanitize_event_dates(&mut result);
         validate_occurrences(&result)?;
         Ok(result)
     }
@@ -253,10 +254,7 @@ fn occurrence_response_format() -> Value {
                         "properties": {
                             "scientificName": { "type": "string", "minLength": 1 },
                             "locality": { "type": ["string", "null"] },
-                            "eventDate": {
-                                "type": ["string", "null"],
-                                "pattern": "^\\d{4}(-\\d{2}(-\\d{2})?)?(\\/\\d{4}(-\\d{2}(-\\d{2})?)?)?$"
-                            }
+                            "eventDate": { "type": ["string", "null"] }
                         }
                     }
                 }
@@ -265,16 +263,19 @@ fn occurrence_response_format() -> Value {
     })
 }
 
+fn sanitize_event_dates(result: &mut OccurrenceExtractionResult) {
+    for occurrence in &mut result.occurrences {
+        occurrence.event_date = occurrence
+            .event_date
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| valid_event_date(value));
+    }
+}
+
 fn validate_occurrences(result: &OccurrenceExtractionResult) -> Result<(), LlamaError> {
     for occurrence in &result.occurrences {
         if occurrence.scientific_name.trim().is_empty() {
-            return Err(LlamaError::InvalidOccurrence);
-        }
-        if occurrence
-            .event_date
-            .as_deref()
-            .is_some_and(|value| !valid_event_date(value))
-        {
             return Err(LlamaError::InvalidOccurrence);
         }
         if occurrence
@@ -439,7 +440,7 @@ mod tests {
         json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":"Tokyo","eventDate":"1998-06-04"}]}"#
+                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\",\"eventDate\":\"1998-06-04\"}]}"#
                 }
             }]
         })
@@ -499,6 +500,11 @@ mod tests {
         assert_eq!(
             occurrence_schema["properties"]["eventDate"]["type"],
             json!(["string", "null"])
+        );
+        assert!(
+            occurrence_schema["properties"]["eventDate"]
+                .get("pattern")
+                .is_none()
         );
         assert!(
             occurrence_schema["properties"]
@@ -573,7 +579,7 @@ mod tests {
         assert!(content[1]["text"]
             .as_str()
             .is_some_and(|text| text.contains("テキストは抽出できませんでした")));
-        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
+        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZU=");
         assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
     }
 
@@ -595,17 +601,12 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":" ","locality":null,"eventDate":null,"decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\" \",\"locality\":null,\"eventDate\":null,\"decimalLatitude\":null,\"decimalLongitude\":null}]}"#}}]}),
                 "invalid_occurrence",
             ),
             (
                 StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"eventDate":"1998-13","decimalLatitude":null,"decimalLongitude":null}]}"#}}]}),
-                "invalid_occurrence",
-            ),
-            (
-                StatusCode::OK,
-                json!({"choices":[{"message":{"content":r#"{"occurrences":[{"scientificName":"A species","locality":null,"eventDate":null,"decimalLatitude":91.0,"decimalLongitude":0.0}]}"#}}]}),
+                json!({"choices":[{"message":{"content":r#"{\"occurrences\":[{\"scientificName\":\"A species\",\"locality\":null,\"eventDate\":null,\"decimalLatitude\":91.0,\"decimalLongitude\":0.0}]}"#}}]}),
                 "invalid_occurrence",
             ),
         ];
@@ -629,12 +630,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn llama_client_discards_invalid_event_date_without_losing_occurrence() {
+        let (_directory, pages) = test_page_images().await;
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":\"Tokyo\",\"eventDate\":\"1998-13\"}]}"#
+                }
+            }]
+        });
+        let (endpoint, _, server) = start_mock_llama(StatusCode::OK, response).await;
+        let client = LlamaClient::new(&endpoint, "test-model", Duration::from_secs(1))
+            .expect("llama client should initialize");
+
+        let result = client
+            .extract_occurrences_from_parts("text", &pages)
+            .await
+            .expect("invalid event date alone must not fail occurrence extraction");
+
+        assert_eq!(result.occurrences.len(), 1);
+        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(result.occurrences[0].event_date, None);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn llama_client_rejects_unknown_occurrence_json_fields() {
         let (_directory, pages) = test_page_images().await;
         let response = json!({
             "choices": [{
                 "message": {
-                    "content": r#"{"occurrences":[{"scientificName":"Metaphire hilgendorfi","locality":null,"eventDate":null,"decimalLatitude":null,"decimalLongitude":null,"inventedField":"must not be accepted"}]}"#
+                    "content": r#"{\"occurrences\":[{\"scientificName\":\"Metaphire hilgendorfi\",\"locality\":null,\"eventDate\":null,\"decimalLatitude\":null,\"decimalLongitude\":null,\"inventedField\":\"must not be accepted\"}]}"#
                 }
             }]
         });
@@ -677,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_occurrence_coordinate_ranges_and_event_dates() {
+    fn validates_occurrence_coordinate_ranges() {
         let valid = OccurrenceExtractionResult {
             occurrences: vec![OccurrenceCandidate {
                 scientific_name: "Metaphire hilgendorfi".to_string(),
@@ -693,7 +719,7 @@ mod tests {
             occurrences: vec![OccurrenceCandidate {
                 scientific_name: "Metaphire hilgendorfi".to_string(),
                 locality: None,
-                event_date: Some("June 1998".to_string()),
+                event_date: None,
                 decimal_latitude: Some(91.0),
                 decimal_longitude: None,
             }],
@@ -702,6 +728,33 @@ mod tests {
             validate_occurrences(&invalid),
             Err(LlamaError::InvalidOccurrence)
         ));
+    }
+
+    #[test]
+    fn sanitizes_event_dates_without_rejecting_occurrence() {
+        let mut result = OccurrenceExtractionResult {
+            occurrences: vec![
+                OccurrenceCandidate {
+                    scientific_name: "Metaphire hilgendorfi".to_string(),
+                    locality: Some("Tokyo".to_string()),
+                    event_date: Some(" 1998-06 ".to_string()),
+                    decimal_latitude: None,
+                    decimal_longitude: None,
+                },
+                OccurrenceCandidate {
+                    scientific_name: "Amynthas corticis".to_string(),
+                    locality: Some("Nara".to_string()),
+                    event_date: Some("June 1998".to_string()),
+                    decimal_latitude: None,
+                    decimal_longitude: None,
+                },
+            ],
+        };
+
+        sanitize_event_dates(&mut result);
+
+        assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06"));
+        assert_eq!(result.occurrences[1].event_date, None);
     }
 
     #[test]
