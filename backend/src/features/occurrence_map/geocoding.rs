@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use oxrdf::{GraphName, Literal, NamedNode, Quad, Term, vocab::xsd};
+use oxrdf::{Literal, NamedNode, Quad, Term, vocab::xsd};
 use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use serde_json::Value;
 
