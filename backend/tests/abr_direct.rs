@@ -192,10 +192,10 @@ async fn abr_resolution_drives_nominatim_fallback_and_adds_coordinates() {
     let geocoder = FallbackGeocoder {
         queries: queries.clone(),
     };
-    let input = br#"_:o <http://rs.tdwg.org/dwc/terms/locality> "滋賀県大津市勝谷町採集地点" <https://bio-database.net/graphs/occurrences> .
+    let input = r#"_:o <http://rs.tdwg.org/dwc/terms/locality> "滋賀県大津市勝谷町採集地点" <https://bio-database.net/graphs/occurrences> .
 _:o <http://rs.tdwg.org/dwc/terms/country> "Japan" <https://bio-database.net/graphs/occurrences> ."#;
 
-    let output = enrich_nquads_with_geocoding_and_abr(input, &geocoder, Some(&abr))
+    let output = enrich_nquads_with_geocoding_and_abr(input.as_bytes(), &geocoder, Some(&abr))
         .await
         .expect("ABR-backed geocoding should complete");
     let text = String::from_utf8(output).unwrap();
