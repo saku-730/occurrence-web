@@ -180,6 +180,8 @@ fn nonempty(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use sqlx::postgres::PgPoolOptions;
+
     use super::*;
 
     #[test]
@@ -213,5 +215,72 @@ mod tests {
     #[test]
     fn nonmatching_prefix_does_not_destroy_locality() {
         assert_eq!(consume_prefix("大津市勝谷町", "京都市"), "大津市勝谷町");
+    }
+
+    #[tokio::test]
+    async fn resolves_hierarchy_from_postgres_master_when_database_is_available() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("administrative master test database should connect");
+
+        sqlx::query(
+            "INSERT INTO admin_master.jp_prefectures (pref_code, name) VALUES ('98', '試験県')",
+        )
+        .execute(&pool)
+        .await
+        .expect("test prefecture should insert");
+        sqlx::query(
+            r#"
+            INSERT INTO admin_master.jp_municipalities
+                (lg_code, pref_code, match_name, city)
+            VALUES ('980001', '98', '試験市', '試験市')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("test municipality should insert");
+        sqlx::query(
+            r#"
+            INSERT INTO admin_master.jp_machiaza
+                (lg_code, machiaza_id, match_name, oaza_cho, rsdt_addr_flg)
+            VALUES ('980001', '0000001', '試験町', '試験町', 0)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("test machiaza should insert");
+
+        let resolved = resolve_administrative_location(
+            &pool,
+            "Japan",
+            " 試験県　試験市 試験町 採集地点 ",
+        )
+        .await
+        .expect("master lookup should succeed")
+        .expect("Japanese master should resolve the test locality");
+
+        assert_eq!(resolved.country_code, "JP");
+        assert_eq!(resolved.prefecture_code, "98");
+        assert_eq!(resolved.prefecture, "試験県");
+        assert_eq!(resolved.municipality_code.as_deref(), Some("980001"));
+        assert_eq!(resolved.municipality.as_deref(), Some("試験市"));
+        assert_eq!(resolved.machiaza_id.as_deref(), Some("0000001"));
+        assert_eq!(resolved.machiaza.as_deref(), Some("試験町"));
+        assert_eq!(resolved.remainder.as_deref(), Some("採集地点"));
+        assert_eq!(resolved.match_level, AdministrativeMatchLevel::Machiaza);
+
+        sqlx::query("DELETE FROM admin_master.jp_municipalities WHERE lg_code = '980001'")
+            .execute(&pool)
+            .await
+            .expect("test municipality should clean up");
+        sqlx::query("DELETE FROM admin_master.jp_prefectures WHERE pref_code = '98'")
+            .execute(&pool)
+            .await
+            .expect("test prefecture should clean up");
     }
 }
