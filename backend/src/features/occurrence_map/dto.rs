@@ -1,5 +1,12 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use crate::features::occurrences::dto::SearchOccurrenceFilter;
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct OccurrenceMapSearchRequest {
+    pub filters: Vec<SearchOccurrenceFilter>,
+}
 
 #[derive(Debug, Serialize, PartialEq, ToSchema)]
 pub struct OccurrenceMapFeatureCollection {
