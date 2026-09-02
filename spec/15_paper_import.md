@@ -221,6 +221,28 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 - `eventDate = null` の場合は空のeventDate行を自動追加しない
 - ユーザーは従来どおり任意のDarwin Core項目を追加・削除・編集できる
 
+### 全Occurrenceへの共通項目一括適用
+
+論文単位で共通するDarwin Core項目を各Occurrenceへ手作業で繰り返し入力する負担を減らすため、review UIに共通項目の一括適用機能を設ける。
+
+- ユーザーはDarwin Coreのpredicateと値を1組指定する
+- 「全N件に適用」で現在review対象になっている全Occurrenceへ適用する
+- 対象Occurrenceに同じpredicateが存在しなければ新しい入力行を追加する
+- 同じpredicateが既に存在する場合は重複行を新設せず、既存の同predicate行の値を指定値へ更新する
+- 適用後の値は通常の個別編集と同じ状態であり、ユーザーがOccurrenceごとに再編集・削除できる
+- 一括適用操作だけではbackendへ保存しない。最終のpaper batch registration時に通常の入力行としてN-Quadsへ含める
+- `dwciri:toTaxon` はGBIF URIとscientificNameが連動するため、この単純な共通値一括適用の対象外とする
+- predicate/valueの空入力、predicateの不正URI、URI値の不正文字は適用前にfrontendで拒否する
+- 登録処理中および登録完了後は一括適用を無効化する
+
+例。
+
+```text
+dwc:basisOfRecord = PreservedSpecimen
+```
+
+を指定すると、review中の全Occurrenceに同じ `dwc:basisOfRecord` が設定される。
+
 ---
 
 ## 不採用・変更済み案
@@ -306,3 +328,6 @@ LLM抽出後の各Occurrenceは次を初期表示する。
 - Markdownコードフェンス等の前後文字があるJSONを救済できる
 - per-Occurrenceの未知フィールドがあっても既知フィールドを抽出できる
 - valid responseを従来どおりparseできる
+- 共通項目一括適用でpredicateがないOccurrenceには1行追加される
+- 共通項目一括適用で同predicateが既にあるOccurrenceには重複行を増やさず値が更新される
+- `dwciri:toTaxon` は単純な一括適用対象にならない
