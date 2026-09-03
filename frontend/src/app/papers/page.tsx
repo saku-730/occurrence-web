@@ -114,41 +114,50 @@ export default function PapersPage() {
             <div className="border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3 text-sm text-[#526168]">
               {papers.length}件
             </div>
-            <ul className="divide-y divide-[#e3e8ea]">
-              {papers.map((paper) => (
-                <li key={paper.id} className="px-5 py-5">
-                  <h2 className="text-base font-medium leading-6">
-                    <Link
-                      href={`/occurrences/search?sourcePaper=${encodeURIComponent(paper.id)}`}
-                      className="text-[#176b57] underline decoration-[#aab6bb] underline-offset-2 hover:text-[#125746]"
-                    >
-                      {paper.title?.trim() || "タイトル未取得"}
-                    </Link>
-                  </h2>
-                  <dl className="mt-3 grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[9rem_1fr]">
-                    <dt className="text-[#65737a]">DOI</dt>
-                    <dd className="min-w-0 break-all text-[#344249]">
-                      {paper.doi ? (
-                        <a
-                          href={doiUrl(paper.doi)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline decoration-[#aab6bb] underline-offset-2 hover:text-black"
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                <thead className="border-b border-[#d8dfe2] bg-[#f7f9f9] text-xs text-[#526168]">
+                  <tr>
+                    <th className="w-1/2 px-5 py-3 font-medium">タイトル</th>
+                    <th className="w-1/4 px-5 py-3 font-medium">DOI</th>
+                    <th className="whitespace-nowrap px-5 py-3 font-medium">
+                      インポート日時
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#e3e8ea]">
+                  {papers.map((paper) => (
+                    <tr key={paper.id} className="hover:bg-[#f8faf9]">
+                      <td className="px-5 py-4 align-top font-medium leading-6">
+                        <Link
+                          href={`/occurrences/search?sourcePaper=${encodeURIComponent(paper.id)}`}
+                          className="text-[#176b57] underline decoration-[#aab6bb] underline-offset-2 hover:text-[#125746]"
                         >
-                          {paper.doi}
-                        </a>
-                      ) : (
-                        "-"
-                      )}
-                    </dd>
-                    <dt className="text-[#65737a]">最初のインポート日時</dt>
-                    <dd className="text-[#344249]">
-                      {formatImportedAt(paper.first_imported_at)}
-                    </dd>
-                  </dl>
-                </li>
-              ))}
-            </ul>
+                          {paper.title?.trim() || "タイトル未取得"}
+                        </Link>
+                      </td>
+                      <td className="max-w-72 break-all px-5 py-4 align-top text-[#344249]">
+                        {paper.doi ? (
+                          <a
+                            href={doiUrl(paper.doi)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline decoration-[#aab6bb] underline-offset-2 hover:text-black"
+                          >
+                            {paper.doi}
+                          </a>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-4 align-top text-[#344249]">
+                        {formatImportedAt(paper.first_imported_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
       </main>
