@@ -39,6 +39,15 @@
 
 ---
 
+## PostgreSQLテストデータの分離
+
+- 共有または開発用PostgreSQLのtableをテスト開始時に`TRUNCATE`しない
+- 認証serviceテストは、public tableと同じ構造を持つconnection単位のtemporary tableを使用する
+- temporary tableはテスト用connection終了時に自動削除し、テスト開始前から存在するデータへ影響を与えない
+- temporary tableを使用できない結合テストでは、テスト内で生成したUUIDやemailに一致するレコードだけを外部キーの子から順に削除する
+
+---
+
 ## 認証テスト
 
 必須。

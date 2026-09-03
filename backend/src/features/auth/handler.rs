@@ -13,7 +13,7 @@ use super::{
         CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
         ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
         PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse,
-        RegisterRequest, RegisterResponse, UserSummaryResponse,
+        RegisterRequest, RegisterResponse, UpdateUserNameRequest, UserSummaryResponse,
     },
     mail::{MailError, send_mail},
     repository::AuthRepository,
@@ -519,6 +519,38 @@ pub async fn me(
     };
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/auth/me",
+    request_body = UpdateUserNameRequest,
+    responses(
+        (status = 200, description = "Update current user's username", body = CurrentUserResponse),
+        (status = 400, description = "Invalid username", body = ErrorResponse),
+        (status = 401, description = "Invalid or missing session", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    ),
+    tag = "auth"
+)]
+pub async fn update_user_name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateUserNameRequest>,
+) -> Result<(StatusCode, Json<CurrentUserResponse>), AuthHandlerError> {
+    let session_token = extract_session_token(&headers)?;
+    let output =
+        AuthService::update_user_name(&state.posgre, session_token, payload.user_name).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(CurrentUserResponse {
+            user_id: output.user_id,
+            email: output.email,
+            user_name: output.user_name,
+            role: output.role,
+        }),
+    ))
 }
 
 #[utoipa::path(

@@ -4,7 +4,7 @@ use crate::features::auth::dto::{
     CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse, ErrorResponse,
     LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
     PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse, RegisterRequest,
-    RegisterResponse,
+    RegisterResponse, UpdateUserNameRequest,
 };
 
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
@@ -32,6 +32,7 @@ use crate::features::occurrences::dto::{
         crate::features::auth::handler::login,
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
+        crate::features::auth::handler::update_user_name,
         crate::features::occurrences::handler::create_occurrence,
         crate::features::occurrences::handler::list_darwin_core_terms,
         crate::features::occurrences::handler::search_occurrences,
@@ -59,6 +60,7 @@ use crate::features::occurrences::dto::{
             LoginResponse,
             LogoutResponse,
             CurrentUserResponse,
+            UpdateUserNameRequest,
             CreateOccurrenceResponse,
             DeleteOccurrenceResponse,
             DarwinCoreTermResponse,

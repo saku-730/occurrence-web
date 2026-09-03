@@ -338,6 +338,18 @@
 
 - [ ] `GET /users/{user_id}`で既存ユーザーのuser_nameを返す`user_summary_route_returns_user_name_for_existing_user`
 
+## Username update
+
+### service
+
+- [x] 有効sessionと前後空白を含む新しいusernameを渡すと、本人のusernameだけをtrimして更新する`update_user_name_updates_authenticated_user_with_trimmed_value`
+- [x] 空または空白だけのusernameを拒否し、既存usernameを変更しない`update_user_name_rejects_blank_value_without_changing_user`
+
+### app
+
+- [x] 有効sessionで`PATCH /auth/me`へusernameを送ると、本人のusernameを更新して新しいユーザー情報を返す`update_current_user_name_route_updates_authenticated_user`
+- [x] 未ログインで`PATCH /auth/me`を呼ぶと401を返す`update_current_user_name_route_requires_login`
+
 ## Paper Import
 
 ### service

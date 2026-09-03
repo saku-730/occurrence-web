@@ -274,6 +274,28 @@ impl AuthRepository {
         Ok(row)
     }
 
+    pub async fn update_user_name(
+        db: &PgPool,
+        user_id: Uuid,
+        user_name: &str,
+    ) -> Result<bool, sqlx::Error> {
+        // username変更もusersの更新履歴に含めるためupdated_atを同時に進める。
+        let result = sqlx::query(
+            r#"
+            UPDATE users
+            SET user_name = $2,
+                updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(user_name)
+        .execute(db)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn create_session(
         //ログインセッション作成。
         db: &PgPool,

@@ -11,6 +11,7 @@ sudo apt update
 sudo apt upgrade 
 sudo apt install build-essential
 sudo apt install pkg-config libssl-dev
+sudo apt install poppler-utils
 ```
 
 ### Repository

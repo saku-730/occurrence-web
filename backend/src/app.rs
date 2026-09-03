@@ -11,7 +11,7 @@ use crate::{
     features::{
         auth::handler::{
             complete_registration, login, logout, me, pre_register, request_password_reset,
-            reset_password, user_summary,
+            reset_password, update_user_name, user_summary,
         },
         media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, delete_media, get_media, upload_media},
         occurrences::handler::{
@@ -36,7 +36,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/reset_password", post(reset_password))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
-        .route("/auth/me", get(me))
+        .route("/auth/me", get(me).patch(update_user_name))
         .route("/users/{user_id}", get(user_summary))
         // media: 添付ファイルのupload/download/deleteを扱う。まずはuploadを接続する。
         .route(
@@ -90,7 +90,7 @@ mod tests {
         http::{Method, Request, StatusCode, header},
     };
     use sha2::Digest;
-    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
     use tower::util::ServiceExt; // oneshot
 
     use crate::features::media::service::{
@@ -109,6 +109,37 @@ mod tests {
 
     // multipart正常系でinferの実データ判定を通すJPEG signature。
     const TEST_JPEG_BYTES: &[u8] = &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00];
+
+    fn isolated_test_pool(database_url: &str) -> PgPool {
+        PgPoolOptions::new()
+            // PostgreSQLのTEMP TABLEはconnection単位のため、全requestで同じconnectionを使う。
+            .max_connections(1)
+            .after_connect(|connection, _metadata| {
+                Box::pin(async move {
+                    // public tableと同名の一時tableを先に解決させ、appテストによる
+                    // INSERT/UPDATE/DELETEが既存の開発データへ到達しないようにする。
+                    connection
+                        .execute(
+                            r#"
+                            CREATE TEMPORARY TABLE users
+                                (LIKE public.users INCLUDING ALL);
+                            CREATE TEMPORARY TABLE pending_registrations
+                                (LIKE public.pending_registrations INCLUDING ALL);
+                            CREATE TEMPORARY TABLE sessions
+                                (LIKE public.sessions INCLUDING ALL);
+                            CREATE TEMPORARY TABLE password_reset_tokens
+                                (LIKE public.password_reset_tokens INCLUDING ALL);
+                            CREATE TEMPORARY TABLE media_objects
+                                (LIKE public.media_objects INCLUDING ALL);
+                            "#,
+                        )
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_lazy(database_url)
+            .expect("failed to create isolated lazy database pool")
+    }
 
     // appテストはrouterを直接叩くため、実HTTP serverを立てずにAppStateだけ構築する。
     fn test_state() -> AppState {
@@ -152,9 +183,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
-            .connect_lazy(&config.posgre.url)
-            .expect("failed to create lazy database pool");
+        let posgre = isolated_test_pool(&config.posgre.url);
 
         AppState::new(config, posgre, Arc::new(NoopOccurrenceRdfStore))
     }
@@ -226,9 +255,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
-            .connect_lazy(&config.posgre.url)
-            .expect("failed to create lazy database pool");
+        let posgre = isolated_test_pool(&config.posgre.url);
 
         AppState::new_with_media_object_store(
             config,
@@ -280,9 +307,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
-            .connect_lazy(&config.posgre.url)
-            .expect("failed to create lazy database pool");
+        let posgre = isolated_test_pool(&config.posgre.url);
 
         AppState::new(config, posgre, occurrence_rdf_store)
     }
@@ -3971,6 +3996,71 @@ mod tests {
         assert_eq!(body["email"], email);
         assert_eq!(body["user_name"], "saku");
         assert_eq!(body["role"], "editor");
+    }
+
+    #[tokio::test]
+    async fn update_current_user_name_route_updates_authenticated_user() {
+        let state = test_state();
+        let db = state.posgre.clone();
+        let app = build_app(state);
+        let email = format!("route-update-name-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password).expect("password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "before-name", &password_hash)
+            .await
+            .expect("user should be created");
+        let login = AuthService::login(&db, email.clone(), password.to_string())
+            .await
+            .expect("login should succeed");
+        let body = serde_json::json!({ "user_name": "  after-name  " });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PATCH)
+                    .uri("/auth/me")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(COOKIE, format!("session={}", login.session_token))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+        assert_eq!(body["email"], email);
+        assert_eq!(body["user_name"], "after-name");
+
+        let saved = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("updated user query should succeed")
+            .expect("updated user should exist");
+        assert_eq!(saved.user_name, "after-name");
+    }
+
+    #[tokio::test]
+    async fn update_current_user_name_route_requires_login() {
+        let state = test_state();
+        let app = build_app(state);
+        let body = serde_json::json!({ "user_name": "after-name" });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::PATCH)
+                    .uri("/auth/me")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

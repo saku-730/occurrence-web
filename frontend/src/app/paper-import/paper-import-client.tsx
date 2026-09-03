@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
@@ -270,7 +271,7 @@ export function PaperImportClient() {
       <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
         <SiteHeader />
         <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8">
-          <h1 className="mb-6 text-2xl font-semibold">論文インポート</h1>
+          <PaperImportHeading />
           <section className="grid min-h-56 place-items-center rounded-md border border-[#d8dfe2] bg-white px-6 py-12 text-center">
             <p className="text-sm text-[#65737a]">{message}</p>
           </section>
@@ -283,7 +284,7 @@ export function PaperImportClient() {
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
       <SiteHeader />
       <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8">
-        <h1 className="mb-6 text-2xl font-semibold">論文インポート</h1>
+        <PaperImportHeading />
 
         <section className="overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
           <div className="border-b border-[#d8dfe2] bg-[#eef2f3] px-5 py-3">
@@ -421,6 +422,20 @@ export function PaperImportClient() {
           </section>
         )}
       </main>
+    </div>
+  );
+}
+
+function PaperImportHeading() {
+  return (
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <h1 className="text-2xl font-semibold">論文インポート</h1>
+      <Link
+        href="/papers"
+        className="rounded-md border border-[#c9d2d6] bg-white px-4 py-2 text-sm font-medium text-[#344249] hover:bg-[#eef2f3]"
+      >
+        インポート済み論文
+      </Link>
     </div>
   );
 }

@@ -85,6 +85,12 @@ pub struct CurrentUserResponse {
     pub role: String,
 }
 
+// 更新対象のuser_idはsessionから決定し、クライアントには指定させない。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateUserNameRequest {
+    pub user_name: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UserSummaryResponse {
     pub user_id: uuid::Uuid,
