@@ -9,8 +9,9 @@ export class ApiError extends Error {
 
 /**
  * Calls the Rust backend through the same-origin Next.js layer.
- * Most endpoints use the generic external rewrite. Long-running or recovery-sensitive
- * paper operations use dedicated Route Handlers instead.
+ * Most endpoints use the generic external rewrite. Long-running paper
+ * occurrence extraction uses a dedicated Route Handler instead so the rewrite
+ * proxy cannot reset the socket while the local LLM is still processing.
  * Authentication uses the backend's session cookie, so credentials are always
  * included here rather than relying on every caller to remember that option.
  */
@@ -31,9 +32,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
 function resolveApiUrl(path: string): string {
   if (/^\/paper-imports\/[^/]+\/extract-occurrences$/.test(path)) {
-    return `/api${path}`;
-  }
-  if (/^\/papers\/[^/]+\/occurrences\/batch$/.test(path)) {
     return `/api${path}`;
   }
   return `${API_PREFIX}${path}`;
