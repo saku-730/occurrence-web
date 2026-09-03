@@ -17,6 +17,13 @@ const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
 const SOURCE_PAPER_PREDICATE = "https://bio-database.net/terms/sourcePaper";
 const USER_URI_BASE = "https://bio-database.net/users/";
 const PAPER_URI_BASE = "https://bio-database.net/papers/";
+const API_PREFIX = "/api/backend";
+const RDF_TYPE_PREDICATE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const INTERMEDIATE_RELATION_PREDICATES = new Set([
+  "https://bio-database.net/terms/hasIdentification",
+  "https://bio-database.net/terms/hasEvent",
+  "https://bio-database.net/terms/hasLocation",
+]);
 
 interface CurrentUser {
   user_id: string;
@@ -53,6 +60,11 @@ interface DeleteOccurrenceResponse {
   deleted: boolean;
 }
 
+interface CsvOccurrence {
+  occurrenceId: string;
+  valuesByPredicate: Map<string, string[]>;
+}
+
 type SearchStatus = "loading" | "ready" | "unauthenticated" | "error";
 
 export default function OccurrenceSearchPage() {
@@ -70,6 +82,8 @@ export default function OccurrenceSearchPage() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteResultMessage, setDeleteResultMessage] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -183,6 +197,7 @@ export default function OccurrenceSearchPage() {
       setSelectedOccurrenceIds(new Set());
       setIsLabelPreviewOpen(false);
       setDeleteResultMessage(null);
+      setExportError(null);
       if (cursor === null) {
         setAppliedFilters(normalizedFilters);
         setAppliedOwnOnly(searchOwnOnly);
@@ -273,6 +288,28 @@ export default function OccurrenceSearchPage() {
     setIsDeleting(false);
   }
 
+  async function exportSelectedOccurrences() {
+    if (selectedOccurrences.length === 0 || isExporting) return;
+
+    setIsExporting(true);
+    setExportError(null);
+
+    try {
+      const occurrences = await Promise.all(
+        selectedOccurrences.map(async (occurrence) => {
+          const nquads = await fetchOccurrenceNQuads(occurrence.occurrence_id);
+          return buildCsvOccurrence(occurrence.occurrence_id, nquads);
+        }),
+      );
+      const csv = buildOccurrencesCsv(occurrences);
+      downloadCsv(csv, `occurrences-${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch {
+      setExportError("選択したデータをCSVに出力できませんでした。");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
       <SiteHeader />
@@ -340,6 +377,14 @@ export default function OccurrenceSearchPage() {
               {isDeleting ? "削除中" : "一括削除"}
             </button>
             <button
+              className="h-10 rounded-md border border-[#526168] bg-white px-4 text-sm font-medium text-[#344249] hover:bg-[#eef2f3] disabled:cursor-not-allowed disabled:border-[#c9d0d3] disabled:text-[#8d999e] disabled:hover:bg-white"
+              disabled={selectedOccurrences.length === 0 || isExporting}
+              onClick={() => void exportSelectedOccurrences()}
+              type="button"
+            >
+              {isExporting ? "出力中" : "CSVエクスポート"}
+            </button>
+            <button
               className="h-10 rounded-md border border-[#176b57] bg-white px-4 text-sm font-medium text-[#176b57] hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:border-[#b8c3c8] disabled:text-[#829b95] disabled:hover:bg-white"
               disabled={selectedOccurrences.length === 0}
               onClick={() => setIsLabelPreviewOpen(true)}
@@ -352,6 +397,12 @@ export default function OccurrenceSearchPage() {
           {deleteResultMessage ? (
             <p aria-live="polite" className="mb-3 text-right text-sm text-[#526168]">
               {deleteResultMessage}
+            </p>
+          ) : null}
+
+          {exportError ? (
+            <p aria-live="polite" className="mb-3 text-right text-sm text-[#a82f2f]">
+              {exportError}
             </p>
           ) : null}
 
@@ -552,4 +603,144 @@ function formatDate(value: string | null): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+async function fetchOccurrenceNQuads(occurrenceId: string): Promise<string> {
+  const response = await fetch(
+    `${API_PREFIX}/occurrences/${encodeURIComponent(occurrenceId)}`,
+    {
+      cache: "no-store",
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch occurrence ${occurrenceId}`);
+  }
+
+  return response.text();
+}
+
+function buildCsvOccurrence(occurrenceId: string, nquads: string): CsvOccurrence {
+  const valuesByPredicate = new Map<string, string[]>();
+
+  for (const line of nquads.split(/\r?\n/u)) {
+    const quad = parseNQuadLine(line);
+    if (
+      !quad ||
+      quad.predicate === RDF_TYPE_PREDICATE ||
+      INTERMEDIATE_RELATION_PREDICATES.has(quad.predicate)
+    ) {
+      continue;
+    }
+
+    const value = normalizeRdfObject(quad.object);
+    const values = valuesByPredicate.get(quad.predicate) ?? [];
+    if (!values.includes(value)) values.push(value);
+    valuesByPredicate.set(quad.predicate, values);
+  }
+
+  return { occurrenceId, valuesByPredicate };
+}
+
+function parseNQuadLine(
+  line: string,
+): { predicate: string; object: string } | null {
+  const match = line
+    .trim()
+    .match(/^(?:<[^>]+>|_:[^\s]+) <([^>]+)> (.+) <[^>]+> \.$/u);
+  if (!match) return null;
+
+  return { predicate: match[1], object: match[2] };
+}
+
+function normalizeRdfObject(object: string): string {
+  if (object.startsWith("<") && object.endsWith(">")) {
+    return object.slice(1, -1);
+  }
+
+  if (!object.startsWith('"')) return object;
+
+  let escaped = false;
+  for (let index = 1; index < object.length; index += 1) {
+    const character = object[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      return decodeRdfLiteral(object.slice(1, index));
+    }
+  }
+
+  return object;
+}
+
+function decodeRdfLiteral(value: string): string {
+  return value
+    .replace(/\\U([0-9a-fA-F]{8})/gu, (_, codePoint: string) =>
+      String.fromCodePoint(Number.parseInt(codePoint, 16)),
+    )
+    .replace(/\\u([0-9a-fA-F]{4})/gu, (_, codePoint: string) =>
+      String.fromCodePoint(Number.parseInt(codePoint, 16)),
+    )
+    .replace(/\\t/gu, "\t")
+    .replace(/\\n/gu, "\n")
+    .replace(/\\r/gu, "\r")
+    .replace(/\\"/gu, '"')
+    .replace(/\\\\/gu, "\\");
+}
+
+function buildOccurrencesCsv(occurrences: CsvOccurrence[]): string {
+  const predicates = [
+    ...new Set(
+      occurrences.flatMap((occurrence) => [...occurrence.valuesByPredicate.keys()]),
+    ),
+  ];
+  const headerNames = csvHeaderNames(predicates);
+  const rows = [
+    ["occurrenceID", ...headerNames],
+    ...occurrences.map((occurrence) => [
+      occurrence.occurrenceId,
+      ...predicates.map((predicate) =>
+        (occurrence.valuesByPredicate.get(predicate) ?? []).join(" | "),
+      ),
+    ]),
+  ];
+
+  return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n");
+}
+
+function csvHeaderNames(predicates: string[]): string[] {
+  const candidates = predicates.map((predicate) => {
+    const name = predicate.split(/[\/#]/u).filter(Boolean).at(-1);
+    return name ? decodeURIComponent(name) : predicate;
+  });
+  const counts = new Map<string, number>();
+  candidates.forEach((candidate) => counts.set(candidate, (counts.get(candidate) ?? 0) + 1));
+
+  return candidates.map((candidate, index) =>
+    counts.get(candidate) === 1 ? candidate : predicates[index],
+  );
+}
+
+function escapeCsvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function downloadCsv(csv: string, filename: string) {
+  // UTF-8 BOMを付け、Excelなどで日本語を開いた場合の文字化けを防ぐ。
+  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
