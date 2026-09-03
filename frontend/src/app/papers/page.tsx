@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 
 import { SiteHeader } from "@/components/site-header";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -24,7 +25,7 @@ export default function PapersPage() {
   const [papers, setPapers] = useState<PaperListItem[]>([]);
   const [status, setStatus] = useState<LoadStatus>("loading");
 
-  const loadPapers = async (search: string) => {
+  const loadPapers = useCallback(async (search: string) => {
     setStatus("loading");
     try {
       const trimmed = search.trim();
@@ -39,11 +40,11 @@ export default function PapersPage() {
       }
       setStatus("error");
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadPapers("");
-  }, []);
+  }, [loadPapers]);
 
   const handleSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
