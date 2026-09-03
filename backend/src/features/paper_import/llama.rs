@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::{env, path::Path, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, StatusCode};
@@ -9,11 +9,9 @@ use super::preprocess::{
     PaperPdfPreprocessor, PaperPreprocessError, PreprocessedPageImage, PreprocessedPaper,
 };
 
-// Temporary hard-coded llama.cpp endpoint. Replace 127.0.0.1 with the actual
-// llama.cpp LAN host when deploying this feature.
-pub const LLAMA_CHAT_COMPLETIONS_URL: &str =
-    "http://127.0.0.1:8080/v1/chat/completions";
-pub const LLAMA_MODEL: &str = "local-model";
+const LLAMA_CHAT_COMPLETIONS_URL_ENV: &str = "LLAMA_CHAT_COMPLETIONS_URL";
+const LLAMA_MODEL_ENV: &str = "LLAMA_MODEL";
+const LLAMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(1800);
 
 pub const OCCURRENCE_EXTRACTION_PROMPT: &str = include_str!("prompt.txt");
 
@@ -94,7 +92,7 @@ pub async fn extract_occurrences_from_pdf(
     pdf_path: &Path,
 ) -> Result<OccurrenceExtractionResult, PaperLlmExtractionError> {
     let paper = PaperPdfPreprocessor::preprocess(pdf_path).await?;
-    let llama = LlamaClient::hardcoded()?;
+    let llama = LlamaClient::from_env()?;
     Ok(llama.extract_occurrences(&paper).await?)
 }
 
@@ -105,12 +103,16 @@ pub struct LlamaClient {
 }
 
 impl LlamaClient {
-    pub fn hardcoded() -> Result<Self, LlamaError> {
-        Self::new(
-            LLAMA_CHAT_COMPLETIONS_URL,
-            LLAMA_MODEL,
-            Duration::from_secs(1800),
-        )
+    /// `.env`またはprocess環境変数からllama.cppの接続設定を構築する。
+    /// 接続先をコードから分離し、開発・本番で同じbinaryを利用できるようにする。
+    pub fn from_env() -> Result<Self, LlamaError> {
+        let _ = dotenvy::dotenv();
+        let endpoint = env::var(LLAMA_CHAT_COMPLETIONS_URL_ENV)
+            .map_err(|_| LlamaError::InvalidConfiguration)?;
+        let model =
+            env::var(LLAMA_MODEL_ENV).map_err(|_| LlamaError::InvalidConfiguration)?;
+
+        Self::new(&endpoint, &model, LLAMA_REQUEST_TIMEOUT)
     }
 
     pub fn new(endpoint: &str, model: &str, timeout: Duration) -> Result<Self, LlamaError> {
@@ -410,6 +412,31 @@ mod tests {
 
     use super::*;
     use crate::features::paper_import::preprocess::PAPER_PAGE_IMAGE_MEDIA_TYPE;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = env::var(key).ok();
+            // 環境変数はprocess全体で共有されるため、このテスト群は指定どおり直列実行する。
+            unsafe { env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => env::set_var(self.key, value),
+                    None => env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[derive(Clone)]
     struct MockLlamaResponse {
@@ -884,5 +911,17 @@ mod tests {
             ),
             Err(LlamaError::InvalidConfiguration)
         ));
+    }
+
+    #[test]
+    fn llama_client_reads_endpoint_and_model_from_environment() {
+        let endpoint = "http://127.0.0.1:18080/v1/chat/completions";
+        let _endpoint_guard = EnvGuard::set(LLAMA_CHAT_COMPLETIONS_URL_ENV, endpoint);
+        let _model_guard = EnvGuard::set(LLAMA_MODEL_ENV, "environment-model");
+
+        let client = LlamaClient::from_env().expect("environment configuration should be valid");
+
+        assert_eq!(client.endpoint, endpoint);
+        assert_eq!(client.model, "environment-model");
     }
 }

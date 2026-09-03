@@ -383,6 +383,7 @@
 - [x] llama clientは500、choicesなし、assistant contentの不正JSON、空scientificName、不正緯度経度を拒否する`llama_client_rejects_upstream_and_invalid_occurrence_responses`
 - [x] llama clientはOccurrence JSONの未知フィールドを拒否する`llama_client_rejects_unknown_occurrence_json_fields`
 - [x] llama request作成時に空または読めないページ画像を拒否する`multimodal_request_rejects_empty_or_missing_page_image`
+- [x] llama clientは接続先URLとモデル名を環境変数から読み込む`llama_client_reads_endpoint_and_model_from_environment`
 
 - [x] fulltext clientは`processFulltextDocument`へPDF、`consolidateHeader=0`、`consolidateCitations=0`、XML Acceptを送信し、TEIを返す`grobid_fulltext_client_sends_expected_request_and_returns_tei`
 - [x] fulltext clientは204を`NoContent`、不正または空TEIを`InvalidResponse`として返す`grobid_fulltext_client_handles_no_content_and_invalid_tei`
