@@ -14,7 +14,9 @@ import { SiteHeader } from "@/components/site-header";
 import { ApiError, apiFetch } from "@/lib/api";
 
 const CREATOR_PREDICATE = "http://purl.org/dc/terms/creator";
+const SOURCE_PAPER_PREDICATE = "https://bio-database.net/terms/sourcePaper";
 const USER_URI_BASE = "https://bio-database.net/users/";
+const PAPER_URI_BASE = "https://bio-database.net/papers/";
 
 interface CurrentUser {
   user_id: string;
@@ -64,15 +66,39 @@ export default function OccurrenceSearchPage() {
 
   useEffect(() => {
     let active = true;
+    const sourcePaperId = new URLSearchParams(window.location.search)
+      .get("sourcePaper")
+      ?.trim();
+    const initialFilters: DarwinCoreSearchFilter[] = sourcePaperId
+      ? [
+          {
+            predicate: SOURCE_PAPER_PREDICATE,
+            value: `${PAPER_URI_BASE}${sourcePaperId}`,
+            value_type: "uri",
+            match: "exact",
+          },
+        ]
+      : [];
 
-    searchOccurrences([], null, false)
+    if (initialFilters.length > 0) {
+      setFilters(initialFilters);
+    }
+    setAppliedFilters(initialFilters);
+    setAppliedOwnOnly(false);
+
+    searchOccurrences(initialFilters, null, false)
       .then((response) => {
         if (!active) return;
         setResult(response);
         setStatus("ready");
       })
-      .catch(() => {
-        if (active) setStatus("error");
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 401) {
+          setStatus("unauthenticated");
+          return;
+        }
+        setStatus("error");
       });
 
     return () => {
