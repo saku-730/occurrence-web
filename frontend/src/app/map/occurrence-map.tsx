@@ -189,6 +189,7 @@ export function OccurrenceMap() {
         if (!active || !containerRef.current) return;
 
         setFeatureCount(data.features.length);
+        const featureGroups = groupFeaturesByExactCoordinates(data.features);
         map = new maplibregl.Map({
           container: containerRef.current,
           style: MAP_STYLE_URL,
@@ -230,7 +231,9 @@ export function OccurrenceMap() {
           });
 
           for (const layerId of ["occurrences-original", "occurrences-nominatim"]) {
-            map.on("click", layerId, (event) => showOccurrencePopup(maplibregl, map, event));
+            map.on("click", layerId, (event) =>
+              showOccurrencePopup(maplibregl, map, event, featureGroups),
+            );
             map.on("mouseenter", layerId, () => {
               if (map) map.getCanvas().style.cursor = "pointer";
             });
@@ -394,6 +397,7 @@ function showOccurrencePopup(
   maplibregl: MapLibreApi,
   map: MapLibreMap | null,
   event: MapLibreLayerEvent,
+  featureGroups: Map<string, OccurrenceMapFeature[]>,
 ) {
   if (!map) return;
   const feature = event.features?.[0];
@@ -403,6 +407,16 @@ function showOccurrencePopup(
   const longitude = Number(coordinates[0]);
   const latitude = Number(coordinates[1]);
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+
+  const groupedFeatures =
+    featureGroups.get(exactCoordinateKey([longitude, latitude])) ?? [];
+  if (groupedFeatures.length >= 2) {
+    new maplibregl.Popup({ closeButton: true })
+      .setLngLat([longitude, latitude])
+      .setDOMContent(createOccurrenceListPopup(groupedFeatures))
+      .addTo(map);
+    return;
+  }
 
   const properties = feature.properties;
   const root = document.createElement("div");
@@ -444,6 +458,88 @@ function showOccurrencePopup(
     .setLngLat([longitude, latitude])
     .setDOMContent(root)
     .addTo(map);
+}
+
+function groupFeaturesByExactCoordinates(
+  features: OccurrenceMapFeature[],
+): Map<string, OccurrenceMapFeature[]> {
+  const groups = new Map<string, OccurrenceMapFeature[]>();
+  for (const feature of features) {
+    const key = exactCoordinateKey(feature.geometry.coordinates);
+    const group = groups.get(key);
+    if (group) {
+      group.push(feature);
+    } else {
+      groups.set(key, [feature]);
+    }
+  }
+  return groups;
+}
+
+function exactCoordinateKey(coordinates: [number, number]): string {
+  return `${coordinates[0]}\u0000${coordinates[1]}`;
+}
+
+function createOccurrenceListPopup(features: OccurrenceMapFeature[]): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "min-w-64 max-w-sm text-sm";
+
+  const title = document.createElement("strong");
+  title.className = "block text-sm";
+  title.textContent = `${features.length}件のOccurrence`;
+  root.appendChild(title);
+
+  const list = document.createElement("div");
+  list.className = "mt-2 max-h-72 space-y-3 overflow-y-auto pr-1";
+
+  features.forEach((feature, index) => {
+    const properties = feature.properties;
+    const item = document.createElement("div");
+    item.className =
+      index === 0
+        ? "space-y-1"
+        : "space-y-1 border-t border-[#d8dfe2] pt-2";
+
+    const itemTitle = document.createElement("strong");
+    itemTitle.className = "block text-sm";
+    itemTitle.textContent = properties.scientificName ?? "Occurrence";
+    item.appendChild(itemTitle);
+
+    appendPopupRow(item, occurrenceLocation(properties));
+    appendPopupRow(item, properties.eventDate);
+    appendPopupRow(
+      item,
+      properties.coordinateSource === "nominatim"
+        ? "地名からNominatimで取得"
+        : "元データの座標",
+    );
+
+    if (properties.occurrenceId) {
+      const link = document.createElement("a");
+      link.href = `/occurrences/${encodeURIComponent(properties.occurrenceId)}`;
+      link.textContent = "詳細を見る";
+      link.className = "inline-block font-medium text-[#176b57] underline";
+      item.appendChild(link);
+    }
+
+    list.appendChild(item);
+  });
+
+  root.appendChild(list);
+  return root;
+}
+
+function occurrenceLocation(properties: OccurrenceMapProperties): string | null {
+  const location = [
+    properties.locality,
+    properties.municipality,
+    properties.stateProvince,
+    properties.country,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .join(", ");
+  return location || null;
 }
 
 function appendPopupRow(root: HTMLElement, value: string | null) {
