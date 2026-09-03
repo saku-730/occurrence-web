@@ -2,7 +2,7 @@ use crate::state::AppState;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{patch, post},
+    routing::{get, patch, post},
 };
 
 pub mod extraction;
@@ -12,6 +12,7 @@ pub mod gbif_handler;
 pub mod grobid;
 mod grobid_client_api;
 pub mod llama;
+pub mod list_handler;
 pub mod preprocess;
 pub mod registration_handler;
 pub mod repository;
@@ -28,6 +29,7 @@ pub fn router(state: AppState) -> Router {
                 source_handler::PAPER_SOURCE_PDF_REQUEST_BODY_LIMIT_BYTES,
             )),
         )
+        .route("/papers", get(list_handler::list_papers))
         .route(
             "/paper-sources/{source_kind}/{source_id}/bibliographic-metadata",
             patch(source_handler::update_bibliographic_metadata),
