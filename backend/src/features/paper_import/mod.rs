@@ -6,6 +6,7 @@ use axum::{
 };
 
 pub mod extraction;
+pub mod extraction_job_handler;
 pub mod fulltext;
 pub mod gbif;
 pub mod gbif_handler;
@@ -36,7 +37,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/paper-sources/{source_kind}/{source_id}/extract-occurrences",
-            post(source_handler::extract_occurrences),
+            post(extraction_job_handler::start_extraction),
+        )
+        .route(
+            "/paper-sources/{source_kind}/{source_id}/extract-occurrences/status",
+            get(extraction_job_handler::extraction_status),
         )
         .route(
             "/papers/{paper_id}/resolve-taxa",

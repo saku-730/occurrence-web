@@ -44,12 +44,30 @@ type UpdatePaperMetadataResponse = {
   requires_bibliographic_input: boolean;
 };
 
+type ExtractedPaperOccurrence = Omit<
+  PaperOccurrenceCandidate,
+  "toTaxon" | "taxonScientificName"
+>;
+
 type ExtractPaperOccurrencesResponse = {
   source_kind: "paper";
   source_id: string;
-  occurrences: Array<
-    Omit<PaperOccurrenceCandidate, "toTaxon" | "taxonScientificName">
-  >;
+  occurrences: ExtractedPaperOccurrence[];
+};
+
+type StartPaperExtractionResponse = {
+  source_kind: "paper";
+  source_id: string;
+  status: "processing";
+};
+
+type PaperExtractionStatusResponse = {
+  source_kind: "paper";
+  source_id: string;
+  status: "not_started" | "processing" | "completed" | "failed";
+  occurrences?: ExtractedPaperOccurrence[];
+  error?: string;
+  message?: string;
 };
 
 type ResolvePaperTaxaResponse = {
@@ -67,6 +85,7 @@ type ReviewedPaperOccurrencesResponse = {
 };
 
 const MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024;
+const EXTRACTION_POLL_INTERVAL_MS = 3000;
 
 export function PaperImportClient() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
@@ -441,24 +460,69 @@ function PaperImportHeading() {
 }
 
 async function extractPaper(paperId: string): Promise<ExtractPaperOccurrencesResponse> {
-  const response = await fetch(
-    `/api/papers/${encodeURIComponent(paperId)}/extract-occurrences`,
-    {
-      method: "POST",
-      credentials: "include",
-    },
-  );
+  const endpoint = `/api/papers/${encodeURIComponent(paperId)}/extract-occurrences`;
+  const startResponse = await fetch(endpoint, {
+    method: "POST",
+    credentials: "include",
+  });
 
-  if (!response.ok) {
-    const body = await readResponseBody(response);
+  if (!startResponse.ok) {
+    const body = await readResponseBody(startResponse);
     throw new ApiError(
-      `Paper occurrence extraction failed with status ${response.status}`,
-      response.status,
+      `Paper occurrence extraction failed to start with status ${startResponse.status}`,
+      startResponse.status,
       body,
     );
   }
 
-  return (await response.json()) as ExtractPaperOccurrencesResponse;
+  const started = (await startResponse.json()) as StartPaperExtractionResponse;
+  if (started.status !== "processing") {
+    throw new ApiError("Paper occurrence extraction did not start", 502, started);
+  }
+
+  for (;;) {
+    await sleep(EXTRACTION_POLL_INTERVAL_MS);
+
+    const statusResponse = await fetch(endpoint, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    });
+
+    if (!statusResponse.ok) {
+      const body = await readResponseBody(statusResponse);
+      throw new ApiError(
+        `Paper occurrence extraction status failed with status ${statusResponse.status}`,
+        statusResponse.status,
+        body,
+      );
+    }
+
+    const status = (await statusResponse.json()) as PaperExtractionStatusResponse;
+    if (status.status === "processing") continue;
+
+    if (status.status === "completed") {
+      return {
+        source_kind: status.source_kind,
+        source_id: status.source_id,
+        occurrences: status.occurrences ?? [],
+      };
+    }
+
+    if (status.status === "failed") {
+      throw new ApiError(
+        status.message ?? "Paper occurrence extraction failed",
+        502,
+        status,
+      );
+    }
+
+    throw new ApiError(
+      "Paper occurrence extraction job is no longer available",
+      409,
+      status,
+    );
+  }
 }
 
 async function resolvePaperTaxa(
@@ -527,6 +591,10 @@ function getBackendMessage(body: unknown): string | null {
     return body.message;
   }
   return null;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function formatFileSize(sizeBytes: number): string {
