@@ -117,8 +117,13 @@ export default function PapersPage() {
             <ul className="divide-y divide-[#e3e8ea]">
               {papers.map((paper) => (
                 <li key={paper.id} className="px-5 py-5">
-                  <h2 className="text-base font-medium leading-6 text-[#26343a]">
-                    {paper.title?.trim() || "タイトル未取得"}
+                  <h2 className="text-base font-medium leading-6">
+                    <Link
+                      href={`/occurrences/search?sourcePaper=${encodeURIComponent(paper.id)}`}
+                      className="text-[#176b57] underline decoration-[#aab6bb] underline-offset-2 hover:text-[#125746]"
+                    >
+                      {paper.title?.trim() || "タイトル未取得"}
+                    </Link>
                   </h2>
                   <dl className="mt-3 grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[9rem_1fr]">
                     <dt className="text-[#65737a]">DOI</dt>
