@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 const DCTERMS_CREATOR = "http://purl.org/dc/terms/creator";
 const DCTERMS_CREATED = "http://purl.org/dc/terms/created";
 const DCTERMS_MODIFIED = "http://purl.org/dc/terms/modified";
+const SOURCE_PAPER = "https://bio-database.net/terms/sourcePaper";
 const USER_URI_BASE = "https://bio-database.net/users/";
 
 export interface DarwinCoreSearchFilter {
@@ -49,6 +50,11 @@ const SYSTEM_SEARCH_TERMS: SearchTerm[] = [
     local_name: "データ更新日",
     source: "system",
   },
+  {
+    uri: SOURCE_PAPER,
+    local_name: "sourcePaper",
+    source: "system",
+  },
 ];
 
 export function emptyDarwinCoreSearchFilter(
@@ -73,7 +79,9 @@ export function activeDarwinCoreSearchFilters(
         predicate,
         value,
         value_type:
-          predicate === DCTERMS_CREATOR ? ("uri" as const) : inferSearchValueType(value),
+          predicate === DCTERMS_CREATOR || predicate === SOURCE_PAPER
+            ? ("uri" as const)
+            : inferSearchValueType(value),
         match: filter.match,
       };
     })
@@ -360,6 +368,9 @@ function CreatorSearchInput({
 function searchValuePlaceholder(predicate: string): string {
   if (predicate === DCTERMS_CREATED || predicate === DCTERMS_MODIFIED) {
     return "例: 2026-09-02T08:00:00Z";
+  }
+  if (predicate === SOURCE_PAPER) {
+    return "https://bio-database.net/papers/...";
   }
   return "検索する値";
 }
