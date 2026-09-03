@@ -49,6 +49,10 @@ interface SearchResponse {
   };
 }
 
+interface DeleteOccurrenceResponse {
+  deleted: boolean;
+}
+
 type SearchStatus = "loading" | "ready" | "unauthenticated" | "error";
 
 export default function OccurrenceSearchPage() {
@@ -63,6 +67,9 @@ export default function OccurrenceSearchPage() {
   const [status, setStatus] = useState<SearchStatus>("loading");
   const [selectedOccurrenceIds, setSelectedOccurrenceIds] = useState<Set<string>>(new Set());
   const [isLabelPreviewOpen, setIsLabelPreviewOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteResultMessage, setDeleteResultMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -99,6 +106,22 @@ export default function OccurrenceSearchPage() {
           return;
         }
         setStatus("error");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    apiFetch<CurrentUser>("/auth/me")
+      .then((user) => {
+        if (active) setCurrentUser(user);
+      })
+      .catch(() => {
+        if (active) setCurrentUser(null);
       });
 
     return () => {
@@ -159,6 +182,7 @@ export default function OccurrenceSearchPage() {
       setResult(response);
       setSelectedOccurrenceIds(new Set());
       setIsLabelPreviewOpen(false);
+      setDeleteResultMessage(null);
       if (cursor === null) {
         setAppliedFilters(normalizedFilters);
         setAppliedOwnOnly(searchOwnOnly);
@@ -186,6 +210,68 @@ export default function OccurrenceSearchPage() {
 
   const selectedOccurrences =
     result?.items.filter((item) => selectedOccurrenceIds.has(item.occurrence_id)) ?? [];
+  const deletableOccurrences = selectedOccurrences.filter(
+    (item) =>
+      currentUser !== null &&
+      (currentUser.role === "admin" || item.creator_user_id === currentUser.user_id),
+  );
+
+  async function deleteSelectedOccurrences() {
+    if (deletableOccurrences.length === 0 || isDeleting) return;
+
+    const skippedCount = selectedOccurrences.length - deletableOccurrences.length;
+    const confirmed = window.confirm(
+      `選択したデータのうち、削除可能な${deletableOccurrences.length}件を削除します。\nこの操作は取り消せません。よろしいですか？`,
+    );
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    setDeleteResultMessage(null);
+
+    const deletionResults = await Promise.allSettled(
+      deletableOccurrences.map(async (occurrence) => {
+        const response = await apiFetch<DeleteOccurrenceResponse>(
+          `/occurrences/${encodeURIComponent(occurrence.occurrence_id)}`,
+          { method: "DELETE" },
+        );
+        if (!response.deleted) {
+          throw new Error("Backend did not delete the occurrence");
+        }
+        return occurrence.occurrence_id;
+      }),
+    );
+
+    const deletedIds = new Set(
+      deletionResults.flatMap((deletionResult) =>
+        deletionResult.status === "fulfilled" ? [deletionResult.value] : [],
+      ),
+    );
+    const failedCount = deletionResults.length - deletedIds.size;
+
+    if (deletedIds.size > 0) {
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.filter((item) => !deletedIds.has(item.occurrence_id)),
+            }
+          : current,
+      );
+      setSelectedOccurrenceIds((current) => {
+        const next = new Set(current);
+        deletedIds.forEach((occurrenceId) => next.delete(occurrenceId));
+        return next;
+      });
+    }
+
+    const messageParts = [`${deletedIds.size}件を削除しました。`];
+    if (failedCount > 0) messageParts.push(`${failedCount}件の削除に失敗しました。`);
+    if (skippedCount > 0) {
+      messageParts.push(`削除権限のない${skippedCount}件は削除していません。`);
+    }
+    setDeleteResultMessage(messageParts.join(" "));
+    setIsDeleting(false);
+  }
 
   return (
     <div className="min-h-screen bg-[#f5f7f8] text-[#182126]">
@@ -246,6 +332,14 @@ export default function OccurrenceSearchPage() {
               </span>
             ) : null}
             <button
+              className="h-10 rounded-md border border-[#b94040] bg-white px-4 text-sm font-medium text-[#a82f2f] hover:bg-[#fff1f1] disabled:cursor-not-allowed disabled:border-[#c9d0d3] disabled:text-[#8d999e] disabled:hover:bg-white"
+              disabled={deletableOccurrences.length === 0 || isDeleting}
+              onClick={() => void deleteSelectedOccurrences()}
+              type="button"
+            >
+              {isDeleting ? "削除中" : "一括削除"}
+            </button>
+            <button
               className="h-10 rounded-md border border-[#176b57] bg-white px-4 text-sm font-medium text-[#176b57] hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:border-[#b8c3c8] disabled:text-[#829b95] disabled:hover:bg-white"
               disabled={selectedOccurrences.length === 0}
               onClick={() => setIsLabelPreviewOpen(true)}
@@ -254,6 +348,12 @@ export default function OccurrenceSearchPage() {
               ラベル作成
             </button>
           </div>
+
+          {deleteResultMessage ? (
+            <p aria-live="polite" className="mb-3 text-right text-sm text-[#526168]">
+              {deleteResultMessage}
+            </p>
+          ) : null}
 
           <SearchResults
             creatorNames={creatorNames}

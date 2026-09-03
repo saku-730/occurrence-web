@@ -12,6 +12,7 @@ sudo apt upgrade
 sudo apt install build-essential
 sudo apt install pkg-config libssl-dev
 sudo apt install poppler-utils
+sudo apt install postgresql-client
 ```
 
 ### Repository
