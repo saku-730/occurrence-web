@@ -16,6 +16,7 @@ pub mod llama;
 pub mod list_handler;
 pub mod preprocess;
 pub mod registration_handler;
+pub mod registration_job_handler;
 pub mod repository;
 pub mod service;
 pub mod source_handler;
@@ -54,6 +55,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/papers/{paper_id}/occurrences/batch",
             post(registration_handler::register_occurrences_batch),
+        )
+        .route(
+            "/papers/{paper_id}/occurrences/batch-jobs",
+            post(registration_job_handler::start_registration),
+        )
+        .route(
+            "/papers/{paper_id}/occurrences/batch-jobs/status",
+            get(registration_job_handler::registration_status),
         )
         .with_state(state)
 }
