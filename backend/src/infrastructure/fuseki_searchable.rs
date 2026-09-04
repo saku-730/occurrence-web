@@ -78,9 +78,7 @@ impl FusekiClient {
         let mut resolved_filters = Vec::with_capacity(filters.len());
 
         for mut filter in filters {
-            if filter.predicate == DWCIRI_TO_TAXON_PREDICATE_URI
-                && filter.value_type == "literal"
-            {
+            if needs_gbif_resolution(&filter) {
                 let Some(taxon_uri) = self.resolve_to_taxon_name(&filter.value).await? else {
                     return Ok(None);
                 };
@@ -93,6 +91,10 @@ impl FusekiClient {
 
         Ok(Some(resolved_filters))
     }
+}
+
+fn needs_gbif_resolution(filter: &SearchOccurrenceFilterInput) -> bool {
+    filter.predicate == DWCIRI_TO_TAXON_PREDICATE_URI && filter.value_type == "literal"
 }
 
 #[async_trait::async_trait]
@@ -194,18 +196,14 @@ mod tests {
             value_type: "literal".to_string(),
             match_type: "exact".to_string(),
         };
-        assert!(
-            to_taxon_literal.predicate == DWCIRI_TO_TAXON_PREDICATE_URI
-                && to_taxon_literal.value_type == "literal"
-        );
+        assert!(needs_gbif_resolution(&to_taxon_literal));
 
         let to_taxon_uri = SearchOccurrenceFilterInput {
             value: "https://www.gbif.org/species/42".to_string(),
             value_type: "uri".to_string(),
             ..to_taxon_literal.clone()
         };
-        assert!(!(to_taxon_uri.predicate == DWCIRI_TO_TAXON_PREDICATE_URI
-            && to_taxon_uri.value_type == "literal"));
+        assert!(!needs_gbif_resolution(&to_taxon_uri));
 
         let scientific_name = SearchOccurrenceFilterInput {
             predicate: "http://rs.tdwg.org/dwc/terms/scientificName".to_string(),
@@ -213,7 +211,18 @@ mod tests {
             value_type: "literal".to_string(),
             match_type: "exact".to_string(),
         };
-        assert!(!(scientific_name.predicate == DWCIRI_TO_TAXON_PREDICATE_URI
-            && scientific_name.value_type == "literal"));
+        assert!(!needs_gbif_resolution(&scientific_name));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires access to the public GBIF API"]
+    async fn gbif_resolves_annelida_to_expected_taxon_uri() {
+        let gbif = GbifClient::new().expect("GBIF client should initialize");
+        let resolved = gbif
+            .match_to_taxon("Annelida")
+            .await
+            .expect("GBIF request should succeed");
+
+        assert_eq!(resolved.as_deref(), Some("https://www.gbif.org/species/42"));
     }
 }
