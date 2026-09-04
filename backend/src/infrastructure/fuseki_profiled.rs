@@ -211,13 +211,20 @@ fn build_search_filter_patterns(
                 let object = format!("<{escaped_value}>");
 
                 if filter.predicate == DWCIRI_TO_TAXON_PREDICATE_URI {
-                    if let Some(gbif_key) = gbif_key_from_public_taxon_uri(&filter.value) {
+                    if let Some(gbif_key) = gbif_key_from_taxon_uri(&filter.value) {
+                        let public_target = format!("{GBIF_PUBLIC_TAXON_URI_BASE}{gbif_key}");
                         let internal_target = format!("{GBIF_INTERNAL_TAXON_URI_BASE}{gbif_key}");
                         let internal_taxon_var = format!("?filterInternalTaxon{index}");
 
                         patterns.push(format!(
                             r#"{{
-                        {{ {predicate_pattern} FILTER({object_var} = {object}) }}
+                        {{
+                            {predicate_pattern}
+                            FILTER(
+                                {object_var} = <{public_target}>
+                                || {object_var} = <{internal_target}>
+                            )
+                        }}
                         UNION
                         {{
                             {predicate_pattern}
@@ -231,6 +238,14 @@ fn build_search_filter_patterns(
                             )
                             GRAPH <{GBIF_BACKBONE_TAXONOMY_GRAPH_URI}> {{
                                 {internal_taxon_var} <{GBIF_PARENT_NAME_USAGE_PREDICATE_URI}>+ <{internal_target}> .
+                            }}
+                        }}
+                        UNION
+                        {{
+                            {predicate_pattern}
+                            FILTER(STRSTARTS(STR({object_var}), "{GBIF_INTERNAL_TAXON_URI_BASE}"))
+                            GRAPH <{GBIF_BACKBONE_TAXONOMY_GRAPH_URI}> {{
+                                {object_var} <{GBIF_PARENT_NAME_USAGE_PREDICATE_URI}>+ <{internal_target}> .
                             }}
                         }}
                     }}"#
@@ -249,8 +264,10 @@ fn build_search_filter_patterns(
     Ok(patterns.join("\n"))
 }
 
-fn gbif_key_from_public_taxon_uri(value: &str) -> Option<&str> {
-    let key = value.strip_prefix(GBIF_PUBLIC_TAXON_URI_BASE)?;
+fn gbif_key_from_taxon_uri(value: &str) -> Option<&str> {
+    let key = value
+        .strip_prefix(GBIF_PUBLIC_TAXON_URI_BASE)
+        .or_else(|| value.strip_prefix(GBIF_INTERNAL_TAXON_URI_BASE))?;
     if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -592,23 +609,27 @@ mod tests {
     #[test]
     fn gbif_key_parser_accepts_only_numeric_species_keys() {
         assert_eq!(
-            gbif_key_from_public_taxon_uri("https://www.gbif.org/species/42"),
+            gbif_key_from_taxon_uri("https://www.gbif.org/species/42"),
             Some("42")
         );
         assert_eq!(
-            gbif_key_from_public_taxon_uri("https://www.gbif.org/species/9782253"),
+            gbif_key_from_taxon_uri("https://www.gbif.org/species/9782253"),
             Some("9782253")
         );
         assert_eq!(
-            gbif_key_from_public_taxon_uri("https://www.gbif.org/species/"),
+            gbif_key_from_taxon_uri("https://bio-database.net/taxa/gbif/42"),
+            Some("42")
+        );
+        assert_eq!(
+            gbif_key_from_taxon_uri("https://www.gbif.org/species/"),
             None
         );
         assert_eq!(
-            gbif_key_from_public_taxon_uri("https://www.gbif.org/species/42?x=1"),
+            gbif_key_from_taxon_uri("https://www.gbif.org/species/42?x=1"),
             None
         );
         assert_eq!(
-            gbif_key_from_public_taxon_uri("https://example.org/species/42"),
+            gbif_key_from_taxon_uri("https://example.org/species/42"),
             None
         );
     }
