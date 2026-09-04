@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 
 const DCTERMS_CREATOR = "http://purl.org/dc/terms/creator";
 const DCTERMS_CREATED = "http://purl.org/dc/terms/created";
 const DCTERMS_MODIFIED = "http://purl.org/dc/terms/modified";
+const DWCIRI_TO_TAXON = "http://rs.tdwg.org/dwc/iri/toTaxon";
+const SCIENTIFIC_NAME = "http://rs.tdwg.org/dwc/terms/scientificName";
 const SOURCE_PAPER = "https://bio-database.net/terms/sourcePaper";
 const USER_URI_BASE = "https://bio-database.net/users/";
 
@@ -57,8 +59,15 @@ const SYSTEM_SEARCH_TERMS: SearchTerm[] = [
   },
 ];
 
+const SUPPLEMENTAL_DARWIN_CORE_TERMS: DarwinCoreTerm[] = [
+  {
+    uri: DWCIRI_TO_TAXON,
+    local_name: "toTaxon",
+  },
+];
+
 export function emptyDarwinCoreSearchFilter(
-  predicate = "http://rs.tdwg.org/dwc/terms/scientificName",
+  predicate = SCIENTIFIC_NAME,
 ): DarwinCoreSearchFilter {
   return {
     predicate,
@@ -99,6 +108,11 @@ export function DarwinCoreSearchFilters({
 }) {
   const [terms, setTerms] = useState<DarwinCoreTerm[]>([]);
   const [termLoadFailed, setTermLoadFailed] = useState(false);
+  const [showDefaultToTaxon, setShowDefaultToTaxon] = useState(
+    isBlankScientificNameDefault(filters),
+  );
+  const previousFiltersRef = useRef(filters);
+  const suppressDefaultToTaxonRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -118,29 +132,68 @@ export function DarwinCoreSearchFilters({
     };
   }, []);
 
+  useEffect(() => {
+    if (previousFiltersRef.current === filters) return;
+
+    if (suppressDefaultToTaxonRef.current) {
+      suppressDefaultToTaxonRef.current = false;
+    } else if (isBlankScientificNameDefault(filters)) {
+      setShowDefaultToTaxon(true);
+    }
+
+    previousFiltersRef.current = filters;
+  }, [filters]);
+
+  const darwinCoreTerms = [
+    ...SUPPLEMENTAL_DARWIN_CORE_TERMS,
+    ...terms.filter(
+      (term) => !SUPPLEMENTAL_DARWIN_CORE_TERMS.some((supplemental) => supplemental.uri === term.uri),
+    ),
+  ];
   const searchTerms: SearchTerm[] = [
     ...SYSTEM_SEARCH_TERMS,
-    ...terms.map((term) => ({ ...term, source: "darwin-core" as const })),
+    ...darwinCoreTerms.map((term) => ({ ...term, source: "darwin-core" as const })),
   ];
+  const hasToTaxonFilter = filters.some((filter) => filter.predicate === DWCIRI_TO_TAXON);
+  const visibleFilters =
+    showDefaultToTaxon && isBlankScientificNameDefault(filters) && !hasToTaxonFilter
+      ? [...filters, emptyDarwinCoreSearchFilter(DWCIRI_TO_TAXON)]
+      : filters;
 
   function replaceFilter(index: number, next: DarwinCoreSearchFilter) {
+    if (index >= filters.length) {
+      setShowDefaultToTaxon(false);
+      if (next.predicate.length === 0) return;
+      onChange([...filters, next]);
+      return;
+    }
+
     onChange(filters.map((filter, currentIndex) => (currentIndex === index ? next : filter)));
   }
 
   function removeFilter(index: number) {
+    if (index >= filters.length) {
+      setShowDefaultToTaxon(false);
+      return;
+    }
+
+    if (filters[index]?.predicate === DWCIRI_TO_TAXON) {
+      suppressDefaultToTaxonRef.current = true;
+      setShowDefaultToTaxon(false);
+    }
     onChange(filters.filter((_, currentIndex) => currentIndex !== index));
   }
 
   return (
     <div className="space-y-3">
-      {filters.map((filter, index) => {
+      {visibleFilters.map((filter, index) => {
         const selectedTerm = searchTerms.find((term) => term.uri === filter.predicate);
         const customPredicate = selectedTerm ? "" : filter.predicate;
 
         return (
           <div
             className="grid gap-3 rounded-md border border-[#d8dfe2] bg-white p-3 md:grid-cols-[minmax(16rem,1.3fr)_minmax(12rem,1fr)_auto] md:items-end"
-            key={index}
+            key={`${filter.predicate || "custom"}-${index}`}
           >
             <div className="min-w-0">
               <label>
@@ -168,7 +221,7 @@ export function DarwinCoreSearchFilters({
                     ))}
                   </optgroup>
                   <optgroup label="Darwin Core">
-                    {terms.map((term) => (
+                    {darwinCoreTerms.map((term) => (
                       <option key={term.uri} value={term.uri}>
                         {term.local_name}
                       </option>
@@ -372,10 +425,21 @@ function searchValuePlaceholder(predicate: string): string {
   if (predicate === SOURCE_PAPER) {
     return "https://bio-database.net/papers/...";
   }
+  if (predicate === DWCIRI_TO_TAXON) {
+    return "https://www.gbif.org/species/...";
+  }
   return "検索する値";
 }
 
 function inferSearchValueType(value: string): "literal" | "uri" {
   const trimmed = value.trim();
   return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$/.test(trimmed) ? "uri" : "literal";
+}
+
+function isBlankScientificNameDefault(filters: DarwinCoreSearchFilter[]): boolean {
+  return (
+    filters.length === 1 &&
+    filters[0]?.predicate === SCIENTIFIC_NAME &&
+    filters[0].value.trim().length === 0
+  );
 }
