@@ -76,12 +76,9 @@ jobs:
       - name: Run occurrence map unit tests
         working-directory: backend
         run: cargo test features::occurrence_map --lib -- --test-threads=1
-      - name: Run GBIF-aware Fuseki search tests
+      - name: Run profiled Fuseki search query tests
         working-directory: backend
         run: cargo test infrastructure::fuseki::tests --lib -- --test-threads=1
-      - name: Run Fuseki taxonomy hierarchy query tests
-        working-directory: backend
-        run: cargo test infrastructure::fuseki::profiled::tests --lib -- --test-threads=1
       - name: Run Nominatim unit tests
         working-directory: backend
         run: cargo test infrastructure::nominatim --lib -- --test-threads=1
