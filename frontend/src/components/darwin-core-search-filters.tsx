@@ -11,6 +11,9 @@ const DWCIRI_TO_TAXON = "http://rs.tdwg.org/dwc/iri/toTaxon";
 const SCIENTIFIC_NAME = "http://rs.tdwg.org/dwc/terms/scientificName";
 const SOURCE_PAPER = "https://bio-database.net/terms/sourcePaper";
 const USER_URI_BASE = "https://bio-database.net/users/";
+const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
+const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
+const GBIF_SUGGEST_DEBOUNCE_MS = 300;
 
 export interface DarwinCoreSearchFilter {
   predicate: string;
@@ -34,6 +37,13 @@ interface SearchTerm extends DarwinCoreTerm {
 interface UserSearchItem {
   user_id: string;
   user_name: string;
+}
+
+interface GbifSpeciesSuggestion {
+  key: number;
+  scientificName: string;
+  canonicalName?: string;
+  rank?: string;
 }
 
 const SYSTEM_SEARCH_TERMS: SearchTerm[] = [
@@ -88,7 +98,7 @@ export function activeDarwinCoreSearchFilters(
         predicate,
         value,
         value_type:
-          predicate === DCTERMS_CREATOR || predicate === SOURCE_PAPER
+          predicate === DCTERMS_CREATOR || predicate === SOURCE_PAPER || predicate === DWCIRI_TO_TAXON
             ? ("uri" as const)
             : inferSearchValueType(value),
         match: filter.match,
@@ -264,6 +274,12 @@ export function DarwinCoreSearchFilters({
                 filter={filter}
                 onChange={(next) => replaceFilter(index, next)}
               />
+            ) : filter.predicate === DWCIRI_TO_TAXON ? (
+              <TaxonSearchInput
+                disabled={disabled}
+                filter={filter}
+                onChange={(next) => replaceFilter(index, next)}
+              />
             ) : (
               <label className="min-w-0">
                 <span className="mb-1 block text-xs font-medium text-[#526168]">検索値</span>
@@ -313,6 +329,133 @@ export function DarwinCoreSearchFilters({
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function TaxonSearchInput({
+  filter,
+  onChange,
+  disabled,
+}: {
+  filter: DarwinCoreSearchFilter;
+  onChange: (filter: DarwinCoreSearchFilter) => void;
+  disabled: boolean;
+}) {
+  const [suggestions, setSuggestions] = useState<GbifSpeciesSuggestion[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const query = filter.display_value ?? "";
+  const selected = isGbifSpeciesUri(filter.value) && query.trim().length > 0;
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length === 0 || selected || isGbifSpeciesUri(trimmed)) {
+      setSuggestions([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetch(`${GBIF_SUGGEST_ENDPOINT}?q=${encodeURIComponent(trimmed)}`, {
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error("GBIF suggest failed");
+          return response.json() as Promise<GbifSpeciesSuggestion[]>;
+        })
+        .then((response) => {
+          setSuggestions(response.slice(0, 10));
+          setLoadFailed(false);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setSuggestions([]);
+          setLoadFailed(true);
+        });
+    }, GBIF_SUGGEST_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, selected]);
+
+  return (
+    <div className="relative min-w-0">
+      <label>
+        <span className="mb-1 block text-xs font-medium text-[#526168]">分類群名</span>
+        <input
+          autoComplete="off"
+          className="h-10 w-full rounded-md border border-[#b8c3c8] bg-white px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+          disabled={disabled}
+          onChange={(event) => {
+            const displayValue = event.target.value;
+            const directUri = displayValue.trim();
+            setSuggestions([]);
+            setLoadFailed(false);
+            onChange({
+              ...filter,
+              value: isGbifSpeciesUri(directUri) ? directUri : "",
+              value_type: "uri",
+              display_value: displayValue,
+            });
+          }}
+          placeholder="例: Annelida"
+          type="text"
+          value={query}
+        />
+      </label>
+
+      {selected ? (
+        <span className="mt-1 block truncate text-[11px] text-[#176b57]" title={filter.value}>
+          選択済み: {filter.value}
+        </span>
+      ) : query.trim().length > 0 ? (
+        <span className="mt-1 block text-[11px] text-[#7a878c]">
+          GBIF候補から分類群を選択してください。
+        </span>
+      ) : null}
+
+      {!selected && suggestions.length > 0 ? (
+        <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-[#c7d0d4] bg-white p-1 shadow-lg">
+          {suggestions.map((suggestion) => {
+            const label = suggestion.canonicalName?.trim() || suggestion.scientificName;
+            return (
+              <button
+                className="flex w-full items-start justify-between gap-3 rounded px-3 py-2 text-left hover:bg-[#eef2f3]"
+                key={suggestion.key}
+                onClick={() => {
+                  setSuggestions([]);
+                  setLoadFailed(false);
+                  onChange({
+                    ...filter,
+                    value: `${GBIF_SPECIES_URI_PREFIX}${suggestion.key}`,
+                    value_type: "uri",
+                    display_value: label,
+                  });
+                }}
+                type="button"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-[#243138]">{label}</span>
+                  {suggestion.scientificName !== label ? (
+                    <span className="block truncate text-[11px] text-[#65747a]">
+                      {suggestion.scientificName}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="shrink-0 text-right text-[10px] text-[#7a878c]">
+                  {suggestion.rank ? `${suggestion.rank} · ` : ""}GBIF {suggestion.key}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {loadFailed ? (
+        <span className="mt-1 block text-[11px] text-[#a53d32]">GBIF候補を取得できませんでした。</span>
+      ) : null}
     </div>
   );
 }
@@ -425,15 +568,18 @@ function searchValuePlaceholder(predicate: string): string {
   if (predicate === SOURCE_PAPER) {
     return "https://bio-database.net/papers/...";
   }
-  if (predicate === DWCIRI_TO_TAXON) {
-    return "https://www.gbif.org/species/...";
-  }
   return "検索する値";
 }
 
 function inferSearchValueType(value: string): "literal" | "uri" {
   const trimmed = value.trim();
   return /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$/.test(trimmed) ? "uri" : "literal";
+}
+
+function isGbifSpeciesUri(value: string): boolean {
+  if (!value.startsWith(GBIF_SPECIES_URI_PREFIX)) return false;
+  const key = value.slice(GBIF_SPECIES_URI_PREFIX.length);
+  return key.length > 0 && /^\d+$/.test(key);
 }
 
 function isBlankScientificNameDefault(filters: DarwinCoreSearchFilter[]): boolean {
