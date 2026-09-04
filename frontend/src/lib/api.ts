@@ -85,7 +85,7 @@ async function runPaperBatchRegistration<T>(path: string, init: RequestInit): Pr
     if (job.status === "processing") continue;
 
     if (job.status === "completed") {
-      return { occurrences: job.occurrences ?? [] } as T;
+      return { occurrences: job.occurrences ?? [] } as unknown as T;
     }
 
     if (job.status === "failed") {
