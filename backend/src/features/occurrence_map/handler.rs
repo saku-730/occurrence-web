@@ -95,7 +95,8 @@ pub async fn get_occurrence_map(
     headers: HeaderMap,
 ) -> Result<Json<OccurrenceMapFeatureCollection>, OccurrenceMapHandlerError> {
     let visibility = resolve_visibility(&state, &headers).await?;
-    let map = list_occurrence_map(state.occurrence_rdf_store.as_ref(), visibility, Vec::new()).await?;
+    let map =
+        list_occurrence_map(state.occurrence_rdf_store.as_ref(), visibility, Vec::new()).await?;
     Ok(Json(map))
 }
 
@@ -169,15 +170,19 @@ async fn resolve_visibility(
 ) -> Result<SearchVisibility, OccurrenceMapHandlerError> {
     match optional_session_token(headers) {
         None => Ok(SearchVisibility::PublicOnly),
-        Some(session_token) => match AuthService::current_user(&state.posgre, session_token).await {
-            Ok(current_user) if current_user.role == "admin" => Ok(SearchVisibility::All),
-            Ok(current_user) => Ok(SearchVisibility::PublicOrOwnPrivate {
-                user_id: current_user.user_id,
-            }),
-            Err(AuthServiceError::InvalidSession) => Ok(SearchVisibility::PublicOnly),
-            Err(AuthServiceError::Database(error)) => Err(OccurrenceMapHandlerError::Database(error)),
-            Err(_) => Ok(SearchVisibility::PublicOnly),
-        },
+        Some(session_token) => {
+            match AuthService::current_user(&state.posgre, session_token).await {
+                Ok(current_user) if current_user.role == "admin" => Ok(SearchVisibility::All),
+                Ok(current_user) => Ok(SearchVisibility::PublicOrOwnPrivate {
+                    user_id: current_user.user_id,
+                }),
+                Err(AuthServiceError::InvalidSession) => Ok(SearchVisibility::PublicOnly),
+                Err(AuthServiceError::Database(error)) => {
+                    Err(OccurrenceMapHandlerError::Database(error))
+                }
+                Err(_) => Ok(SearchVisibility::PublicOnly),
+            }
+        }
     }
 }
 

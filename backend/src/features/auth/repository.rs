@@ -17,6 +17,13 @@ pub struct UserForAuth {
     pub password_hash: String,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct DemoUser {
+    pub id: Uuid,
+    pub email: String,
+    pub user_name: String,
+}
+
 #[derive(Debug)]
 pub struct UserForSession {
     pub email: String,
@@ -36,6 +43,32 @@ pub struct PasswordResetTokenForUpdate {
 }
 
 impl AuthRepository {
+    pub async fn upsert_demo_user(
+        db: &PgPool,
+        email: &str,
+        user_name: &str,
+        password_hash: &str,
+    ) -> Result<DemoUser, sqlx::Error> {
+        // emailは正規化済みusernameから決定されるため、同じ名前なら既存デモユーザーを返す。
+        // デモ中の再ログインで自分のOccurrence所有権を失わないための意図的な再利用である。
+        sqlx::query_as::<_, DemoUser>(
+            r#"
+            INSERT INTO users (email, user_name, password_hash)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (email)
+            DO UPDATE SET
+                user_name = EXCLUDED.user_name,
+                updated_at = now()
+            RETURNING id, email, user_name
+            "#,
+        )
+        .bind(email)
+        .bind(user_name)
+        .bind(password_hash)
+        .fetch_one(db)
+        .await
+    }
+
     pub async fn create_pending_registration(
         db: &PgPool,
         email: &str,

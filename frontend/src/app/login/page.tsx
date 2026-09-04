@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -13,12 +13,25 @@ interface LoginResponse {
   user_name: string;
 }
 
+interface AuthModeResponse {
+  demo_auth_enabled: boolean;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [userName, setUserName] = useState("");
+  const [demoAuthEnabled, setDemoAuthEnabled] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    // モード判定に失敗した場合は、既存の通常ログインを残して管理者が復旧できるようにする。
+    apiFetch<AuthModeResponse>("/auth/mode")
+      .then((mode) => setDemoAuthEnabled(mode.demo_auth_enabled))
+      .catch(() => setDemoAuthEnabled(false));
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -26,10 +39,15 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      await apiFetch<LoginResponse>("/auth/login", {
+      const path = demoAuthEnabled ? "/auth/demo_login" : "/auth/login";
+      const body = demoAuthEnabled
+        ? { user_name: userName.trim() }
+        : { email: email.trim(), password };
+
+      await apiFetch<LoginResponse>(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify(body),
       });
 
       // A full navigation is unnecessary: the next page mounts a fresh header,
@@ -41,7 +59,11 @@ export default function LoginPage() {
         error instanceof ApiError &&
         (error.status === 400 || error.status === 401)
       ) {
-        setErrorMessage("メールアドレスまたはパスワードが正しくありません");
+        setErrorMessage(
+          demoAuthEnabled
+            ? "ユーザー名を入力してください"
+            : "メールアドレスまたはパスワードが正しくありません",
+        );
       } else {
         setErrorMessage("ログイン処理に失敗しました");
       }
@@ -63,35 +85,53 @@ export default function LoginPage() {
           onSubmit={handleSubmit}
         >
           <div className="space-y-5">
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium">
-                メールアドレス
-              </span>
-              <input
-                autoComplete="email"
-                className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
-                disabled={isSubmitting}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-                type="email"
-                value={email}
-              />
-            </label>
+            {demoAuthEnabled ? (
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium">ユーザー名</span>
+                <input
+                  autoComplete="nickname"
+                  className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+                  disabled={isSubmitting}
+                  maxLength={100}
+                  onChange={(event) => setUserName(event.target.value)}
+                  required
+                  type="text"
+                  value={userName}
+                />
+              </label>
+            ) : (
+              <>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-medium">
+                    メールアドレス
+                  </span>
+                  <input
+                    autoComplete="email"
+                    className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+                    disabled={isSubmitting}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                    type="email"
+                    value={email}
+                  />
+                </label>
 
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium">
-                パスワード
-              </span>
-              <input
-                autoComplete="current-password"
-                className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
-                disabled={isSubmitting}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                type="password"
-                value={password}
-              />
-            </label>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-medium">
+                    パスワード
+                  </span>
+                  <input
+                    autoComplete="current-password"
+                    className="h-10 w-full rounded-md border border-[#b8c3c8] px-3 text-sm outline-none focus:border-[#176b57] focus:ring-2 focus:ring-[#176b57]/15"
+                    disabled={isSubmitting}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    type="password"
+                    value={password}
+                  />
+                </label>
+              </>
+            )}
           </div>
 
           {errorMessage ? (
@@ -108,19 +148,21 @@ export default function LoginPage() {
             disabled={isSubmitting}
             type="submit"
           >
-            {isSubmitting ? "ログイン中" : "ログイン"}
+            {isSubmitting ? "ログイン中" : demoAuthEnabled ? "利用を開始" : "ログイン"}
           </button>
         </form>
 
-        <p className="mt-5 text-center text-sm text-[#65737a]">
-          アカウントをお持ちでない方は{" "}
-          <Link
-            className="font-medium text-[#176b57] hover:underline"
-            href="/register"
-          >
-            新規登録
-          </Link>
-        </p>
+        {!demoAuthEnabled ? (
+          <p className="mt-5 text-center text-sm text-[#65737a]">
+            アカウントをお持ちでない方は{" "}
+            <Link
+              className="font-medium text-[#176b57] hover:underline"
+              href="/register"
+            >
+              新規登録
+            </Link>
+          </p>
+        ) : null}
       </main>
     </div>
   );

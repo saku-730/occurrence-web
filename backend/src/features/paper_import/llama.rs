@@ -109,15 +109,15 @@ impl LlamaClient {
         let _ = dotenvy::dotenv();
         let endpoint = env::var(LLAMA_CHAT_COMPLETIONS_URL_ENV)
             .map_err(|_| LlamaError::InvalidConfiguration)?;
-        let model =
-            env::var(LLAMA_MODEL_ENV).map_err(|_| LlamaError::InvalidConfiguration)?;
+        let model = env::var(LLAMA_MODEL_ENV).map_err(|_| LlamaError::InvalidConfiguration)?;
 
         Self::new(&endpoint, &model, LLAMA_REQUEST_TIMEOUT)
     }
 
     pub fn new(endpoint: &str, model: &str, timeout: Duration) -> Result<Self, LlamaError> {
         let endpoint = endpoint.trim().to_string();
-        let parsed = reqwest::Url::parse(&endpoint).map_err(|_| LlamaError::InvalidConfiguration)?;
+        let parsed =
+            reqwest::Url::parse(&endpoint).map_err(|_| LlamaError::InvalidConfiguration)?;
         let model = model.trim().to_string();
         if endpoint.is_empty()
             || model.is_empty()
@@ -482,7 +482,11 @@ mod tests {
         });
         tokio::task::yield_now().await;
 
-        (format!("http://{address}/v1/chat/completions"), requests, server)
+        (
+            format!("http://{address}/v1/chat/completions"),
+            requests,
+            server,
+        )
     }
 
     async fn test_page_images() -> (tempfile::TempDir, Vec<PreprocessedPageImage>) {
@@ -568,8 +572,8 @@ mod tests {
                 .starts_with("data:image/jpeg;base64,")
         );
         assert_eq!(request["response_format"]["type"], "json_schema");
-        let occurrence_schema = &request["response_format"]["schema"]["properties"]
-            ["occurrences"]["items"];
+        let occurrence_schema =
+            &request["response_format"]["schema"]["properties"]["occurrences"]["items"];
         assert_eq!(
             occurrence_schema["required"],
             json!(["scientificName", "locality", "country"])
@@ -612,9 +616,15 @@ mod tests {
             .expect("valid llama response should be parsed");
 
         assert_eq!(result.occurrences.len(), 1);
-        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(
+            result.occurrences[0].scientific_name,
+            "Metaphire hilgendorfi"
+        );
         assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
-        assert_eq!(result.occurrences[0].event_date.as_deref(), Some("1998-06-04"));
+        assert_eq!(
+            result.occurrences[0].event_date.as_deref(),
+            Some("1998-06-04")
+        );
         let requests = requests
             .lock()
             .expect("mock llama request lock should not be poisoned");
@@ -637,13 +647,21 @@ mod tests {
             .expect("multimodal content should be an array");
         assert_eq!(content.len(), 6);
         assert_eq!(content[0]["text"], OCCURRENCE_EXTRACTION_PROMPT);
-        assert!(content[1]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("Text extracted by GROBID.")));
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Text extracted by GROBID."))
+        );
         assert_eq!(content[2]["text"], "## PDF page 1");
-        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
+        assert_eq!(
+            content[3]["image_url"]["url"],
+            "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U="
+        );
         assert_eq!(content[4]["text"], "## PDF page 2");
-        assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
+        assert_eq!(
+            content[5]["image_url"]["url"],
+            "data:image/jpeg;base64,c2Vjb25kLWltYWdl"
+        );
         server.abort();
     }
 
@@ -704,11 +722,19 @@ mod tests {
             .as_array()
             .expect("multimodal content should be an array");
 
-        assert!(content[1]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("テキストは抽出できませんでした")));
-        assert_eq!(content[3]["image_url"]["url"], "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U=");
-        assert_eq!(content[5]["image_url"]["url"], "data:image/jpeg;base64,c2Vjb25kLWltYWdl");
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("テキストは抽出できませんでした"))
+        );
+        assert_eq!(
+            content[3]["image_url"]["url"],
+            "data:image/jpeg;base64,Zmlyc3QtaW1hZ2U="
+        );
+        assert_eq!(
+            content[5]["image_url"]["url"],
+            "data:image/jpeg;base64,c2Vjb25kLWltYWdl"
+        );
     }
 
     #[tokio::test]
@@ -748,7 +774,9 @@ mod tests {
                 .await
                 .expect_err("invalid llama response should be rejected");
             match expected {
-                "upstream" => assert!(matches!(error, LlamaError::Upstream(StatusCode::INTERNAL_SERVER_ERROR, message) if message.contains("model overloaded"))),
+                "upstream" => assert!(
+                    matches!(error, LlamaError::Upstream(StatusCode::INTERNAL_SERVER_ERROR, message) if message.contains("model overloaded"))
+                ),
                 "invalid_response" => assert!(matches!(error, LlamaError::InvalidResponse)),
                 "invalid_occurrence" => assert!(matches!(error, LlamaError::InvalidOccurrence)),
                 _ => unreachable!(),
@@ -777,7 +805,10 @@ mod tests {
             .expect("invalid event date alone must not fail occurrence extraction");
 
         assert_eq!(result.occurrences.len(), 1);
-        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(
+            result.occurrences[0].scientific_name,
+            "Metaphire hilgendorfi"
+        );
         assert_eq!(result.occurrences[0].event_date, None);
         server.abort();
     }
@@ -802,7 +833,10 @@ mod tests {
             .expect("unknown per-occurrence fields must not abort extraction");
 
         assert_eq!(result.occurrences.len(), 1);
-        assert_eq!(result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
+        assert_eq!(
+            result.occurrences[0].scientific_name,
+            "Metaphire hilgendorfi"
+        );
         assert_eq!(result.occurrences[0].country.as_deref(), Some("Japan"));
         server.abort();
     }

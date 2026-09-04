@@ -153,6 +153,8 @@ function UserDetails({
     return <StatusPanel message="ユーザー情報を取得できませんでした" />;
   }
 
+  const isDemoUser = state.user.email.endsWith("@demo.invalid");
+
   return (
     <section className="overflow-hidden rounded-md border border-[#d8dfe2] bg-white">
       <dl className="divide-y divide-[#e4e9eb]">
@@ -196,18 +198,20 @@ function UserDetails({
             ) : (
               <div className="flex min-w-0 items-center justify-between gap-4">
                 <span className="min-w-0 break-words text-sm">{state.user.user_name}</span>
-                <button
-                  className="shrink-0 text-sm font-medium text-[#176b57] hover:underline"
-                  onClick={onStartUserNameEdit}
-                  type="button"
-                >
-                  変更
-                </button>
+                {!isDemoUser ? (
+                  <button
+                    className="shrink-0 text-sm font-medium text-[#176b57] hover:underline"
+                    onClick={onStartUserNameEdit}
+                    type="button"
+                  >
+                    変更
+                  </button>
+                ) : null}
               </div>
             )}
           </dd>
         </div>
-        <DetailRow label="メールアドレス" value={state.user.email} />
+        {!isDemoUser ? <DetailRow label="メールアドレス" value={state.user.email} /> : null}
       </dl>
     </section>
   );

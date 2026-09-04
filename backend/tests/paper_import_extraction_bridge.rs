@@ -131,7 +131,10 @@ impl RecordingExtractor {
     }
 
     fn paths(&self) -> Vec<PathBuf> {
-        self.paths.lock().expect("extractor path lock poisoned").clone()
+        self.paths
+            .lock()
+            .expect("extractor path lock poisoned")
+            .clone()
     }
 }
 
@@ -253,20 +256,21 @@ async fn service_downloads_staged_pdf_and_passes_it_to_extractor() {
     let store = FakeObjectStore::new(PDF_BYTES.to_vec());
     let extractor = RecordingExtractor::new();
 
-    let output = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect("staged PDF should reach occurrence extractor");
+    let output =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect("staged PDF should reach occurrence extractor");
 
     assert_eq!(output.import_id, import_id);
     assert_eq!(output.result.occurrences.len(), 1);
-    assert_eq!(output.result.occurrences[0].scientific_name, "Metaphire hilgendorfi");
-    assert_eq!(output.result.occurrences[0].event_date.as_deref(), Some("1998-06"));
+    assert_eq!(
+        output.result.occurrences[0].scientific_name,
+        "Metaphire hilgendorfi"
+    );
+    assert_eq!(
+        output.result.occurrences[0].event_date.as_deref(),
+        Some("1998-06")
+    );
     assert_eq!(store.get_requests(), vec![(bucket, object_key)]);
     assert_eq!(extractor.calls(), vec![PDF_BYTES.to_vec()]);
 
@@ -287,15 +291,10 @@ async fn service_rejects_corrupted_garage_pdf_and_returns_import_to_staged() {
     let store = FakeObjectStore::new(b"%PDF-1.7\ncorrupted-object\n%%EOF\n".to_vec());
     let extractor = RecordingExtractor::new();
 
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("Garage object that differs from staged metadata must be rejected");
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("Garage object that differs from staged metadata must be rejected");
 
     assert!(matches!(
         error,
@@ -328,16 +327,14 @@ async fn service_restores_staged_after_object_store_or_extractor_failure() {
     let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
     let store = FakeObjectStore::failing_get();
     let extractor = RecordingExtractor::new();
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("object-store failure should abort extraction");
-    assert!(matches!(error, PaperOccurrenceExtractionError::ObjectStoreFailed));
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("object-store failure should abort extraction");
+    assert!(matches!(
+        error,
+        PaperOccurrenceExtractionError::ObjectStoreFailed
+    ));
     assert!(extractor.calls().is_empty());
     assert_eq!(import_status(&db, import_id).await, "staged");
     cleanup(&db, import_id, user_id).await;
@@ -345,16 +342,14 @@ async fn service_restores_staged_after_object_store_or_extractor_failure() {
     let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
     let store = FakeObjectStore::failing_stream(PDF_BYTES.to_vec());
     let extractor = RecordingExtractor::new();
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("mid-stream object-store failure should abort extraction");
-    assert!(matches!(error, PaperOccurrenceExtractionError::ObjectStoreFailed));
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("mid-stream object-store failure should abort extraction");
+    assert!(matches!(
+        error,
+        PaperOccurrenceExtractionError::ObjectStoreFailed
+    ));
     assert!(extractor.calls().is_empty());
     assert_eq!(import_status(&db, import_id).await, "staged");
     cleanup(&db, import_id, user_id).await;
@@ -362,16 +357,14 @@ async fn service_restores_staged_after_object_store_or_extractor_failure() {
     let (import_id, user_id, _, _) = create_staged_import(&db, PDF_BYTES).await;
     let store = FakeObjectStore::new(PDF_BYTES.to_vec());
     let extractor = RecordingExtractor::failing();
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("extractor failure should abort extraction");
-    assert!(matches!(error, PaperOccurrenceExtractionError::Extractor(_)));
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("extractor failure should abort extraction");
+    assert!(matches!(
+        error,
+        PaperOccurrenceExtractionError::Extractor(_)
+    ));
     assert_eq!(extractor.calls(), vec![PDF_BYTES.to_vec()]);
     assert_eq!(import_status(&db, import_id).await, "staged");
     cleanup(&db, import_id, user_id).await;
@@ -403,15 +396,10 @@ async fn service_rejects_other_user_or_non_staged_import_without_reading_pdf() {
         .execute(&db)
         .await
         .expect("test import status should be updated");
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("only staged imports may start extraction");
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("only staged imports may start extraction");
     assert!(matches!(error, PaperOccurrenceExtractionError::NotFound));
     assert!(store.get_requests().is_empty());
     assert!(extractor.calls().is_empty());
@@ -427,17 +415,15 @@ async fn service_rejects_non_pdf_signature_and_returns_import_to_staged() {
     let store = FakeObjectStore::new(non_pdf_bytes.to_vec());
     let extractor = RecordingExtractor::new();
 
-    let error = PaperOccurrenceExtractionService::extract(
-        import_id,
-        user_id,
-        &store,
-        &extractor,
-        &db,
-    )
-    .await
-    .expect_err("non-PDF signature must not reach the extractor");
+    let error =
+        PaperOccurrenceExtractionService::extract(import_id, user_id, &store, &extractor, &db)
+            .await
+            .expect_err("non-PDF signature must not reach the extractor");
 
-    assert!(matches!(error, PaperOccurrenceExtractionError::InvalidStoredPdf));
+    assert!(matches!(
+        error,
+        PaperOccurrenceExtractionError::InvalidStoredPdf
+    ));
     assert!(extractor.calls().is_empty());
     assert_eq!(import_status(&db, import_id).await, "staged");
     cleanup(&db, import_id, user_id).await;

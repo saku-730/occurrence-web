@@ -1,4 +1,7 @@
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use crate::state::AppState;
 
@@ -11,6 +14,9 @@ pub mod service;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/occurrences/map", get(handler::get_occurrence_map))
-        .route("/occurrences/map/search", post(handler::search_occurrence_map))
+        .route(
+            "/occurrences/map/search",
+            post(handler::search_occurrence_map),
+        )
         .with_state(state)
 }

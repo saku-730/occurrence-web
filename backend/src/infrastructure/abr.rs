@@ -108,10 +108,7 @@ impl AbrClient {
         }
 
         let resolved = self.resolve_japan(&locality).await?;
-        self.cache
-            .lock()
-            .await
-            .insert(cache_key, resolved.clone());
+        self.cache.lock().await.insert(cache_key, resolved.clone());
         Ok(resolved)
     }
 
@@ -334,6 +331,9 @@ mod tests {
 
     #[test]
     fn locality_normalization_removes_whitespace() {
-        assert_eq!(normalize_locality("  滋賀県　大津市 勝谷町  "), "滋賀県大津市勝谷町");
+        assert_eq!(
+            normalize_locality("  滋賀県　大津市 勝谷町  "),
+            "滋賀県大津市勝谷町"
+        );
     }
 }

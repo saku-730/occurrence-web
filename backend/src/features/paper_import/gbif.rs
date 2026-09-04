@@ -49,11 +49,9 @@ impl GbifClient {
 
     pub fn with_endpoint(endpoint: &str, timeout: Duration) -> Result<Self, GbifMatchError> {
         let endpoint = endpoint.trim().to_string();
-        let parsed = reqwest::Url::parse(&endpoint)
-            .map_err(|_| GbifMatchError::InvalidConfiguration)?;
-        if endpoint.is_empty()
-            || timeout.is_zero()
-            || !matches!(parsed.scheme(), "http" | "https")
+        let parsed =
+            reqwest::Url::parse(&endpoint).map_err(|_| GbifMatchError::InvalidConfiguration)?;
+        if endpoint.is_empty() || timeout.is_zero() || !matches!(parsed.scheme(), "http" | "https")
         {
             return Err(GbifMatchError::InvalidConfiguration);
         }
@@ -124,8 +122,7 @@ fn taxon_match_from_response(matched: &GbifSpeciesMatchResponse) -> Option<GbifT
         .trim()
         .to_ascii_uppercase();
     let accepted = match_type == "EXACT"
-        || (match_type == "FUZZY"
-            && matched.confidence.unwrap_or(0) >= MIN_FUZZY_CONFIDENCE);
+        || (match_type == "FUZZY" && matched.confidence.unwrap_or(0) >= MIN_FUZZY_CONFIDENCE);
     if !accepted {
         return None;
     }

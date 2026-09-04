@@ -1,10 +1,11 @@
 use utoipa::OpenApi;
 
 use crate::features::auth::dto::{
-    CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse, ErrorResponse,
-    LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
-    PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse, RegisterRequest,
-    RegisterResponse, UpdateUserNameRequest,
+    AuthModeResponse, CompleteRegistrationRequest, CompleteRegistrationResponse,
+    CurrentUserResponse, DemoLoginRequest, ErrorResponse, LoginRequest, LoginResponse,
+    LogoutResponse, PasswordResetCompleteRequest, PasswordResetCompleteResponse,
+    PasswordResetRequest, PasswordResetResponse, RegisterRequest, RegisterResponse,
+    UpdateUserNameRequest,
 };
 
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
@@ -30,6 +31,8 @@ use crate::features::occurrences::dto::{
         crate::features::auth::handler::request_password_reset,
         crate::features::auth::handler::reset_password,
         crate::features::auth::handler::login,
+        crate::features::auth::handler::demo_login,
+        crate::features::auth::handler::auth_mode,
         crate::features::auth::handler::logout,
         crate::features::auth::handler::me,
         crate::features::auth::handler::update_user_name,
@@ -57,7 +60,9 @@ use crate::features::occurrences::dto::{
             PasswordResetCompleteRequest,
             PasswordResetCompleteResponse,
             LoginRequest,
+            DemoLoginRequest,
             LoginResponse,
+            AuthModeResponse,
             LogoutResponse,
             CurrentUserResponse,
             UpdateUserNameRequest,

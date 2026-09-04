@@ -48,10 +48,8 @@ pub enum LocationGeocoderError {
 
 #[async_trait::async_trait]
 pub trait LocationGeocoder: Send + Sync {
-    async fn geocode(
-        &self,
-        query: &str,
-    ) -> Result<Option<GeocodedLocation>, LocationGeocoderError>;
+    async fn geocode(&self, query: &str)
+    -> Result<Option<GeocodedLocation>, LocationGeocoderError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,10 +108,7 @@ async fn geocode_batch_json(
     let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
         return body.to_vec();
     };
-    let Some(occurrences) = value
-        .get_mut("occurrences")
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(occurrences) = value.get_mut("occurrences").and_then(Value::as_array_mut) else {
         return body.to_vec();
     };
 
@@ -134,10 +129,7 @@ async fn geocode_batch_json(
 }
 
 /// Entry point for callers/tests that only need ordinary Nominatim behavior.
-pub async fn enrich_nquads_with_geocoding<G>(
-    nquads: &[u8],
-    geocoder: &G,
-) -> Result<Vec<u8>, ()>
+pub async fn enrich_nquads_with_geocoding<G>(nquads: &[u8], geocoder: &G) -> Result<Vec<u8>, ()>
 where
     G: LocationGeocoder + ?Sized,
 {
@@ -482,7 +474,9 @@ _:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <https://bio-database.net/gr
             longitude: "2".into(),
         })));
 
-        let output = enrich_nquads_with_geocoding(input, &geocoder).await.unwrap();
+        let output = enrich_nquads_with_geocoding(input, &geocoder)
+            .await
+            .unwrap();
 
         assert_eq!(output, input);
         assert!(geocoder.queries.lock().unwrap().is_empty());
@@ -496,7 +490,9 @@ _:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <https://bio-database.net/gr
             longitude: "135.7681".into(),
         })));
 
-        let output = enrich_nquads_with_geocoding(input, &geocoder).await.unwrap();
+        let output = enrich_nquads_with_geocoding(input, &geocoder)
+            .await
+            .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(text.contains(DECIMAL_LATITUDE));
@@ -516,7 +512,9 @@ _:o <http://rs.tdwg.org/dwc/terms/locality> "Kyoto" <https://bio-database.net/gr
 
         for result in [Ok(None), Err(LocationGeocoderError::RequestFailed)] {
             let geocoder = fake(result);
-            let output = enrich_nquads_with_geocoding(input, &geocoder).await.unwrap();
+            let output = enrich_nquads_with_geocoding(input, &geocoder)
+                .await
+                .unwrap();
             assert_eq!(output, input);
         }
     }

@@ -251,6 +251,7 @@ fn test_state(db: PgPool, store: RecordingObjectStore) -> AppState {
             app_base_url: "http://127.0.0.1:3000".to_string(),
             environment: "test".to_string(),
             cookie_secure: false,
+            demo_auth_enabled: false,
         },
         posgre: PosgreConfig {
             url: database_url(),

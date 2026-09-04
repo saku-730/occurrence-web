@@ -73,12 +73,10 @@ async fn create_fake_abr(pool: &PgPool) {
     .await
     .unwrap();
 
-    sqlx::query(
-        "INSERT INTO public.mt_pref_unified (lg_code, pref) VALUES ('250007', '滋賀県')",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO public.mt_pref_unified (lg_code, pref) VALUES ('250007', '滋賀県')")
+        .execute(pool)
+        .await
+        .unwrap();
 
     sqlx::query(
         "INSERT INTO public.mt_city_unified (lg_code, county, city, ward) VALUES ('252018', NULL, '大津市', NULL)",

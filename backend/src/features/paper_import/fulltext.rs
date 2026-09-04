@@ -73,7 +73,8 @@ impl GrobidFulltextClient {
             stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(prefix)) });
         let suffix_stream =
             stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(suffix)) });
-        let body = reqwest::Body::wrap_stream(prefix_stream.chain(file_stream).chain(suffix_stream));
+        let body =
+            reqwest::Body::wrap_stream(prefix_stream.chain(file_stream).chain(suffix_stream));
 
         let response = self
             .http

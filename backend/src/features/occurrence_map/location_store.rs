@@ -75,7 +75,9 @@ impl OccurrenceRdfStore for ExtendedLocationRdfStore {
         &self,
         media_uri: &str,
     ) -> Result<bool, OccurrenceServiceError> {
-        self.inner.is_media_referenced_by_occurrence(media_uri).await
+        self.inner
+            .is_media_referenced_by_occurrence(media_uri)
+            .await
     }
 
     async fn replace_occurrence_nquads(
@@ -84,10 +86,7 @@ impl OccurrenceRdfStore for ExtendedLocationRdfStore {
         nquads: Vec<u8>,
     ) -> Result<(), OccurrenceServiceError> {
         self.inner
-            .replace_occurrence_nquads(
-                occurrence_uri,
-                normalize_extended_location_nquads(&nquads)?,
-            )
+            .replace_occurrence_nquads(occurrence_uri, normalize_extended_location_nquads(&nquads)?)
             .await
     }
 
@@ -117,9 +116,7 @@ impl OccurrenceRdfStore for ExtendedLocationRdfStore {
     }
 }
 
-fn normalize_extended_location_nquads(
-    nquads: &[u8],
-) -> Result<Vec<u8>, OccurrenceServiceError> {
+fn normalize_extended_location_nquads(nquads: &[u8]) -> Result<Vec<u8>, OccurrenceServiceError> {
     let mut quads = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nquads)
         .collect::<Result<Vec<_>, _>>()
@@ -201,7 +198,8 @@ mod tests {
 
     #[test]
     fn moves_extended_location_and_nominatim_provenance_to_location_node() {
-        let occurrence = "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
+        let occurrence =
+            "https://bio-database.net/occurrences/550e8400-e29b-41d4-a716-446655440000";
         let input = format!(
             r#"<{occurrence}> <http://purl.org/dc/terms/created> "2026-09-02T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <{OCCURRENCE_GRAPH_URI}> .
 <{occurrence}> <http://rs.tdwg.org/dwc/terms/stateProvince> "Kyoto" <{OCCURRENCE_GRAPH_URI}> .

@@ -13,13 +13,10 @@ pub use base::FusekiClientError;
 
 const DARWIN_CORE_VOCABULARY_GRAPH_URI: &str =
     "https://bio-database.net/graphs/vocabularies/darwin-core";
-const OCCURRENCE_PROFILE_GRAPH_URI: &str =
-    "https://bio-database.net/graphs/app/occurrence-profile";
+const OCCURRENCE_PROFILE_GRAPH_URI: &str = "https://bio-database.net/graphs/app/occurrence-profile";
 const LOCAL_NAME_PREDICATE_URI: &str = "https://bio-database.net/terms/localName";
-const USE_AT_BIO_DATABASE_PREDICATE_URI: &str =
-    "https://bio-database.net/terms/useAtBioDatabase";
-const SKOS_PREF_LABEL_PREDICATE_URI: &str =
-    "http://www.w3.org/2004/02/skos/core#prefLabel";
+const USE_AT_BIO_DATABASE_PREDICATE_URI: &str = "https://bio-database.net/terms/useAtBioDatabase";
+const SKOS_PREF_LABEL_PREDICATE_URI: &str = "http://www.w3.org/2004/02/skos/core#prefLabel";
 
 #[derive(Clone)]
 pub struct FusekiClient {
@@ -181,9 +178,7 @@ mod tests {
     fn darwin_core_term_query_joins_profile_requires_enabled_and_reads_japanese_label() {
         let query = build_list_darwin_core_terms_query();
 
-        assert!(query.contains(&format!(
-            "GRAPH <{DARWIN_CORE_VOCABULARY_GRAPH_URI}>"
-        )));
+        assert!(query.contains(&format!("GRAPH <{DARWIN_CORE_VOCABULARY_GRAPH_URI}>")));
         assert!(query.contains(&format!("GRAPH <{OCCURRENCE_PROFILE_GRAPH_URI}>")));
         assert!(query.contains(&format!(
             "?term <{USE_AT_BIO_DATABASE_PREDICATE_URI}> true ."

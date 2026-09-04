@@ -33,9 +33,7 @@ use super::{
     extraction::{LlamaPaperOccurrenceExtractor, PaperOccurrenceExtractor},
     grobid::{GrobidClient, normalize_doi},
     llama::PaperLlmExtractionError,
-    repository::{
-        InsertPaperMetadata, PAPER_STATUS_REGISTERED, PaperMetadata, PaperRepository,
-    },
+    repository::{InsertPaperMetadata, PAPER_STATUS_REGISTERED, PaperMetadata, PaperRepository},
     service::PAPER_PDF_FILE_SIZE_LIMIT_BYTES,
 };
 
@@ -87,11 +85,7 @@ impl IntoResponse for PaperSourceHandlerError {
                 "invalid_paper_source",
                 "Invalid paper source request",
             ),
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                "paper_not_found",
-                "Paper not found",
-            ),
+            Self::NotFound => (StatusCode::NOT_FOUND, "paper_not_found", "Paper not found"),
             Self::UnsupportedMediaType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_media_type",
@@ -280,21 +274,14 @@ async fn receive_pdf_inner(
     content_type: String,
     received: &ReceivedPdf,
 ) -> Result<(StatusCode, Json<ReceivePaperSourceResponse>), PaperSourceHandlerError> {
-    if let Some(existing) =
-        PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
+    if let Some(existing) = PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
     {
         if existing.status == PAPER_STATUS_REGISTERED {
-            return Ok((
-                StatusCode::OK,
-                Json(response_from_paper(existing, true)),
-            ));
+            return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
         }
 
         let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
-        return Ok((
-            StatusCode::OK,
-            Json(response_from_paper(paper, false)),
-        ));
+        return Ok((StatusCode::OK, Json(response_from_paper(paper, false))));
     }
 
     let paper_id = Uuid::new_v4();
@@ -345,25 +332,16 @@ async fn receive_pdf_inner(
             .ok_or(PaperSourceHandlerError::NotFound)?;
 
         if existing.status == PAPER_STATUS_REGISTERED {
-            return Ok((
-                StatusCode::OK,
-                Json(response_from_paper(existing, true)),
-            ));
+            return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
         }
 
         let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
-        return Ok((
-            StatusCode::OK,
-            Json(response_from_paper(paper, false)),
-        ));
+        return Ok((StatusCode::OK, Json(response_from_paper(paper, false))));
     }
 
     let paper = run_grobid_and_fill_metadata(state, paper_id, received).await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(response_from_paper(paper, false)),
-    ))
+    Ok((StatusCode::CREATED, Json(response_from_paper(paper, false))))
 }
 
 async fn run_grobid_and_fill_metadata(
@@ -476,8 +454,7 @@ pub async fn extract_occurrences(
         size_bytes: paper.size_bytes,
         sha256: paper.sha256,
     };
-    let temporary_path =
-        download_verified_pdf(&source, state.media_object_store.as_ref()).await?;
+    let temporary_path = download_verified_pdf(&source, state.media_object_store.as_ref()).await?;
 
     let extractor = LlamaPaperOccurrenceExtractor;
     let result = extractor
@@ -561,10 +538,7 @@ async fn download_verified_pdf(
         .filter(|size| *size > 0 && *size <= PAPER_PDF_FILE_SIZE_LIMIT_BYTES)
         .ok_or(PaperSourceHandlerError::InvalidInput)?;
     let expected_sha256 = source.sha256.trim().to_ascii_lowercase();
-    if expected_sha256.len() != 64
-        || !expected_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(PaperSourceHandlerError::InvalidInput);
     }

@@ -218,7 +218,10 @@ mod tests {
         }
     }
 
-    fn fake_store(rows: Vec<SearchOccurrenceStoreRow>, nquads: HashMap<String, Vec<u8>>) -> FakeStore {
+    fn fake_store(
+        rows: Vec<SearchOccurrenceStoreRow>,
+        nquads: HashMap<String, Vec<u8>>,
+    ) -> FakeStore {
         FakeStore {
             rows,
             nquads: Arc::new(Mutex::new(nquads)),
@@ -253,9 +256,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(map.features.len(), 1);
-        assert_eq!(map.features[0].geometry.coordinates, vec![135.7681, 35.0116]);
+        assert_eq!(
+            map.features[0].geometry.coordinates,
+            vec![135.7681, 35.0116]
+        );
         assert_eq!(map.features[0].properties.coordinate_source, "nominatim");
-        assert_eq!(map.features[0].properties.locality.as_deref(), Some("Kyoto City"));
+        assert_eq!(
+            map.features[0].properties.locality.as_deref(),
+            Some("Kyoto City")
+        );
         assert_eq!(
             store.requested_visibility.lock().unwrap().as_slice(),
             &[SearchVisibility::PublicOnly]
@@ -276,7 +285,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(store.requested_filters.lock().unwrap().as_slice(), &[filters]);
+        assert_eq!(
+            store.requested_filters.lock().unwrap().as_slice(),
+            &[filters]
+        );
     }
 
     #[tokio::test]
@@ -289,10 +301,7 @@ mod tests {
             r#"<{0}/locations/1> <{1}> "35" <https://bio-database.net/graphs/occurrences> .
 <{0}/locations/1> <{2}> "135" <https://bio-database.net/graphs/occurrences> .
 <{0}/locations/1> <{3}> <https://example.org/geocoder> <https://bio-database.net/graphs/occurrences> ."#,
-            complete.occurrence_uri,
-            DECIMAL_LATITUDE,
-            DECIMAL_LONGITUDE,
-            GEOREFERENCE_SOURCES,
+            complete.occurrence_uri, DECIMAL_LATITUDE, DECIMAL_LONGITUDE, GEOREFERENCE_SOURCES,
         );
         let incomplete_nquads = format!(
             "<{}/locations/1> <{}> \"35\" <https://bio-database.net/graphs/occurrences> .",
@@ -301,8 +310,14 @@ mod tests {
         let store = fake_store(
             vec![complete.clone(), incomplete.clone()],
             HashMap::from([
-                (complete.occurrence_uri.clone(), complete_nquads.into_bytes()),
-                (incomplete.occurrence_uri.clone(), incomplete_nquads.into_bytes()),
+                (
+                    complete.occurrence_uri.clone(),
+                    complete_nquads.into_bytes(),
+                ),
+                (
+                    incomplete.occurrence_uri.clone(),
+                    incomplete_nquads.into_bytes(),
+                ),
             ]),
         );
 

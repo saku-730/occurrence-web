@@ -64,6 +64,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+// デモ環境ではメール確認とpasswordを省略し、表示名だけでsessionを発行する。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DemoLoginRequest {
+    pub user_name: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthModeResponse {
+    pub demo_auth_enabled: bool,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LoginResponse {
     pub message: String,

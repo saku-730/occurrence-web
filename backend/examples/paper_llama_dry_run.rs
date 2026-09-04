@@ -1,6 +1,5 @@
 use std::{
-    env,
-    io,
+    env, io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -91,11 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|error| debug_error("paper preprocessing failed", error))?;
 
     tokio::fs::create_dir_all(&output_dir).await?;
-    tokio::fs::write(
-        output_dir.join("prompt.txt"),
-        OCCURRENCE_EXTRACTION_PROMPT,
-    )
-    .await?;
+    tokio::fs::write(output_dir.join("prompt.txt"), OCCURRENCE_EXTRACTION_PROMPT).await?;
     tokio::fs::write(output_dir.join("extracted_text.txt"), &paper.text).await?;
     copy_page_images(&output_dir, &paper.page_images).await?;
 
@@ -142,7 +137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let request_bytes = serde_json::to_vec(&request)?.len();
     println!("dry run complete; no real llama server was contacted");
-    println!("text chars (non-whitespace): {}", paper.text_non_whitespace_chars);
+    println!(
+        "text chars (non-whitespace): {}",
+        paper.text_non_whitespace_chars
+    );
     println!("page images: {}", paper.page_count());
     println!("captured request JSON bytes: {request_bytes}");
     println!("output: {}", output_dir.display());

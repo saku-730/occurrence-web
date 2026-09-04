@@ -10,10 +10,11 @@ use axum::{
 
 use super::{
     dto::{
-        CompleteRegistrationRequest, CompleteRegistrationResponse, CurrentUserResponse,
-        ErrorResponse, LoginRequest, LoginResponse, LogoutResponse, PasswordResetCompleteRequest,
-        PasswordResetCompleteResponse, PasswordResetRequest, PasswordResetResponse,
-        RegisterRequest, RegisterResponse, UpdateUserNameRequest, UserSummaryResponse,
+        AuthModeResponse, CompleteRegistrationRequest, CompleteRegistrationResponse,
+        CurrentUserResponse, DemoLoginRequest, ErrorResponse, LoginRequest, LoginResponse,
+        LogoutResponse, PasswordResetCompleteRequest, PasswordResetCompleteResponse,
+        PasswordResetRequest, PasswordResetResponse, RegisterRequest, RegisterResponse,
+        UpdateUserNameRequest, UserSummaryResponse,
     },
     mail::{MailError, send_mail},
     repository::AuthRepository,
@@ -36,6 +37,7 @@ pub enum AuthHandlerError {
     InvalidSessionCookie,
     InvalidSession,
     UserNotFound,
+    DemoAuthDisabled,
 }
 
 impl From<AuthServiceError> for AuthHandlerError {
@@ -178,8 +180,27 @@ impl IntoResponse for AuthHandlerError {
 
                 (StatusCode::NOT_FOUND, Json(body)).into_response()
             }
+            AuthHandlerError::DemoAuthDisabled => {
+                let body = ErrorResponse {
+                    error: "not_found".to_string(),
+                    message: "Demo authentication is not enabled".to_string(),
+                };
+                (StatusCode::NOT_FOUND, Json(body)).into_response()
+            }
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/auth/mode",
+    responses((status = 200, body = AuthModeResponse)),
+    tag = "auth"
+)]
+pub async fn auth_mode(State(state): State<AppState>) -> Json<AuthModeResponse> {
+    Json(AuthModeResponse {
+        demo_auth_enabled: state.config.app.demo_auth_enabled,
+    })
 }
 
 #[utoipa::path(
@@ -417,6 +438,54 @@ pub async fn login(
     };
 
     Ok((StatusCode::OK, headers, Json(response)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/demo_login",
+    request_body = DemoLoginRequest,
+    responses(
+        (status = 200, description = "Create a demo session", body = LoginResponse),
+        (status = 400, description = "Invalid username", body = ErrorResponse),
+        (status = 404, description = "Demo authentication disabled", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    ),
+    tag = "auth"
+)]
+pub async fn demo_login(
+    State(state): State<AppState>,
+    Json(payload): Json<DemoLoginRequest>,
+) -> Result<(StatusCode, HeaderMap, Json<LoginResponse>), AuthHandlerError> {
+    if !state.config.app.demo_auth_enabled {
+        return Err(AuthHandlerError::DemoAuthDisabled);
+    }
+
+    let output = AuthService::demo_login(&state.posgre, payload.user_name).await?;
+    let secure_attribute = if state.config.app.cookie_secure {
+        "; Secure"
+    } else {
+        ""
+    };
+    let session_cookie = format!(
+        "session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800{}",
+        output.session_token, secure_attribute
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&session_cookie)
+            .map_err(|_| AuthHandlerError::InvalidSessionCookie)?,
+    );
+
+    Ok((
+        StatusCode::OK,
+        headers,
+        Json(LoginResponse {
+            message: "demo login successful".to_string(),
+            email: output.email,
+            user_name: output.user_name,
+        }),
+    ))
 }
 
 #[utoipa::path(

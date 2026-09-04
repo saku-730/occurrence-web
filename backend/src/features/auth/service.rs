@@ -70,6 +70,35 @@ impl From<argon2::password_hash::Error> for AuthServiceError {
 pub struct AuthService; //とりあえずメソッド用に作っておく。
 
 impl AuthService {
+    pub async fn demo_login(
+        db: &PgPool,
+        user_name: String,
+    ) -> Result<LoginOutput, AuthServiceError> {
+        let user_name = user_name.trim();
+        if user_name.is_empty() || user_name.chars().count() > 100 {
+            return Err(AuthServiceError::InvalidUserName);
+        }
+
+        // users.emailはNOT NULL/UNIQUEなので、デモ用identityをusernameのhashから作る。
+        // 生のusernameをメール欄へ埋め込まず、記号や日本語を含む名前でも安全に保存できる。
+        let normalized_name = user_name.to_lowercase();
+        let identity_hash = hex::encode(Sha256::digest(normalized_name.as_bytes()));
+        let email = format!("demo-{}@demo.invalid", identity_hash);
+        let unusable_password = Uuid::new_v4().to_string();
+        let password_hash = hash_password(&unusable_password)?;
+        let user = AuthRepository::upsert_demo_user(db, &email, user_name, &password_hash).await?;
+
+        let session_token = Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+        AuthRepository::create_session(db, user.id, &session_token_hash).await?;
+
+        Ok(LoginOutput {
+            email: user.email,
+            user_name: user.user_name,
+            session_token,
+        })
+    }
+
     pub async fn pre_register(
         db: &PgPool,
         app_base_url: &str,
@@ -1579,6 +1608,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn demo_login_creates_user_and_session_from_user_name() {
+        let db = test_db_pool().await;
+
+        let output = AuthService::demo_login(&db, "  デモ利用者  ".to_string())
+            .await
+            .expect("demo login should succeed with a user name");
+
+        assert_eq!(output.user_name, "デモ利用者");
+        assert!(!output.session_token.is_empty());
+
+        let current_user = AuthService::current_user(&db, output.session_token)
+            .await
+            .expect("the issued demo session should identify its user");
+        assert_eq!(current_user.user_name, "デモ利用者");
+
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&db)
+            .await
+            .expect("demo session count should be queryable");
+        assert_eq!(user_count, 1);
+        assert_eq!(session_count, 1);
+    }
+
+    #[tokio::test]
+    async fn demo_login_reuses_existing_demo_user() {
+        let db = test_db_pool().await;
+
+        let first = AuthService::demo_login(&db, "Demo User".to_string())
+            .await
+            .expect("first demo login should succeed");
+        let second = AuthService::demo_login(&db, "demo user".to_string())
+            .await
+            .expect("second demo login should succeed");
+
+        let first_user = AuthService::current_user(&db, first.session_token)
+            .await
+            .expect("first session should be valid");
+        let second_user = AuthService::current_user(&db, second.session_token)
+            .await
+            .expect("second session should be valid");
+        assert_eq!(first_user.user_id, second_user.user_id);
+
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        assert_eq!(user_count, 1);
+    }
+
+    #[tokio::test]
+    async fn demo_login_rejects_blank_user_name() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::demo_login(&db, "   ".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidUserName)));
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&db)
+            .await
+            .expect("demo session count should be queryable");
+        assert_eq!(user_count, 0);
+        assert_eq!(session_count, 0);
+    }
+
+    #[tokio::test]
     async fn logout_revokes_existing_session() {
         let db = test_db_pool().await;
 
@@ -1673,13 +1775,10 @@ mod tests {
             .await
             .expect("login should succeed");
 
-        let output = AuthService::update_user_name(
-            &db,
-            login.session_token,
-            "  after-name  ".to_string(),
-        )
-        .await
-        .expect("authenticated user should update own name");
+        let output =
+            AuthService::update_user_name(&db, login.session_token, "  after-name  ".to_string())
+                .await
+                .expect("authenticated user should update own name");
 
         assert_eq!(output.user_name, "after-name");
         let saved = AuthRepository::find_user_by_email(&db, &email)

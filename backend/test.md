@@ -145,6 +145,9 @@
 
 ### app
 
+- [ ] `DEMO_AUTH_ENABLED=true`で`POST /auth/demo_login`へユーザー名だけを送ると、ユーザーとsessionを作成してCookie付き`200 OK`を返す`demo_login_route_creates_session_from_user_name`
+- [ ] `DEMO_AUTH_ENABLED=false`ではデモログインAPIを利用できない`demo_login_route_is_unavailable_when_demo_mode_is_disabled`
+
 - [x] `POST /auth/login`に JSON body なしでおくると client error`login_route_rejects_missing_json_body`
 - [x] `POST /auth/login` に登録済み email と正しい password を送ると 200 OK が返る`login_route_returns_ok_for_registered_user_with_correct_password`
 - [x] 存在しない email で `POST /auth/login` しても 401 Unauthorized``
@@ -159,6 +162,10 @@
 - [x] 期限切れ session Cookie で `GET /auth/me` にアクセスすると 401 Unauthorized`me_route_returns_unauthorized_for_expired_session_cookie`
 
 ### service
+
+- [ ] デモログインはユーザー名をtrimし、メール・password入力なしでデモユーザーとsessionを作成する`demo_login_creates_user_and_session_from_user_name`
+- [ ] 大文字小文字を除いて同じデモユーザー名なら既存ユーザーを再利用する`demo_login_reuses_existing_demo_user`
+- [ ] 空または空白だけのデモユーザー名を拒否し、ユーザーとsessionを作成しない`demo_login_rejects_blank_user_name`
 
 - [x] 登録済みユーザーが正しい password で login できる`login_accepts_registered_user_with_correct_password`
 - [x] 間違ったパスワードを拒否する`login_rejects_registered_user_with_wrong_password`

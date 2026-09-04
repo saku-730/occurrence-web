@@ -11,17 +11,14 @@ use uuid::Uuid;
 
 use crate::{
     features::{
-        auth::service::AuthService,
-        occurrence_map::geocoding::enrich_nquads_with_geocoding_and_abr,
+        auth::service::AuthService, occurrence_map::geocoding::enrich_nquads_with_geocoding_and_abr,
     },
     infrastructure::{abr::AbrClient, nominatim::NominatimClient},
     state::AppState,
 };
 
 use super::{
-    registration_handler::{
-        self, PaperRegistrationError, RegisterPaperOccurrencesBatchRequest,
-    },
+    registration_handler::{self, PaperRegistrationError, RegisterPaperOccurrencesBatchRequest},
     repository::PaperRepository,
 };
 
@@ -86,7 +83,11 @@ pub async fn start_registration(
     if request.occurrences.is_empty() || request.occurrences.len() > MAX_BATCH_OCCURRENCES {
         return Err(PaperRegistrationError::InvalidInput);
     }
-    if request.occurrences.iter().any(|nquads| nquads.trim().is_empty()) {
+    if request
+        .occurrences
+        .iter()
+        .any(|nquads| nquads.trim().is_empty())
+    {
         return Err(PaperRegistrationError::InvalidInput);
     }
 
@@ -98,7 +99,10 @@ pub async fn start_registration(
     let total_occurrences = request.occurrences.len();
     {
         let mut jobs = registration_jobs().write().await;
-        if matches!(jobs.get(&paper_id), Some(RegistrationJobState::Processing { .. })) {
+        if matches!(
+            jobs.get(&paper_id),
+            Some(RegistrationJobState::Processing { .. })
+        ) {
             return Ok((
                 StatusCode::ACCEPTED,
                 Json(StartRegistrationJobResponse {
@@ -187,7 +191,10 @@ pub async fn start_registration(
             }
         };
 
-        registration_jobs().write().await.insert(paper_id, next_state);
+        registration_jobs()
+            .write()
+            .await
+            .insert(paper_id, next_state);
     });
 
     Ok((
@@ -298,13 +305,9 @@ fn registration_error_details(error: &PaperRegistrationError) -> (&'static str, 
             "forbidden_media",
             "Occurrence media must be owned by the authenticated user",
         ),
-        PaperRegistrationError::StoreFailed => (
-            "rdf_store_error",
-            "Failed to save occurrence RDF",
-        ),
-        PaperRegistrationError::Database(_) | PaperRegistrationError::Internal => (
-            "internal_server_error",
-            "Internal server error",
-        ),
+        PaperRegistrationError::StoreFailed => ("rdf_store_error", "Failed to save occurrence RDF"),
+        PaperRegistrationError::Database(_) | PaperRegistrationError::Internal => {
+            ("internal_server_error", "Internal server error")
+        }
     }
 }

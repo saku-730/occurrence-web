@@ -644,7 +644,9 @@ fn build_search_filter_patterns(
         let predicate_pattern = match OccurrenceTarget::for_predicate(&filter.predicate)
             .intermediate_definition()
         {
-            None if filter.predicate.starts_with("http://rs.tdwg.org/dwc/terms/")
+            None if filter
+                .predicate
+                .starts_with("http://rs.tdwg.org/dwc/terms/")
                 || filter.predicate.starts_with("http://rs.tdwg.org/dwc/iri/") =>
             {
                 // Arbitrary Darwin Core predicates may be stored on any backend-managed

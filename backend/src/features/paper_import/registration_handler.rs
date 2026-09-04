@@ -89,11 +89,7 @@ impl IntoResponse for PaperRegistrationError {
                 "invalid_paper_occurrence",
                 "Invalid paper occurrence request",
             ),
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                "paper_not_found",
-                "Paper not found",
-            ),
+            Self::NotFound => (StatusCode::NOT_FOUND, "paper_not_found", "Paper not found"),
             Self::InvalidRdf => (
                 StatusCode::BAD_REQUEST,
                 "invalid_rdf",
@@ -371,8 +367,8 @@ fn add_paper_provenance(
         NamedNode::new(OCCURRENCE_GRAPH_URI).map_err(|_| PaperRegistrationError::Internal)?;
     let associated_references = NamedNode::new(ASSOCIATED_REFERENCES_PREDICATE_URI)
         .map_err(|_| PaperRegistrationError::Internal)?;
-    let source_paper = NamedNode::new(SOURCE_PAPER_PREDICATE_URI)
-        .map_err(|_| PaperRegistrationError::Internal)?;
+    let source_paper =
+        NamedNode::new(SOURCE_PAPER_PREDICATE_URI).map_err(|_| PaperRegistrationError::Internal)?;
     let paper_uri = NamedNode::new(format!("{PAPER_URI_BASE}{paper_id}"))
         .map_err(|_| PaperRegistrationError::Internal)?;
 
@@ -482,7 +478,10 @@ mod tests {
 
     #[test]
     fn removes_comma_and_terminal_year() {
-        assert_eq!(scientific_name_without_year("Eisenia Malm, 1877"), "Eisenia Malm");
+        assert_eq!(
+            scientific_name_without_year("Eisenia Malm, 1877"),
+            "Eisenia Malm"
+        );
         assert_eq!(
             scientific_name_without_year("Pheretima acincta Goto & Hatai, 1899"),
             "Pheretima acincta Goto & Hatai"

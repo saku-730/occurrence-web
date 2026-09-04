@@ -63,20 +63,35 @@ impl From<sqlx::Error> for ResolvePaperTaxaError {
 
 impl axum::response::IntoResponse for ResolvePaperTaxaError {
     fn into_response(self) -> axum::response::Response {
-        use axum::{Json, http::StatusCode};
         use crate::features::auth::dto::ErrorResponse;
+        use axum::{Json, http::StatusCode};
 
         let (status, error, message) = match self {
-            Self::InvalidSession => (StatusCode::UNAUTHORIZED, "invalid_session", "Invalid session"),
-            Self::InvalidInput => (StatusCode::BAD_REQUEST, "invalid_taxon_request", "Invalid taxon resolution request"),
+            Self::InvalidSession => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_session",
+                "Invalid session",
+            ),
+            Self::InvalidInput => (
+                StatusCode::BAD_REQUEST,
+                "invalid_taxon_request",
+                "Invalid taxon resolution request",
+            ),
             Self::NotFound => (StatusCode::NOT_FOUND, "paper_not_found", "Paper not found"),
-            Self::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error", "Internal server error"),
+            Self::Database(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_server_error",
+                "Internal server error",
+            ),
         };
 
-        (status, Json(ErrorResponse {
-            error: error.to_string(),
-            message: message.to_string(),
-        }))
+        (
+            status,
+            Json(ErrorResponse {
+                error: error.to_string(),
+                message: message.to_string(),
+            }),
+        )
             .into_response()
     }
 }
@@ -93,7 +108,10 @@ pub async fn resolve_taxa(
 
     let session_token = extract_session_token(&headers)?;
     let _current_user = AuthService::current_user(&state.posgre, session_token).await?;
-    if PaperRepository::find_by_id(&state.posgre, paper_id).await?.is_none() {
+    if PaperRepository::find_by_id(&state.posgre, paper_id)
+        .await?
+        .is_none()
+    {
         return Err(ResolvePaperTaxaError::NotFound);
     }
 

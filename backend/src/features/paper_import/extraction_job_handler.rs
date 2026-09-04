@@ -9,10 +9,7 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::{
-    features::auth::service::AuthService,
-    state::AppState,
-};
+use crate::{features::auth::service::AuthService, state::AppState};
 
 use super::{
     repository::PaperRepository,
@@ -194,7 +191,10 @@ pub async fn extraction_status(
     Ok(Json(response))
 }
 
-async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), PaperSourceHandlerError> {
+async fn authenticate(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), PaperSourceHandlerError> {
     let token = extract_session_token(headers)?;
     AuthService::current_user(&state.posgre, token)
         .await
@@ -225,19 +225,16 @@ fn extract_session_token(headers: &HeaderMap) -> Result<String, PaperSourceHandl
 fn extraction_error_details(error: &PaperSourceHandlerError) -> (&'static str, &'static str) {
     match error {
         PaperSourceHandlerError::InvalidSession => ("invalid_session", "Invalid session"),
-        PaperSourceHandlerError::InvalidInput => (
-            "invalid_paper_source",
-            "Invalid paper source request",
-        ),
+        PaperSourceHandlerError::InvalidInput => {
+            ("invalid_paper_source", "Invalid paper source request")
+        }
         PaperSourceHandlerError::NotFound => ("paper_not_found", "Paper not found"),
-        PaperSourceHandlerError::UnsupportedMediaType => (
-            "unsupported_media_type",
-            "Only PDF files are accepted",
-        ),
-        PaperSourceHandlerError::PayloadTooLarge => (
-            "payload_too_large",
-            "PDF file exceeds the 100MB limit",
-        ),
+        PaperSourceHandlerError::UnsupportedMediaType => {
+            ("unsupported_media_type", "Only PDF files are accepted")
+        }
+        PaperSourceHandlerError::PayloadTooLarge => {
+            ("payload_too_large", "PDF file exceeds the 100MB limit")
+        }
         PaperSourceHandlerError::ObjectStoreFailed => (
             "object_store_error",
             "Failed to read or store the paper PDF",
@@ -250,9 +247,8 @@ fn extraction_error_details(error: &PaperSourceHandlerError) -> (&'static str, &
             "occurrence_extraction_error",
             "Failed to extract occurrences from the paper",
         ),
-        PaperSourceHandlerError::Database(_) | PaperSourceHandlerError::FileSystem(_) => (
-            "internal_server_error",
-            "Internal server error",
-        ),
+        PaperSourceHandlerError::Database(_) | PaperSourceHandlerError::FileSystem(_) => {
+            ("internal_server_error", "Internal server error")
+        }
     }
 }

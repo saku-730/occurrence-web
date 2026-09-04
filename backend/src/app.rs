@@ -10,8 +10,8 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     features::{
         auth::handler::{
-            complete_registration, login, logout, me, pre_register, request_password_reset,
-            reset_password, update_user_name, user_summary,
+            auth_mode, complete_registration, demo_login, login, logout, me, pre_register,
+            request_password_reset, reset_password, update_user_name, user_summary,
         },
         media::handler::{MEDIA_REQUEST_BODY_LIMIT_BYTES, delete_media, get_media, upload_media},
         occurrences::handler::{
@@ -35,6 +35,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/request_password_reset", post(request_password_reset))
         .route("/auth/reset_password", post(reset_password))
         .route("/auth/login", post(login))
+        .route("/auth/demo_login", post(demo_login))
+        .route("/auth/mode", get(auth_mode))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me).patch(update_user_name))
         .route("/users/{user_id}", get(user_summary))
@@ -155,6 +157,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -186,6 +189,12 @@ mod tests {
         let posgre = isolated_test_pool(&config.posgre.url);
 
         AppState::new(config, posgre, Arc::new(NoopOccurrenceRdfStore))
+    }
+
+    fn test_state_with_demo_auth(enabled: bool) -> AppState {
+        let mut state = test_state();
+        Arc::make_mut(&mut state.config).app.demo_auth_enabled = enabled;
+        state
     }
 
     #[derive(Clone, Default)]
@@ -229,6 +238,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -281,6 +291,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -3328,6 +3339,7 @@ mod tests {
                 app_base_url,
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -3715,6 +3727,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn demo_login_route_creates_session_from_user_name() {
+        let state = test_state_with_demo_auth(true);
+        let app = build_app(state);
+        let body = serde_json::json!({ "user_name": "デモ利用者" });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/demo_login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let session_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("demo login should issue a session cookie")
+            .to_str()
+            .expect("session cookie should be valid")
+            .split(';')
+            .next()
+            .expect("session cookie should contain a value")
+            .to_string();
+
+        let me_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/auth/me")
+                    .header(COOKIE, session_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(me_response.status(), StatusCode::OK);
+
+        let body = to_bytes(me_response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["user_name"], "デモ利用者");
+    }
+
+    #[tokio::test]
+    async fn demo_login_route_is_unavailable_when_demo_mode_is_disabled() {
+        let app = build_app(test_state_with_demo_auth(false));
+        let body = serde_json::json!({ "user_name": "デモ利用者" });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/auth/demo_login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn login_route_sets_secure_session_cookie_when_cookie_secure_enabled() {
         dotenvy::dotenv().ok();
 
@@ -3728,6 +3809,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: true,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -5616,6 +5698,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -5790,6 +5873,7 @@ mod tests {
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -5976,6 +6060,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -7351,6 +7436,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
@@ -7476,6 +7562,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
                 app_base_url: "http://127.0.0.1:3000".to_string(),
                 environment: "test".to_string(),
                 cookie_secure: false,
+                demo_auth_enabled: false,
             },
             posgre: PosgreConfig {
                 url: database_url.clone(),
