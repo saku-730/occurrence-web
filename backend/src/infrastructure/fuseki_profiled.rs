@@ -216,10 +216,11 @@ fn build_search_filter_patterns(
                         let internal_taxon_var = format!("?filterInternalTaxon{index}");
 
                         patterns.push(format!(
-                            r#"{predicate_pattern}
-                    FILTER(
-                        {object_var} = {object}
-                        || EXISTS {{
+                            r#"{{
+                        {{ {predicate_pattern} FILTER({object_var} = {object}) }}
+                        UNION
+                        {{
+                            {predicate_pattern}
                             FILTER(STRSTARTS(STR({object_var}), "{GBIF_PUBLIC_TAXON_URI_BASE}"))
                             BIND(
                                 IRI(CONCAT(
@@ -232,7 +233,7 @@ fn build_search_filter_patterns(
                                 {internal_taxon_var} <{GBIF_PARENT_NAME_USAGE_PREDICATE_URI}>+ <{internal_target}> .
                             }}
                         }}
-                    )"#
+                    }}"#
                         ));
                     } else {
                         patterns.push(format!("{predicate_pattern} FILTER({object_var} = {object})"));
