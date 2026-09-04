@@ -16,7 +16,7 @@
 
 ## 検索画面
 
-初期状態では `dwc:scientificName` の入力行を1つ表示するが、学名だけに限定しない。
+初期状態では `dwc:scientificName` と `dwciri:toTaxon` の入力行を表示するが、検索項目はこの2つに限定しない。
 
 ユーザーが操作する各検索条件は以下だけを持つ。
 
@@ -85,6 +85,7 @@ https://bio-database.net/graphs/app/occurrence-profile
 - occurrence-profile graphで `bio:useAtBioDatabase true` の語だけを候補にする
 - occurrence-profile graphの `skos:prefLabel @ja` があれば日本語表示名として優先する
 - 日本語表示名がなければDarwin Coreの `localName` をfallbackとして使う
+- `dwciri:toTaxon` はGBIF分類階層検索に使うため検索候補へ常に含める
 
 項目選択UIでは日本語表示名を主表示する。
 predicate IRIは識別・検索API送信用に内部保持し、通常UIでは小さな補助情報として表示する。
@@ -208,30 +209,46 @@ frontendが `value_type = literal` と判定した場合。
 
 ## URI検索
 
-frontendが `value_type = uri` と判定した場合。
+frontendが `value_type = uri` と判定した場合、通常のURI項目はURI完全一致のみを行う。
 
-- URI完全一致を行う
-- URI値は有効なIRIでなければならない
-- taxonomy graph の下位分類群探索も維持する
+`dwciri:toTaxon` にGBIF公開URIを指定した場合だけ、完全一致に加えてGBIF Backbone Taxonomyの下位分類群を含める。
 
-分類群検索では指定taxon自身に加え、以下のproperty pathで下位分類群を含める。
-
-```sparql
-?taxon rdfs:subClassOf+ ?targetTaxon .
-```
-
-完全一致条件と組み合わせるため、target自身も結果に含む。
-
-taxonomy graph URI。
+Occurrenceに保存する `toTaxon` は次のGBIF公開URIを使う。
 
 ```text
-https://bio-database.net/graphs/taxonomy/gbif-backbone
+https://www.gbif.org/species/{id}
 ```
 
-分類群URI。
+一方、FusekiのGBIF Backbone Taxonomy graphでは分類群を次の内部URIで保持する。
 
 ```text
 https://bio-database.net/taxa/gbif/{id}
+```
+
+検索時にbackendはGBIF公開URIから `{id}` を取り出し、内部taxon URIへ変換する。
+Occurrence側の `toTaxon` URIや既存データを書き換えない。
+
+GBIF Backbone内の親子関係は以下のpredicateで保持する。
+
+```text
+https://bio-database.net/terms/parentNameUsage
+```
+
+指定taxonの下位分類群探索には次のproperty pathを使う。
+
+```sparql
+?internalTaxon <https://bio-database.net/terms/parentNameUsage>+ <https://bio-database.net/taxa/gbif/{targetId}> .
+```
+
+したがって例えば `dwciri:toTaxon = <https://www.gbif.org/species/42>` で検索すると、Annelida自身に加えて、GBIF Backbone上で `parentNameUsage+` によりAnnelidaへ到達する下位分類群を `toTaxon` に持つOccurrenceも検索結果に含める。
+
+非GBIF URIを `toTaxon` に指定した場合はURI完全一致のみとする。
+`dcterms:creator`、`sourcePaper`、その他URI値の検索にはGBIF階層探索を適用しない。
+
+GBIF taxonomy graph URI。
+
+```text
+https://bio-database.net/graphs/taxonomy/gbif-backbone
 ```
 
 ---
