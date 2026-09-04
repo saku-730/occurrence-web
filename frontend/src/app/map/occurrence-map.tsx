@@ -44,6 +44,11 @@ interface OccurrenceMapProperties {
   coordinateSource: "original" | "nominatim";
 }
 
+interface OccurrenceCoordinateIndex {
+  groupsByCoordinate: Map<string, OccurrenceMapFeature[]>;
+  coordinateKeyByOccurrenceId: Map<string, string>;
+}
+
 interface MapLibrePopup {
   setLngLat(coordinates: [number, number]): MapLibrePopup;
   setDOMContent(node: Node): MapLibrePopup;
@@ -189,7 +194,7 @@ export function OccurrenceMap() {
         if (!active || !containerRef.current) return;
 
         setFeatureCount(data.features.length);
-        const featureGroups = groupFeaturesByExactCoordinates(data.features);
+        const featureIndex = indexFeaturesByExactCoordinates(data.features);
         map = new maplibregl.Map({
           container: containerRef.current,
           style: MAP_STYLE_URL,
@@ -232,7 +237,7 @@ export function OccurrenceMap() {
 
           for (const layerId of ["occurrences-original", "occurrences-nominatim"]) {
             map.on("click", layerId, (event) =>
-              showOccurrencePopup(maplibregl, map, event, featureGroups),
+              showOccurrencePopup(maplibregl, map, event, featureIndex),
             );
             map.on("mouseenter", layerId, () => {
               if (map) map.getCanvas().style.cursor = "pointer";
@@ -397,7 +402,7 @@ function showOccurrencePopup(
   maplibregl: MapLibreApi,
   map: MapLibreMap | null,
   event: MapLibreLayerEvent,
-  featureGroups: Map<string, OccurrenceMapFeature[]>,
+  featureIndex: OccurrenceCoordinateIndex,
 ) {
   if (!map) return;
   const feature = event.features?.[0];
@@ -408,11 +413,18 @@ function showOccurrencePopup(
   const latitude = Number(coordinates[1]);
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
 
-  const groupedFeatures =
-    featureGroups.get(exactCoordinateKey([longitude, latitude])) ?? [];
+  const occurrenceId = stringProperty(feature.properties, "occurrenceId");
+  const sourceCoordinateKey = occurrenceId
+    ? featureIndex.coordinateKeyByOccurrenceId.get(occurrenceId)
+    : undefined;
+  const groupedFeatures = sourceCoordinateKey
+    ? featureIndex.groupsByCoordinate.get(sourceCoordinateKey) ?? []
+    : featureIndex.groupsByCoordinate.get(exactCoordinateKey([longitude, latitude])) ?? [];
+
   if (groupedFeatures.length >= 2) {
+    const popupCoordinates = groupedFeatures[0].geometry.coordinates;
     new maplibregl.Popup({ closeButton: true })
-      .setLngLat([longitude, latitude])
+      .setLngLat(popupCoordinates)
       .setDOMContent(createOccurrenceListPopup(groupedFeatures))
       .addTo(map);
     return;
@@ -445,7 +457,6 @@ function showOccurrencePopup(
       : "元データの座標",
   );
 
-  const occurrenceId = stringProperty(properties, "occurrenceId");
   if (occurrenceId) {
     const link = document.createElement("a");
     link.href = `/occurrences/${encodeURIComponent(occurrenceId)}`;
@@ -460,20 +471,27 @@ function showOccurrencePopup(
     .addTo(map);
 }
 
-function groupFeaturesByExactCoordinates(
+function indexFeaturesByExactCoordinates(
   features: OccurrenceMapFeature[],
-): Map<string, OccurrenceMapFeature[]> {
-  const groups = new Map<string, OccurrenceMapFeature[]>();
+): OccurrenceCoordinateIndex {
+  const groupsByCoordinate = new Map<string, OccurrenceMapFeature[]>();
+  const coordinateKeyByOccurrenceId = new Map<string, string>();
+
   for (const feature of features) {
     const key = exactCoordinateKey(feature.geometry.coordinates);
-    const group = groups.get(key);
+    const group = groupsByCoordinate.get(key);
     if (group) {
       group.push(feature);
     } else {
-      groups.set(key, [feature]);
+      groupsByCoordinate.set(key, [feature]);
+    }
+
+    if (feature.properties.occurrenceId) {
+      coordinateKeyByOccurrenceId.set(feature.properties.occurrenceId, key);
     }
   }
-  return groups;
+
+  return { groupsByCoordinate, coordinateKeyByOccurrenceId };
 }
 
 function exactCoordinateKey(coordinates: [number, number]): string {
