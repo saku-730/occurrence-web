@@ -90,8 +90,6 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Node
         uses: actions/setup-node@v4
-      - name: Use npm cache
-        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
