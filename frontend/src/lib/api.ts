@@ -123,7 +123,7 @@ function registrationJobErrorStatus(error: string | undefined): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function resolveApiUrl(path: string): string {
