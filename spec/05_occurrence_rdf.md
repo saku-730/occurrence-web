@@ -497,3 +497,31 @@ MVPでは、対象occurrenceとbackendが生成した中間ノード構造を物
   "deleted": true
 }
 ```
+
+---
+
+## 将来的に追加したい標本作製メタデータ
+
+標本作製に関する情報は、Darwin Coreだけでは十分に表現できないため、将来的に GGBN Data Standard の既存語彙を追加候補とする。
+
+優先候補。
+
+- `ggbn:preparedBy` (`http://data.ggbn.org/schemas/ggbn/terms/preparedBy`): 標本・試料の作製または抽出を担当した人物・機関
+- `ggbn:preparationDate` (`http://data.ggbn.org/schemas/ggbn/terms/preparationDate`): 標本・試料の作製または抽出を行った日
+
+関連して将来的に検討する項目。
+
+- `ggbn:preparationProcess` (`http://data.ggbn.org/schemas/ggbn/terms/preparationProcess`): 標本・試料の作製工程・抽出工程
+- `ggbn:preparationMaterials` (`http://data.ggbn.org/schemas/ggbn/terms/preparationMaterials`): 作製・抽出に使用した材料や薬品
+- `ggbn:preparationType` (`http://data.ggbn.org/schemas/ggbn/terms/preparationType`): 作製された標本・試料のタイプ
+
+役割と日時は以下のように区別する。
+
+- `dwc:recordedBy`: 採集者・観察者など、Occurrence/Event の記録を行った人物
+- `dwc:eventDate`: 採集・観察イベントの日付
+- `ggbn:preparedBy`: 採集後の標本・試料作製を担当した人物・機関
+- `ggbn:preparationDate`: 採集後の標本・試料作製日
+- `dwc:identifiedBy`: 同定者
+- `dwc:dateIdentified`: 同定日
+
+これらの GGBN 項目は現時点のMVPには実装せず、将来の標本情報拡張時にデータモデル・中間ノード構造・検索対象・入力UIへの追加を検討する。
