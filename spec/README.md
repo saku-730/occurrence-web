@@ -35,6 +35,7 @@
 | `17_darwin_core_candidates.md` | Darwin Core候補語彙、Bio-Database固有プロファイル |
 | `18_geocoding.md` | ABR住所分割、Nominatimジオコーディング、RDF provenance、キャッシュ、失敗時処理 |
 | `19_occurrence_map.md` | MapLibre地図表示、Nominatim Geocoding、GeoJSON API |
+| `20_label_templates.md` | ラベル印刷、PDF出力、ラベルテンプレートの実装状況と今後の設計 |
 
 ## 最重要方針
 
