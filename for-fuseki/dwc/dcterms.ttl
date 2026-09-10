@@ -1,0 +1,164 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>.
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+@prefix owl: <http://www.w3.org/2002/07/owl#>.
+@prefix dc: <http://purl.org/dc/elements/1.1/>.
+@prefix dcterms: <http://purl.org/dc/terms/>.
+@prefix dwc: <http://rs.tdwg.org/dwc/terms/>.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#>.
+@prefix tdwgutility: <http://rs.tdwg.org/dwc/terms/attributes/>.
+@prefix foaf: <http://xmlns.com/foaf/0.1/>.
+@prefix dwciri: <http://rs.tdwg.org/dwc/iri/>.
+@prefix vann: <http://purl.org/vocab/vann/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dc:publisher "Biodiversity Information Standards (TDWG)"@en;
+     dcterms:publisher <https://www.grid.ac/institutes/grid.480498.9>;
+     rdfs:label "Darwin Core terms borrowed from the Dublin Core terms namespace"@en;
+     dcterms:title "Darwin Core terms borrowed from the Dublin Core terms namespace"@en;
+     rdfs:comment "This list includes terms borrowed by Darwin Core from the terms (http://purl.org/dc/terms/) Dublin Core namespace"@en;
+     dcterms:description "This list includes terms borrowed by Darwin Core from the terms (http://purl.org/dc/terms/) Dublin Core namespace"@en;
+     dcterms:created "2009-10-09"^^xsd:date;
+     vann:preferredNamespacePrefix "dcterms";
+     vann:preferredNamespaceUri "http://purl.org/dc/terms/";
+     a tdwgutility:TermList.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2009-10-09>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2009-10-09>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2014-10-16>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2014-10-16>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2014-11-06>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2014-11-06>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2015-03-07>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2015-03-07>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2020-08-12>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2020-08-12>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2021-07-15>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2021-07-15>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2023-06-28>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2023-06-28>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2023-09-13>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2023-09-13>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2023-09-18>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2023-09-18>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2025-06-12>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2025-06-12>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2026-05-26>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2026-05-26>.
+
+<http://rs.tdwg.org/dwc/version/dcterms/2026-05-26>
+     dcterms:isVersionOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasVersion <http://rs.tdwg.org/dwc/version/dcterms/2026-05-26>.
+
+<http://purl.org/dc/terms/accessRights>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/accessRights>.
+
+<http://purl.org/dc/terms/bibliographicCitation>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/bibliographicCitation>.
+
+<http://purl.org/dc/terms/language>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/language>.
+
+<http://purl.org/dc/terms/license>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/license>.
+
+<http://purl.org/dc/terms/Location>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/Location>.
+
+<http://purl.org/dc/terms/modified>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/modified>.
+
+<http://purl.org/dc/terms/references>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/references>.
+
+<http://purl.org/dc/terms/rightsHolder>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/rightsHolder>.
+
+<http://purl.org/dc/terms/BibliographicResource>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/BibliographicResource>.
+
+<http://purl.org/dc/terms/Agent>
+     dcterms:isPartOf <http://rs.tdwg.org/dwc/dcterms/>.
+
+<http://rs.tdwg.org/dwc/dcterms/>
+     dcterms:hasPart <http://purl.org/dc/terms/Agent>.
+
+<http://rs.tdwg.org/dwc/dcterms.ttl>
+     dc:format "text/turtle";
+     dc:creator "Biodiversity Information Standards (TDWG)";
+     dcterms:references <http://rs.tdwg.org/dwc/dcterms/>;
+     dcterms:modified "2026-06-07T12:26:59-03:00"^^xsd:dateTime;
+     a foaf:document.
+

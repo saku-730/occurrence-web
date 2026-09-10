@@ -1,0 +1,6 @@
+[ja]
+  label = "日本語"
+  weight = 10
+  [ja.params]
+    languageISO = "JA"
+    languageTag = "ja-JP"

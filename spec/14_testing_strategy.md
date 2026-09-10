@@ -39,6 +39,15 @@
 
 ---
 
+## PostgreSQLテストデータの分離
+
+- 共有または開発用PostgreSQLのtableをテスト開始時に`TRUNCATE`しない
+- 認証serviceテストは、public tableと同じ構造を持つconnection単位のtemporary tableを使用する
+- temporary tableはテスト用connection終了時に自動削除し、テスト開始前から存在するデータへ影響を与えない
+- temporary tableを使用できない結合テストでは、テスト内で生成したUUIDやemailに一致するレコードだけを外部キーの子から順に削除する
+
+---
+
 ## 認証テスト
 
 必須。
@@ -173,8 +182,10 @@
 - unknown predicates are searched directly under the occurrence URI
 - literal search is case-insensitive
 - literal search trims whitespace
-- URI taxon exact match
-- URI taxon search follows `rdfs:subClassOf`
+- `dwciri:toTaxon` URI exact match
+- GBIF `dwciri:toTaxon` search converts the public GBIF URI to the internal taxon URI and follows `bio:parentNameUsage+`
+- GBIF `dwciri:toTaxon` hierarchy search supports both public and legacy internal GBIF taxon URIs stored in occurrences
+- URI hierarchy search is applied only to `dwciri:toTaxon`; creator, sourcePaper, and other URI filters remain exact-only
 - URI hierarchy search does not apply to literal values
 - non-login sees only public
 - editor sees public and own private

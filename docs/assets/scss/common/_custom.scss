@@ -1,0 +1,88 @@
+.system-diagram {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.system-entry {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+}
+
+.system-services {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.system-node {
+  border: 1px solid #cfd8dc;
+  border-radius: 0.5rem;
+  min-width: 0;
+  padding: 1rem 1.25rem;
+  text-align: center;
+}
+
+.system-node h3 {
+  font-size: 1rem;
+  margin: 0 0 0.35rem;
+}
+
+.system-node p {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.system-node-edge {
+  background: #edf5f4;
+  border-color: #9ec7c2;
+}
+
+.system-node-web {
+  background: #f5f1e8;
+  border-color: #d7c48e;
+}
+
+.system-node-api {
+  background: #eef1f5;
+  border-color: #aebdce;
+}
+
+.system-node-postgres {
+  background: #f8ecee;
+  border-color: #d8b2b6;
+}
+
+.system-node-fuseki {
+  background: #edf4e9;
+  border-color: #abc79c;
+}
+
+.system-node-garage {
+  background: #f7f0e9;
+  border-color: #d5b68f;
+}
+
+.system-node-gbif {
+  background: #f1edfa;
+  border-color: #bcaee2;
+}
+
+.system-arrow {
+  color: #52616b;
+  font-size: 1.5rem;
+  line-height: 1.5;
+}
+
+.taxonomy-flow {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+@media (max-width: 767.98px) {
+  .system-services {
+    grid-template-columns: 1fr;
+  }
+}

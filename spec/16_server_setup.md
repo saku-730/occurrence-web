@@ -11,6 +11,8 @@ sudo apt update
 sudo apt upgrade 
 sudo apt install build-essential
 sudo apt install pkg-config libssl-dev
+sudo apt install poppler-utils
+sudo apt install postgresql-client
 ```
 
 ### Repository
@@ -127,11 +129,95 @@ download docker file from this link.
 
 https://repo1.maven.org/maven2/org/apache/jena/jena-fuseki-docker/6.1.0/jena-fuseki-docker-6.1.0.zip
 
+#### Darwin Core master data
 
-Darwin core 導入。
+TDWG の以下5つの Turtle ファイルを元に、Bio-Database 用の N-Quads を作成する。
+
+```text
+ac.ttl
+dc.ttl
+dcterms.ttl
+iri.ttl
+terms.ttl
+```
+
+取得例。
 
 ```bash
-FILE='/実際のパス/darwin_core_master_single_graph.nq'
+mkdir -p dwc-source
+cd dwc-source
+
+wget https://rs.tdwg.org/dwc/ac.ttl
+wget https://rs.tdwg.org/dwc/dc.ttl
+wget https://rs.tdwg.org/dwc/dcterms.ttl
+wget https://rs.tdwg.org/dwc/iri.ttl
+wget https://rs.tdwg.org/dwc/terms.ttl
+```
+
+この5ファイルから Darwin Core 語彙本体を作成し、`frontend/content/terms/darwin-core/list.csv` の Bio-Database 固有情報を付加して `darwin_core_master.nq` を生成する。
+
+完成した N-Quads は次の2つの named graph を持つ。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core
+https://bio-database.net/graphs/app/occurrence-profile
+```
+
+役割は次のとおり。
+
+- `https://bio-database.net/graphs/vocabularies/darwin-core`
+  - TDWG由来のDarwin Core語彙本体を保持する。
+  - Bio-Database固有の設定は入れない。
+- `https://bio-database.net/graphs/app/occurrence-profile`
+  - Bio-Databaseでその語彙を使用するかを保持する。
+  - Bio-Databaseで表示する日本語名を保持する。
+
+
+Darwin Core公式情報とBio-Database固有情報を別graphにすることで、Darwin Core公式語彙だけを更新する場合とBio-Database側の設定だけを更新する場合を独立して扱える。例えばTDWG側の語彙を更新するときに `vocabularies/darwin-core` graphだけを再作成しても、`occurrence-profile` graphに保存したBio-Database固有設定は残せる。
+
+Bio-Database固有情報として現在追加するのは次の2項目だけとする。
+
+```text
+https://bio-database.net/terms/useAtBioDatabase
+http://www.w3.org/2004/02/skos/core#prefLabel
+```
+
+`useAtBioDatabase` はBio-Database独自の概念なのでBio-Database namespaceを使用する。目的語は `xsd:boolean` で、`true` / `false` を明示的に保存する。
+
+日本語名は既存標準の `skos:prefLabel` を使用し、`@ja` 言語タグを付ける。
+
+例。
+
+```nq
+<http://rs.tdwg.org/dwc/terms/scientificName> <https://bio-database.net/terms/useAtBioDatabase> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <https://bio-database.net/graphs/app/occurrence-profile> .
+<http://rs.tdwg.org/dwc/terms/scientificName> <http://www.w3.org/2004/02/skos/core#prefLabel> "学名"@ja <https://bio-database.net/graphs/app/occurrence-profile> .
+```
+
+`list.csv`との対応は次のとおり。
+
+| `list.csv` | RDF |
+| --- | --- |
+| `iri` | 主語IRI |
+| `use_at_bio_database` | `bio:useAtBioDatabase` の `xsd:boolean` |
+| `label_ja` | `skos:prefLabel` の `@ja` literal |
+
+生成時はDarwin Core語彙graphに実際に存在するIRIを基準とする。
+
+- `list.csv` に同じIRIがあれば `use_at_bio_database` の値を使用する。
+- `list.csv` にIRIがなければ `useAtBioDatabase false` を生成する。
+- `label_ja` が存在するときだけ日本語 `skos:prefLabel` を生成する。
+- `label_ja` が空なら日本語名を推測して生成しない。
+- `list.csv` にだけ存在し、Darwin Core語彙本体に存在しないIRIは設定graphにも追加しない。
+
+
+現在、生成済み N-Quads はあるが、5 TTL と `list.csv` から N-Quads を再生成するスクリプトはリポジトリに未収録。
+
+##### 初回投入
+
+FusekiにまだDarwin Coreデータがない場合は、そのままN-Quadsを投入する。
+
+```bash
+FILE='/実際のパス/darwin_core_master_ja.nq'
 
 curl -fsS \
   -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
@@ -141,7 +227,115 @@ curl -fsS \
   "${FUSEKI_URL}/${FUSEKI_DATASET}/data"
 ```
 
-gbif backbone is too big for web api, so use tdbloader
+##### 既存Darwin Coreデータの置換
+
+既存FusekiのDarwin Core関連データを新しい `darwin_core_master.nq` へ完全に置き換える場合は、対象の2 named graphだけを削除してからN-Quadsを再投入する。
+
+まず既存graphを削除する。
+
+```bash
+curl -fsS \
+  -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
+  -X POST \
+  --data-urlencode 'update=
+DROP SILENT GRAPH <https://bio-database.net/graphs/vocabularies/darwin-core>;
+DROP SILENT GRAPH <https://bio-database.net/graphs/app/occurrence-profile>
+' \
+  "${FUSEKI_URL}/${FUSEKI_DATASET}/update"
+```
+
+その後、新しいN-Quadsを投入する。
+
+```bash
+FILE='/実際のパス/darwin_core_master.nq'
+
+curl -fsS \
+  -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
+  -X POST \
+  -H 'Content-Type: application/n-quads' \
+  --data-binary "@${FILE}" \
+  "${FUSEKI_URL}/${FUSEKI_DATASET}/data"
+```
+
+この操作で削除するのはDarwin Core関連の2 named graphだけであり、Occurrence RDF、GBIF Backboneなど他のnamed graphは削除しない。
+
+##### 投入確認
+
+投入後はgraphごとのtriple数を確認する。
+
+```bash
+curl -fsS \
+  -u "${FUSEKI_USER}:${FUSEKI_PASSWORD}" \
+  --get \
+  --data-urlencode 'query=
+SELECT ?g (COUNT(*) AS ?count)
+WHERE {
+  GRAPH ?g { ?s ?p ?o }
+  FILTER (?g IN (
+    <https://bio-database.net/graphs/vocabularies/darwin-core>,
+    <https://bio-database.net/graphs/app/occurrence-profile>
+  ))
+}
+GROUP BY ?g
+ORDER BY ?g
+' \
+  -H 'Accept: application/sparql-results+json' \
+  "${FUSEKI_URL}/${FUSEKI_DATASET}/query"
+```
+
+現在の生成データであれば期待値は次のとおり。
+
+```text
+https://bio-database.net/graphs/vocabularies/darwin-core   3654
+https://bio-database.net/graphs/app/occurrence-profile      799
+```
+
+Bio-Database固有設定の内容を確認する場合は次のSPARQLを使用できる。
+
+```sparql
+SELECT ?term ?enabled ?labelJa
+WHERE {
+  GRAPH <https://bio-database.net/graphs/app/occurrence-profile> {
+    ?term <https://bio-database.net/terms/useAtBioDatabase> ?enabled .
+    OPTIONAL {
+      ?term <http://www.w3.org/2004/02/skos/core#prefLabel> ?labelJa .
+      FILTER(LANG(?labelJa) = "ja")
+    }
+  }
+}
+LIMIT 20
+```
+
+詳細なデータモデルとbackend側の利用方針は `spec/17_darwin_core_candidates.md` を参照する。
+
+#### GBIF Backbone master data
+
+GBIF Backbone の `simple.txt.gz` を取得し、リポジトリ内の変換ツールで N-Quads に変換する。
+
+gzip は展開不要。
+
+```bash
+wget https://hosted-datasets.gbif.org/datasets/backbone/current/simple.txt.gz
+```
+
+変換。
+
+```bash
+cd ~/occurrence-web/tools/gbif-backbone-to-rdf
+cargo build --release
+
+cargo run --release -- \
+  /path/to/simple.txt.gz \
+  gbif-backbone.nq
+```
+
+生成される分類マスタの named graph。
+
+```text
+https://bio-database.net/graphs/taxonomy/gbif-backbone
+```
+
+GBIF Backbone は大きすぎるので Web API 経由では投入せず `tdb2.tdbloader` を使用する。
 
 ```bash
 docker compose stop fuseki
@@ -245,4 +439,155 @@ npm run build
 npm run start
 ```
 
+### Geocoding: ABR + Nominatim
 
+Bio-Database の住所ジオコーディングは、**ABRで住所を正規化・分割し、その結果をNominatimへ渡す**。
+ABRの座標は使用せず、最終的な緯度経度はNominatimだけから取得する。
+詳細仕様は `spec/18_geocoding.md` を参照する。
+
+#### ABR geocoder のセットアップ
+
+ABR は npm のグローバルインストールではなく、デジタル庁公式 `digital-go-jp/abr-geocoder` リポジトリの **Docker Compose 構成をそのまま使用する**。
+全国データを使うため、公式リポジトリ直下の `docker-compose.yml` で PostgreSQL、`abrdb_app`、`abrg_app` を管理する。
+
+公式リポジトリを取得する。
+
+```bash
+cd ~
+git clone https://github.com/digital-go-jp/abr-geocoder.git
+cd abr-geocoder
+```
+
+公式の `.env.example` をコピーする。
+
+```bash
+cp .env.example .env
+```
+
+`.env` の `DB_PASSWORD` を必ず設定する。
+Bio-Database 本体の PostgreSQL と Next.js が標準ポートを使用している場合は衝突を避けるため、ABR 側の host port を変更する。
+
+例。
+
+```env
+DB_HOST=postgres
+DB_PORT=5433
+DB_USER=postgres
+DB_PASSWORD=<strong-password>
+DB_NAME=abrdb
+DB_SSLMODE=disable
+
+PORT=3001
+GIN_MODE=release
+CORS_ALLOW_ORIGIN=*
+LOG_LEVEL=INFO
+```
+
+`DB_PORT` は host 側公開ポートであり、ABR の compose network 内では PostgreSQL の `5432` を使用する。
+`PORT` は abrg API の host 側公開ポートである。
+
+全国データを利用する場合、公式 README に従い次の順番でセットアップする。
+
+まず ABR 専用 PostgreSQL を起動する。
+
+```bash
+docker compose up -d postgres
+```
+
+取り込むデータ範囲を初期化する。
+Bio-Database では住所の正規化・階層分割を目的とし、ABR の座標を利用しないため `--pos` は付けない。
+住所階層は全国・全カテゴリを対象とする。
+
+```bash
+docker compose run --rm abrdb_app init --pref all --category all
+```
+
+ABR データをダウンロードして PostgreSQL に取り込む。
+
+```bash
+docker compose run --rm abrdb_app import
+```
+
+状態確認。
+
+```bash
+docker compose ps
+```
+
+動作確認。
+
+```bash
+curl -fsS --get \
+  --data-urlencode 'address=東京都千代田区紀尾井町1-3' \
+  'http://127.0.0.1:3001/geocode'
+```
+
+公式 compose ではデータを named volume に保持する。
+
+```text
+postgres_data  ABR用PostgreSQLデータ
+abrdb_data     ダウンロードしたABRアーカイブ
+abrg_cache     abrgが参照するDuckDBキャッシュ
+```
+
+通常の停止ではデータを維持する。
+
+```bash
+docker compose down
+```
+
+`docker compose down -v` は上記 named volume も削除するため、ABR データを完全に作り直す場合以外は使用しない。
+
+Bio-Database では ABR API の住所正規化・階層分割結果だけを使用する。
+ABR のレスポンスに latitude / longitude が含まれていても RDF へ保存しない。
+
+#### backend 設定
+
+backend から Docker で起動したローカル ABR API と Nominatim を参照できるようにする。
+環境変数名は backend 実装と一致させる。
+
+推奨設定例。
+
+```env
+ABR_BASE_URL=http://127.0.0.1:3001
+NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
+NOMINATIM_USER_AGENT=bio-database/1.0
+```
+
+`NOMINATIM_USER_AGENT` は、運用時にはアプリケーションを識別できる値にする。
+
+#### Nominatim
+
+公開 Nominatim を使用する場合、Nominatim 自体をサーバーへインストールする必要はない。
+backend から `https://nominatim.openstreetmap.org/` への HTTPS outbound 通信を許可する。
+
+公開サービス利用時は次を守る。
+
+- Nominatim へのリクエストを backend 内で直列化する
+- 最大 1 request / second を超えない
+- アプリケーションを識別できる `User-Agent` を必ず送る
+- 同じ ABR 正規化住所の結果をキャッシュし、不要な再問い合わせをしない
+
+疎通確認例。
+
+```bash
+curl -fsS \
+  -H 'User-Agent: bio-database-setup-check/1.0' \
+  --get \
+  --data-urlencode 'q=東京都千代田区紀尾井町1-3' \
+  --data-urlencode 'format=jsonv2' \
+  --data-urlencode 'limit=1' \
+  'https://nominatim.openstreetmap.org/search'
+```
+
+この確認を連続実行して負荷をかけない。
+
+Nominatim 成功時だけ、Location RDF に次を追加する。
+
+```text
+dwc:decimalLatitude
+dwc:decimalLongitude
+dwciri:georeferenceSources <https://nominatim.openstreetmap.org/>
+```
+
+ABR を `georeferenceSources` として記録しない。

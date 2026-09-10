@@ -8,7 +8,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 const OCCURRENCE_GRAPH_URI =
   "https://bio-database.net/graphs/occurrences";
 const ASSOCIATED_MEDIA_PREDICATE_URI =
-  "http://rs.tdwg.org/ac/terms/associatedMedia";
+  "http://rs.tdwg.org/dwc/terms/associatedMedia";
 const ACCESS_RIGHTS_PREDICATE_URI = "http://purl.org/dc/terms/accessRights";
 const PUBLIC_ACCESS_RIGHTS_URI =
   "https://bio-database.net/terms/access-rights/public";
@@ -24,6 +24,7 @@ const DWC_DECIMAL_LONGITUDE_LABEL = "経度";
 const DWC_DECIMAL_LATITUDE_URI =
   "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DWC_DECIMAL_LATITUDE_LABEL = "緯度";
+const DWC_LOCALITY_URI = "http://rs.tdwg.org/dwc/terms/locality";
 const GBIF_SUGGEST_ENDPOINT = "https://api.gbif.org/v1/species/suggest";
 const GBIF_SPECIES_URI_PREFIX = "https://www.gbif.org/species/";
 const GBIF_SUGGEST_DEBOUNCE_MS = 300;
@@ -68,15 +69,13 @@ type AuthStatus =
   | "error";
 
 const initialRows: StatementRow[] = [
-  // 最初に分類と位置情報を提示し、よく使うオカレンス項目の入力を始めやすくする。
   { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: "" },
-  { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: "" },
-  { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: "" },
 ];
 
 export default function NewOccurrencePage() {
   const [rows, setRows] = useState(initialRows);
-  const nextId = useRef(4);
+  const [sourcePaperId, setSourcePaperId] = useState<string | null>(null);
+  const nextId = useRef(2);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [darwinCoreTerms, setDarwinCoreTerms] = useState<DarwinCoreTerm[]>([]);
   const [termsStatus, setTermsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -91,6 +90,33 @@ export default function NewOccurrencePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [createdOccurrence, setCreatedOccurrence] =
     useState<CreateOccurrenceResponse | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paperId = params.get("paperId")?.trim() ?? "";
+    if (!paperId) return;
+
+    const scientificName = params.get("scientificName")?.trim() ?? "";
+    const locality = params.get("locality")?.trim() ?? "";
+    const decimalLatitude = params.get("decimalLatitude")?.trim() ?? "";
+    const decimalLongitude = params.get("decimalLongitude")?.trim() ?? "";
+    const importedRows: StatementRow[] = [
+      { id: 1, predicate: DWCIRI_TO_TAXON_URI, object: scientificName },
+      { id: 2, predicate: DWC_DECIMAL_LONGITUDE_URI, object: decimalLongitude },
+      { id: 3, predicate: DWC_DECIMAL_LATITUDE_URI, object: decimalLatitude },
+    ];
+    if (locality) {
+      importedRows.push({
+        id: 4,
+        predicate: DWC_LOCALITY_URI,
+        object: locality,
+      });
+    }
+
+    setSourcePaperId(paperId);
+    setRows(importedRows);
+    nextId.current = importedRows.length + 1;
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -139,14 +165,12 @@ export default function NewOccurrencePage() {
     setTermsStatus("loading");
     try {
       const terms = await apiFetch<DarwinCoreTerm[]>("/vocabularies/darwin-core");
-      // 特別表示する語彙はバックエンド候補から除外し、候補の重複を防ぐ。
       const visibleTerms = terms.filter(
         (term) =>
           term.uri !== DWCIRI_TO_TAXON_URI &&
           term.uri !== DWC_DECIMAL_LONGITUDE_URI &&
           term.uri !== DWC_DECIMAL_LATITUDE_URI,
       );
-      // UI上の日本語候補と保存するDarwin Core URIをここで対応付ける。
       setDarwinCoreTerms([
         { uri: DWCIRI_TO_TAXON_URI, local_name: DWCIRI_TO_TAXON_LABEL },
         {
@@ -195,7 +219,6 @@ export default function NewOccurrencePage() {
       return [...currentFiles, ...addedFiles];
     });
 
-    // Clearing the native input allows a removed file to be selected again.
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -247,7 +270,10 @@ export default function NewOccurrencePage() {
       setSubmissionMessage("オカレンスデータを登録しています");
       const accessRightsUri = isPublic ? PUBLIC_ACCESS_RIGHTS_URI : PRIVATE_ACCESS_RIGHTS_URI;
       const nquads = buildOccurrenceNQuads(statements, mediaUris, accessRightsUri);
-      const created = await apiFetch<CreateOccurrenceResponse>("/occurrences", {
+      const registrationPath = sourcePaperId
+        ? `/papers/${encodeURIComponent(sourcePaperId)}/occurrences`
+        : "/occurrences";
+      const created = await apiFetch<CreateOccurrenceResponse>(registrationPath, {
         method: "POST",
         headers: { "Content-Type": "application/n-quads" },
         body: nquads,
@@ -259,7 +285,7 @@ export default function NewOccurrencePage() {
       setSelectedFiles([]);
       setTaxonScientificNames({});
       setIsPublic(true);
-      nextId.current = 4;
+      nextId.current = 2;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         setAuthStatus("unauthenticated");
@@ -454,6 +480,11 @@ export default function NewOccurrencePage() {
             <p className="mt-2 break-all text-sm text-[#526168]">
               {createdOccurrence.occurrence_uri}
             </p>
+            {sourcePaperId ? (
+              <p className="mt-2 text-sm text-[#526168]">
+                論文の出典情報を自動付与し、paperをregisteredに更新しました。
+              </p>
+            ) : null}
           </section>
         ) : null}
 
@@ -774,7 +805,6 @@ function PredicateCombobox({
   );
 }
 
-
 function predicateLabelForUri(value: string, terms: DarwinCoreTerm[] = []): string {
   if (value === DWCIRI_TO_TAXON_URI) {
     return DWCIRI_TO_TAXON_LABEL;
@@ -815,8 +845,6 @@ function validateStatementRows(rows: StatementRow[]): StatementRow[] {
   return statements;
 }
 
-// 分類の入力は、URIならtoTaxon、任意テキストならscientificNameとして保存する。
-// テキストをtoTaxonへ保存するとIRI専用語彙の意味を壊すため、送信直前に述語を正規化する。
 function normalizeTaxonStatements(
   statements: StatementRow[],
   scientificNamesByRowId: Record<number, string>,
@@ -831,7 +859,6 @@ function normalizeTaxonStatements(
     }
 
     if (!isAbsoluteHttpUri(row.object)) {
-      // 手入力の分類名はtoTaxonを作らず、学名リテラルとして保存する。
       normalizedStatements.push({
         ...row,
         predicate: DWC_SCIENTIFIC_NAME_URI,
@@ -841,7 +868,6 @@ function normalizeTaxonStatements(
 
     normalizedStatements.push(row);
 
-    // GBIF候補を選んだURIには、候補表示から得た学名を非表示で補完する。
     const scientificName = scientificNamesByRowId[row.id];
     if (scientificName?.trim()) {
       generatedScientificNames.push({
@@ -869,7 +895,7 @@ function buildOccurrenceNQuads(
   const lines = statements.map((statement) => {
     const object = isAbsoluteHttpUri(statement.object)
       ? `<${statement.object}>`
-      : `"${escapeRdfLiteral(statement.object)}"`;
+      : `\"${escapeRdfLiteral(statement.object)}\"`;
 
     return `_:occurrence <${statement.predicate}> ${object} <${OCCURRENCE_GRAPH_URI}> .`;
   });
@@ -897,7 +923,7 @@ function isAbsoluteHttpUri(value: string): boolean {
 }
 
 function hasUnsafeIriCharacter(value: string): boolean {
-  return /[<>"{}|^`\\\s]/u.test(value);
+  return /[<>"{}|^\x60\\\s]/u.test(value);
 }
 
 function escapeRdfLiteral(value: string): string {
@@ -919,6 +945,9 @@ function registrationErrorMessage(error: unknown): string {
   }
   if (error.status === 403) {
     return "添付ファイルをこのデータへ関連付ける権限がありません";
+  }
+  if (error.status === 404) {
+    return "元論文またはデータが見つかりません";
   }
   if (error.status === 413) {
     return "添付ファイルのサイズが上限を超えています";

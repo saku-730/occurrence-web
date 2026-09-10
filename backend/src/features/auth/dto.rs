@@ -64,6 +64,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+// デモ環境ではメール確認とpasswordを省略し、表示名だけでsessionを発行する。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DemoLoginRequest {
+    pub user_name: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthModeResponse {
+    pub demo_auth_enabled: bool,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LoginResponse {
     pub message: String,
@@ -83,6 +94,12 @@ pub struct CurrentUserResponse {
     pub email: String,
     pub user_name: String,
     pub role: String,
+}
+
+// 更新対象のuser_idはsessionから決定し、クライアントには指定させない。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateUserNameRequest {
+    pub user_name: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

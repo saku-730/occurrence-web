@@ -70,6 +70,35 @@ impl From<argon2::password_hash::Error> for AuthServiceError {
 pub struct AuthService; //とりあえずメソッド用に作っておく。
 
 impl AuthService {
+    pub async fn demo_login(
+        db: &PgPool,
+        user_name: String,
+    ) -> Result<LoginOutput, AuthServiceError> {
+        let user_name = user_name.trim();
+        if user_name.is_empty() || user_name.chars().count() > 100 {
+            return Err(AuthServiceError::InvalidUserName);
+        }
+
+        // users.emailはNOT NULL/UNIQUEなので、デモ用identityをusernameのhashから作る。
+        // 生のusernameをメール欄へ埋め込まず、記号や日本語を含む名前でも安全に保存できる。
+        let normalized_name = user_name.to_lowercase();
+        let identity_hash = hex::encode(Sha256::digest(normalized_name.as_bytes()));
+        let email = format!("demo-{}@demo.invalid", identity_hash);
+        let unusable_password = Uuid::new_v4().to_string();
+        let password_hash = hash_password(&unusable_password)?;
+        let user = AuthRepository::upsert_demo_user(db, &email, user_name, &password_hash).await?;
+
+        let session_token = Uuid::new_v4().to_string();
+        let session_token_hash = hash_token(&session_token);
+        AuthRepository::create_session(db, user.id, &session_token_hash).await?;
+
+        Ok(LoginOutput {
+            email: user.email,
+            user_name: user.user_name,
+            session_token,
+        })
+    }
+
     pub async fn pre_register(
         db: &PgPool,
         app_base_url: &str,
@@ -347,6 +376,27 @@ impl AuthService {
             role: "editor".to_string(), //とりあえず、編集者権限だけ用意しているので、これで
         })
     }
+
+    pub async fn update_user_name(
+        db: &PgPool,
+        session_token: String,
+        user_name: String,
+    ) -> Result<CurrentUserOutput, AuthServiceError> {
+        // 更新対象はrequest中のIDではなく、有効sessionから解決した本人に限定する。
+        let mut current_user = Self::current_user(db, session_token).await?;
+        let user_name = user_name.trim();
+        if user_name.is_empty() {
+            return Err(AuthServiceError::InvalidUserName);
+        }
+
+        let updated = AuthRepository::update_user_name(db, current_user.user_id, user_name).await?;
+        if !updated {
+            return Err(AuthServiceError::InvalidSession);
+        }
+
+        current_user.user_name = user_name.to_string();
+        Ok(current_user)
+    }
 }
 
 // tokenは照合時に再計算できればよいので、可逆暗号ではなくSHA-256 hashで保存する。
@@ -394,22 +444,30 @@ mod tests {
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for DB tests");
 
         let db = PgPoolOptions::new()
-            .max_connections(5)
+            // TEMP TABLEはconnection単位なので、service呼び出しも同じconnectionを使う。
+            .max_connections(1)
             .connect(&database_url)
             .await
             .expect("failed to connect test database");
 
-        sqlx::query!(
-            //データベースをきれいにしてから。実データ入っている本番環境ではアウト
+        // public tableをTRUNCATEせず、同名の一時tableでこのテストだけを隔離する。
+        // 一時tableはpoolのconnection終了時にPostgreSQLが自動削除するため、
+        // テスト前から存在するユーザーやsessionを削除しない。
+        sqlx::raw_sql(
             r#"
-            TRUNCATE users, pending_registrations, sessions
-            RESTART IDENTITY
-            CASCADE
-            "#
+            CREATE TEMPORARY TABLE users
+                (LIKE public.users INCLUDING ALL);
+            CREATE TEMPORARY TABLE pending_registrations
+                (LIKE public.pending_registrations INCLUDING ALL);
+            CREATE TEMPORARY TABLE sessions
+                (LIKE public.sessions INCLUDING ALL);
+            CREATE TEMPORARY TABLE password_reset_tokens
+                (LIKE public.password_reset_tokens INCLUDING ALL);
+            "#,
         )
         .execute(&db)
         .await
-        .expect("test database should be cleaned");
+        .expect("isolated auth test tables should be created");
 
         db
     }
@@ -1550,6 +1608,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn demo_login_creates_user_and_session_from_user_name() {
+        let db = test_db_pool().await;
+
+        let output = AuthService::demo_login(&db, "  デモ利用者  ".to_string())
+            .await
+            .expect("demo login should succeed with a user name");
+
+        assert_eq!(output.user_name, "デモ利用者");
+        assert!(!output.session_token.is_empty());
+
+        let current_user = AuthService::current_user(&db, output.session_token)
+            .await
+            .expect("the issued demo session should identify its user");
+        assert_eq!(current_user.user_name, "デモ利用者");
+
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&db)
+            .await
+            .expect("demo session count should be queryable");
+        assert_eq!(user_count, 1);
+        assert_eq!(session_count, 1);
+    }
+
+    #[tokio::test]
+    async fn demo_login_reuses_existing_demo_user() {
+        let db = test_db_pool().await;
+
+        let first = AuthService::demo_login(&db, "Demo User".to_string())
+            .await
+            .expect("first demo login should succeed");
+        let second = AuthService::demo_login(&db, "demo user".to_string())
+            .await
+            .expect("second demo login should succeed");
+
+        let first_user = AuthService::current_user(&db, first.session_token)
+            .await
+            .expect("first session should be valid");
+        let second_user = AuthService::current_user(&db, second.session_token)
+            .await
+            .expect("second session should be valid");
+        assert_eq!(first_user.user_id, second_user.user_id);
+
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        assert_eq!(user_count, 1);
+    }
+
+    #[tokio::test]
+    async fn demo_login_rejects_blank_user_name() {
+        let db = test_db_pool().await;
+
+        let result = AuthService::demo_login(&db, "   ".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidUserName)));
+        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .expect("demo user count should be queryable");
+        let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&db)
+            .await
+            .expect("demo session count should be queryable");
+        assert_eq!(user_count, 0);
+        assert_eq!(session_count, 0);
+    }
+
+    #[tokio::test]
     async fn logout_revokes_existing_session() {
         let db = test_db_pool().await;
 
@@ -1628,5 +1759,57 @@ mod tests {
         assert_eq!(output.email, email);
         assert_eq!(output.user_name, "saku");
         assert_eq!(output.role, "editor");
+    }
+
+    #[tokio::test]
+    async fn update_user_name_updates_authenticated_user_with_trimmed_value() {
+        let db = test_db_pool().await;
+        let email = format!("update-user-name-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password).expect("password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "before-name", &password_hash)
+            .await
+            .expect("user should be created");
+        let login = AuthService::login(&db, email.clone(), password.to_string())
+            .await
+            .expect("login should succeed");
+
+        let output =
+            AuthService::update_user_name(&db, login.session_token, "  after-name  ".to_string())
+                .await
+                .expect("authenticated user should update own name");
+
+        assert_eq!(output.user_name, "after-name");
+        let saved = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("updated user query should succeed")
+            .expect("updated user should exist");
+        assert_eq!(saved.user_name, "after-name");
+    }
+
+    #[tokio::test]
+    async fn update_user_name_rejects_blank_value_without_changing_user() {
+        let db = test_db_pool().await;
+        let email = format!("reject-user-name-{}@example.com", uuid::Uuid::new_v4());
+        let password = "password123";
+        let password_hash = hash_password(password).expect("password hash should be created");
+
+        AuthRepository::create_user(&db, &email, "unchanged-name", &password_hash)
+            .await
+            .expect("user should be created");
+        let login = AuthService::login(&db, email.clone(), password.to_string())
+            .await
+            .expect("login should succeed");
+
+        let result =
+            AuthService::update_user_name(&db, login.session_token, "   ".to_string()).await;
+
+        assert!(matches!(result, Err(AuthServiceError::InvalidUserName)));
+        let saved = AuthRepository::find_user_by_email(&db, &email)
+            .await
+            .expect("unchanged user query should succeed")
+            .expect("user should still exist");
+        assert_eq!(saved.user_name, "unchanged-name");
     }
 }

@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub environment: String,
     // 本番ではsession cookieをHTTPSに限定するためtrueにする。開発ではHTTPで動かすためfalseを許可する。
     pub cookie_secure: bool,
+    // ユーザー名だけで本人扱いするため、デモ専用環境で明示的に有効化する。
+    pub demo_auth_enabled: bool,
 }
 
 impl AppConfig {
@@ -106,6 +108,7 @@ impl Config {
             environment: get_env_or("APP_ENV", "development"),
             // COOKIE_SECUREは本番でtrueにする。未指定時falseなのはローカルHTTP開発を妨げないため。
             cookie_secure: parse_bool_env_or("COOKIE_SECURE", false)?,
+            demo_auth_enabled: parse_bool_env_or("DEMO_AUTH_ENABLED", false)?,
         };
 
         validate_app_config(&app)?;

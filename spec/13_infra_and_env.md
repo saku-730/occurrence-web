@@ -7,6 +7,11 @@
 - PostgreSQL
 - Apache Jena Fuseki
 - Garage
+- GROBID
+- ABR geocoder
+  - デジタル庁公式 `digital-go-jp/abr-geocoder` の Docker Compose 構成で稼働
+  - ABR 専用 PostgreSQL / abrdb / abrg を公式 compose で管理
+- Nominatim
 - 外部メール送信サービス
 - 開発用 Mailpit
 
@@ -50,6 +55,44 @@ S3_SECRET_KEY=...
 S3_FORCE_PATH_STYLE=true
 ```
 
+### GROBID
+
+論文PDFの書誌情報抽出にGROBIDの `processHeaderDocument` を利用する。
+未指定時は `http://127.0.0.1:8070` を使用する。
+
+```env
+GROBID_BASE_URL=http://127.0.0.1:8070
+```
+
+### Geocoding / ABR / Nominatim
+
+住所ジオコーディングでは役割を次のように分離する。
+
+- ABR: 日本語住所の正規化・階層分割
+- Nominatim: 最終的な緯度経度の取得
+
+ABR が返す緯度経度は使用しない。
+Nominatim 成功時だけ `dwc:decimalLatitude` / `dwc:decimalLongitude` と `dwciri:georeferenceSources <https://nominatim.openstreetmap.org/>` を Location RDF に追加する。
+
+backend 側の設定例。
+
+```env
+ABR_BASE_URL=http://127.0.0.1:3001
+NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
+NOMINATIM_USER_AGENT=bio-database/1.0
+```
+
+ABR 自体は npm で直接起動せず、デジタル庁公式 `digital-go-jp/abr-geocoder` リポジトリの Docker Compose 構成を使用する。
+公式 compose 内の ABR 専用 PostgreSQL は Bio-Database 本体の PostgreSQL とは別サービスとして扱う。
+ホスト側ポートが衝突する場合は公式 `.env.example` に従って `DB_PORT` / `PORT` を変更する。
+
+- Nominatim 公開APIへのアクセスは直列化する
+- 同一の ABR 正規化住所は backend でキャッシュする
+- 公開 Nominatim 利用時は最大 1 request / second を超えない
+- Nominatim へはアプリケーションを識別できる `User-Agent` を送信する
+
+詳細は `spec/18_geocoding.md`、ABR の公式 Docker Compose 導入手順は `spec/16_server_setup.md` を参照する。
+
 ### Mail
 
 ```env
@@ -91,8 +134,14 @@ COOKIE_SECURE=false
 - pending_registrations
 - password_reset_tokens
 - media_objects
+- papers
+  - PDF本体は保存せずGarageのbucket/object keyを保持する
+  - SHA-256によるPDF重複判定
+  - GROBIDで抽出した論文書誌情報
 - audit_logs
 - app settings
+
+ABR の公式 Docker Compose が使用する PostgreSQL は ABR データ専用であり、この Bio-Database アプリケーション用 PostgreSQL には含めない。
 
 ---
 
@@ -105,6 +154,11 @@ COOKIE_SECURE=false
 - accessRights RDF
 - license RDF
 - media URI reference
+- Nominatim 由来の geocoding RDF
+  - `dwc:decimalLatitude`
+  - `dwc:decimalLongitude`
+  - `dwciri:georeferenceSources <https://nominatim.openstreetmap.org/>`
+  - ABR は住所前処理のみなので georeference source として保存しない
 - GBIF Backbone Taxonomy graph
   - graph URI: `https://bio-database.net/graphs/taxonomy/gbif-backbone`
   - taxon URI: `https://bio-database.net/taxa/gbif/{id}`
@@ -129,6 +183,7 @@ COOKIE_SECURE=false
 - 画像本体
 - 音声本体
 - 動画本体
+- importした論文PDF本体
 
 bucket は private 固定。
 
@@ -223,5 +278,10 @@ MVP段階では詳細な自動化は必須ではないが、以下をバック�
 - Garage
 
 - Next.js
+
+- ABR geocoder
+  - 公式 Docker Compose 構成を使用する
+
+- Nominatim は公開APIを利用するためローカルインストール不要
 
 ### データベース マスターデータセットアップ
