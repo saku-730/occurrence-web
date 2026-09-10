@@ -223,8 +223,9 @@ export default function OccurrenceSearchPage() {
     void runSearch([], null, ownOnly);
   }
 
-  const selectedOccurrences =
-    result?.items.filter((item) => selectedOccurrenceIds.has(item.occurrence_id)) ?? [];
+  const selectedOccurrences = uniqueOccurrenceItems(result?.items ?? []).filter((item) =>
+    selectedOccurrenceIds.has(item.occurrence_id),
+  );
   const deletableOccurrences = selectedOccurrences.filter(
     (item) =>
       currentUser !== null &&
@@ -236,7 +237,8 @@ export default function OccurrenceSearchPage() {
 
     const skippedCount = selectedOccurrences.length - deletableOccurrences.length;
     const confirmed = window.confirm(
-      `選択したデータのうち、削除可能な${deletableOccurrences.length}件を削除します。\nこの操作は取り消せません。よろしいですか？`,
+      `選択したデータのうち、削除可能な${deletableOccurrences.length}件を削除します。\
+この操作は取り消せません。よろしいですか？`,
     );
     if (!confirmed) return;
 
