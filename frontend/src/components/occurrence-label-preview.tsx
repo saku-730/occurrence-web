@@ -2,14 +2,27 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toDataURL } from "qrcode";
+import { labelValuesFromNQuads } from "@/lib/label-values";
+import { LabelFieldPicker, type LabelTerm } from "@/components/label-field-picker";
 
 const OCCURRENCE_DETAIL_API_PREFIX = "/api/backend/occurrences";
 const DECIMAL_LATITUDE_PREDICATE = "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DECIMAL_LONGITUDE_PREDICATE = "http://rs.tdwg.org/dwc/terms/decimalLongitude";
-const LABELS_PER_A4_PAGE = 65;
+const EVENT_DATE_PREDICATE = "http://rs.tdwg.org/dwc/terms/eventDate";
+const LOCALITY_PREDICATE = "http://rs.tdwg.org/dwc/terms/locality";
+const EMPTY_VALUES: Record<string, string[]> = {};
+const FIELD_OPTIONS = [
+  ["scientificName", "学名"], ["creator", "作成者"],
+  ["eventDate", "採集・観察日"], ["locality", "場所"],
+  ["coordinates", "緯度・経度"], ["created", "作成日"], ["qrCode", "QRコード"],
+] as const;
+type LabelField = typeof FIELD_OPTIONS[number][0];
+const DEFAULT_FIELDS: LabelField[] = ["scientificName", "creator", "coordinates", "created", "qrCode"];
+const DEFAULT_SETTINGS = { width: 40, height: 20, qr: 15, font: 2.5 };
+
 
 type LabelPreviewMode = "a4" | "individual";
-type LabelDisplaySize = "print" | "individual";
+
 
 export interface LabelOccurrence {
   occurrence_id: string;
@@ -18,16 +31,6 @@ export interface LabelOccurrence {
   scientific_name: string | null;
   created: string | null;
 }
-
-interface OccurrenceCoordinates {
-  latitude: string | null;
-  longitude: string | null;
-}
-
-const EMPTY_COORDINATES: OccurrenceCoordinates = {
-  latitude: null,
-  longitude: null,
-};
 
 export function LabelPreviewDialog({
   creatorNames,
@@ -38,26 +41,70 @@ export function LabelPreviewDialog({
   occurrences: LabelOccurrence[];
   onClose: () => void;
 }) {
-  const [coordinatesByOccurrenceId, setCoordinatesByOccurrenceId] = useState<
-    Record<string, OccurrenceCoordinates>
-  >({});
-  const [previewMode, setPreviewMode] = useState<LabelPreviewMode>("a4");
+  const [valuesByOccurrenceId, setValuesByOccurrenceId] = useState<Record<string, Record<string, string[]>>>({});
+  const [customFields, setCustomFields] = useState<LabelTerm[]>([]);
+  const [previewMode, setPreviewMode] = useState<LabelPreviewMode>("individual");
   const [currentLabelIndex, setCurrentLabelIndex] = useState(0);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [fields, setFields] = useState<LabelField[]>(DEFAULT_FIELDS);
+  const [qrCodes, setQrCodes] = useState<Record<string, string>>({});
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [overflowCount, setOverflowCount] = useState(0);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [previewWidth, setPreviewWidth] = useState(600);
+  const columns = Math.max(1, Math.floor(200 / settings.width));
+  const rows = Math.max(1, Math.floor(277 / settings.height));
+  const perPage = columns * rows;
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const observer = new ResizeObserver(([entry]) => setPreviewWidth(entry.contentRect.width));
+    if (previewRef.current) observer.observe(previewRef.current);
+    return () => {
+      document.body.style.overflow = previous;
+      observer.disconnect();
+    };
+  }, []);
+
   const a4PageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const [pdfAction, setPdfAction] = useState<"idle" | "printing" | "downloading" | "error">("idle");
 
   useEffect(() => {
+    // Inspect the actual print elements after fonts/layout settle, including labels on later pages.
+    let active = true;
+    void document.fonts.ready.then(() => {
+      requestAnimationFrame(() => {
+        if (!active) return;
+        const labels = a4PageRefs.current.filter(Boolean).flatMap((page) =>
+          Array.from(page!.querySelectorAll<HTMLElement>("[data-label-text]")));
+        setOverflowCount(labels.filter((label) => label.scrollHeight > label.clientHeight + 1).length);
+      });
+    });
+    return () => { active = false; };
+  }, [settings, fields, customFields, valuesByOccurrenceId, ready, creatorNames]);
+
+  useEffect(() => {
     let active = true;
 
-    void Promise.all(
-      occurrences.map(async (occurrence) => [
-        occurrence.occurrence_id,
-        await fetchOccurrenceCoordinates(occurrence.occurrence_id),
-      ] as const),
-    ).then((entries) => {
-      if (active) {
-        setCoordinatesByOccurrenceId(Object.fromEntries(entries));
-      }
+    // Resolve text and QR assets before enabling output so an early click cannot print incomplete labels.
+    void Promise.all(occurrences.map(async (occurrence) => ({
+      id: occurrence.occurrence_id,
+      values: await fetchOccurrenceValues(occurrence.occurrence_id),
+      qr: await toDataURL(occurrence.occurrence_uri, {
+        color: { dark: "#000000", light: "#ffffff" },
+        errorCorrectionLevel: "M", margin: 2, width: 512,
+      }),
+    }))).then((entries) => {
+      if (!active) return;
+      setValuesByOccurrenceId(Object.fromEntries(entries.map((entry) => [entry.id, entry.values])));
+      setQrCodes(Object.fromEntries(entries.map((entry) => [entry.id, entry.qr])));
+      setReady(true);
+    }).catch(() => {
+      if (active) setLoadError(true);
     });
 
     return () => {
@@ -66,17 +113,18 @@ export function LabelPreviewDialog({
   }, [occurrences]);
 
   const a4Pages = Array.from(
-    { length: Math.ceil(occurrences.length / LABELS_PER_A4_PAGE) },
+    { length: Math.ceil(occurrences.length / perPage) },
     (_, pageIndex) =>
       occurrences.slice(
-        pageIndex * LABELS_PER_A4_PAGE,
-        (pageIndex + 1) * LABELS_PER_A4_PAGE,
+        pageIndex * perPage,
+        (pageIndex + 1) * perPage,
       ),
   );
   const activeOccurrence = occurrences[currentLabelIndex] ?? occurrences[0];
   const isPdfProcessing = pdfAction === "printing" || pdfAction === "downloading";
 
   async function createA4Pdf(): Promise<Blob> {
+    await document.fonts.ready;
     const pageElements = a4PageRefs.current.filter(
       (page): page is HTMLDivElement => page !== null,
     );
@@ -96,9 +144,18 @@ export function LabelPreviewDialog({
     });
 
     for (const [index, pageElement] of pageElements.entries()) {
+      await Promise.all(Array.from(pageElement.querySelectorAll("img")).map((img) => img.decode()));
       const canvas = await html2canvas(pageElement, {
         backgroundColor: "#ffffff",
         scale: 2,
+        // Screen previews are scaled to fit. Capture the unscaled millimetre layout.
+        onclone: (_document, element) => {
+          let parent = element.parentElement;
+          while (parent) {
+            parent.style.transform = "none";
+            parent = parent.parentElement;
+          }
+        },
       });
 
       if (index > 0) {
@@ -161,254 +218,226 @@ export function LabelPreviewDialog({
     }
   }
 
+  const noFields = fields.length === 0 && customFields.length === 0;
+  const invalid = noFields || (fields.includes("qrCode") &&
+    (settings.qr > settings.height - 2 || settings.qr > settings.width - 2));
+  const printDisabled = !ready || invalid || isPdfProcessing;
+  const mmToPx = 96 / 25.4;
+  const individualScale = Math.min(4, Math.max(0.1, (previewWidth - 40) / (settings.width * mmToPx)));
+  const sheetScale = Math.min(0.8, Math.max(0.1, (previewWidth - 40) / (210 * mmToPx)));
+
+  const renderLabel = (occurrence: LabelOccurrence) => (
+    <OccurrenceLabel key={occurrence.occurrence_id} occurrence={occurrence}
+      creatorName={occurrence.creator_user_id ? creatorNames[occurrence.creator_user_id] ?? null : null}
+      values={valuesByOccurrenceId[occurrence.occurrence_id] ?? EMPTY_VALUES} customFields={customFields}
+      settings={settings} fields={fields} qrCode={qrCodes[occurrence.occurrence_id]} />
+  );
+
   return (
-    <div
-      aria-labelledby="label-preview-title"
-      aria-modal="true"
-      className="fixed inset-0 z-50 grid place-items-center bg-[#182126]/45 p-5"
-      onMouseDown={onClose}
-      role="dialog"
-    >
-      <section
-        className="flex max-h-[calc(100vh-2.5rem)] w-full max-w-7xl flex-col rounded-md bg-white shadow-xl"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header className="flex items-center justify-between border-b border-[#d8dfe2] px-5 py-4">
-          <h2 className="text-base font-semibold" id="label-preview-title">ラベル作成</h2>
-          <button
-            aria-label="ラベル作成を閉じる"
-            className="grid size-9 place-items-center rounded-md text-xl leading-none text-[#526168] hover:bg-[#eef2f3]"
-            onClick={onClose}
-            type="button"
-          >
-            ×
-          </button>
-        </header>
-
-        <div className="flex items-center justify-between border-b border-[#d8dfe2] px-5 py-3">
-          <div className="flex overflow-hidden rounded-md border border-[#b8c3c8]">
-            <button
-              aria-pressed={previewMode === "a4"}
-              className={`h-9 px-3 text-sm font-medium ${previewMode === "a4" ? "bg-[#176b57] text-white" : "bg-white hover:bg-[#eef2f3]"}`}
-              onClick={() => setPreviewMode("a4")}
-              type="button"
-            >
-              A4全体
-            </button>
-            <button
-              aria-pressed={previewMode === "individual"}
-              className={`h-9 border-l border-[#b8c3c8] px-3 text-sm font-medium ${previewMode === "individual" ? "bg-[#176b57] text-white" : "bg-white hover:bg-[#eef2f3]"}`}
-              onClick={() => setPreviewMode("individual")}
-              type="button"
-            >
-              個別
-            </button>
+    <dialog ref={dialogRef} aria-labelledby="label-preview-title"
+      onCancel={(event) => { event.preventDefault(); if (!isPdfProcessing) onClose(); }}
+      className="fixed inset-0 m-auto h-[94dvh] max-h-none w-[96vw] max-w-[1440px] overflow-hidden rounded-md border border-[#c9d0d3] bg-white p-0 text-[#182126] shadow-xl backdrop:bg-black/40">
+      <div className="flex h-full flex-col">
+        <header className="flex shrink-0 items-center justify-between border-b border-[#d8dfe2] px-5 py-3">
+          <div className="flex items-baseline gap-3">
+            <h2 className="text-lg font-semibold" id="label-preview-title">標本ラベル作成</h2>
+            <span className="text-sm text-[#526168]">{occurrences.length}件</span>
           </div>
-          <p className="text-sm text-[#526168]">{occurrences.length}件</p>
-        </div>
-
-        <div className="overflow-x-auto overflow-y-auto bg-[#eef2f3] p-5">
-          {previewMode === "a4" ? (
-            <div className="space-y-8">
-              {a4Pages.map((pageOccurrences, pageIndex) => (
-                <div
-                  className="aspect-[210/297] w-[210mm] min-w-[210mm] max-w-none bg-white p-[10mm_5mm] shadow-sm"
-                  ref={(element) => {
-                    a4PageRefs.current[pageIndex] = element;
-                  }}
-                  key={pageOccurrences[0]?.occurrence_id ?? pageIndex}
-                >
-                  <div className="grid h-full grid-cols-5 grid-rows-13 content-start gap-0">
-                    {pageOccurrences.map((occurrence) => (
-                      <OccurrenceLabel
-                        creatorName={occurrence.creator_user_id ? creatorNames[occurrence.creator_user_id] ?? null : null}
-                        coordinates={coordinatesByOccurrenceId[occurrence.occurrence_id] ?? EMPTY_COORDINATES}
-                        key={occurrence.occurrence_id}
-                        occurrence={occurrence}
-                      />
-                    ))}
-                  </div>
+          <button type="button" title="閉じる" aria-label="ラベル作成を閉じる" disabled={isPdfProcessing}
+            onClick={onClose} className="size-9 rounded hover:bg-[#eef2f3] disabled:opacity-40">×</button>
+        </header>
+        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[260px_minmax(0,1fr)] md:grid-rows-1">
+          <fieldset disabled={isPdfProcessing} className="max-h-[32dvh] overflow-y-auto border-b border-[#d8dfe2] p-5 md:max-h-none md:border-r md:border-b-0">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">レイアウト</h3>
+              <button type="button" title="デフォルトに戻す" aria-label="デフォルトに戻す"
+                className="size-8 rounded hover:bg-[#eef2f3]"
+                onClick={() => { setSettings(DEFAULT_SETTINGS); setFields(DEFAULT_FIELDS); setCustomFields([]); }}>↺</button>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Dimension label="横幅 (mm)" value={settings.width} min={20} max={200}
+                onChange={(width) => setSettings((current) => ({ ...current, width }))} />
+              <Dimension label="縦幅 (mm)" value={settings.height} min={15} max={277}
+                onChange={(height) => setSettings((current) => ({ ...current, height }))} />
+            </div>
+            <div className="mt-5 border-t border-[#d8dfe2] pt-4">
+              <h3 className="mb-3 text-sm font-semibold">表示項目</h3>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-1">
+                {FIELD_OPTIONS.map(([field, label]) => (
+                  <label key={field} className="flex cursor-pointer items-center gap-3 text-sm">
+                    <input type="checkbox" className="size-4 accent-[#176b57]" checked={fields.includes(field)}
+                      onChange={(event) => setFields((current) => event.target.checked
+                        ? [...current, field] : current.filter((value) => value !== field))} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              {customFields.map((term) => (
+                <div key={term.uri} className="mt-3 flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 break-words" title={term.uri}>{term.local_name}</span>
+                  <button type="button" title="項目を削除" aria-label={term.local_name + "を削除"}
+                    className="size-8 shrink-0 rounded hover:bg-[#eef2f3]"
+                    onClick={() => setCustomFields((current) => current.filter((field) => field.uri !== term.uri))}>×</button>
                 </div>
               ))}
+              <LabelFieldPicker
+                excluded={customFields.map((term) => term.uri)}
+                onSelect={(term) => {
+                  // A built-in property selected through the picker enables its existing checkbox.
+                  const builtIn: Record<string, LabelField> = {
+                    [EVENT_DATE_PREDICATE]: "eventDate", [LOCALITY_PREDICATE]: "locality",
+                    "http://rs.tdwg.org/dwc/terms/scientificName": "scientificName",
+                    "http://purl.org/dc/terms/creator": "creator",
+                    "http://purl.org/dc/terms/created": "created",
+                  };
+                  const field = builtIn[term.uri];
+                  if (field) setFields((current) => current.includes(field) ? current : [...current, field]);
+                  else setCustomFields((current) => current.some((item) => item.uri === term.uri) ? current : [...current, term]);
+                }} />
             </div>
-          ) : activeOccurrence ? (
-            <div className="mx-auto flex max-w-3xl items-center justify-center gap-4">
-              <button
-                aria-label="前のラベル"
-                className="grid size-10 shrink-0 place-items-center rounded-md border border-[#b8c3c8] bg-white text-lg hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:text-[#a8b2b6] disabled:hover:bg-white"
-                disabled={currentLabelIndex === 0}
-                onClick={() => setCurrentLabelIndex((index) => index - 1)}
-                type="button"
-              >
-                &lt;
-              </button>
-              <div className="min-w-0 flex-1">
-                <OccurrenceLabel
-                  creatorName={activeOccurrence.creator_user_id ? creatorNames[activeOccurrence.creator_user_id] ?? null : null}
-                  coordinates={coordinatesByOccurrenceId[activeOccurrence.occurrence_id] ?? EMPTY_COORDINATES}
-                  displaySize="individual"
-                  occurrence={activeOccurrence}
-                />
-                <p className="mt-3 text-center text-sm text-[#526168]">
-                  {currentLabelIndex + 1} / {occurrences.length}
-                </p>
+            <div className="mt-5 grid grid-cols-2 gap-3 border-t border-[#d8dfe2] pt-4">
+              <Dimension label="文字 (mm)" value={settings.font} min={1.5} max={6} step={0.25}
+                onChange={(font) => setSettings((current) => ({ ...current, font }))} />
+              {fields.includes("qrCode") && <Dimension label="QR (mm)" value={settings.qr} min={8} max={50}
+                onChange={(qr) => setSettings((current) => ({ ...current, qr }))} />}
+            </div>
+            <p className="mt-5 text-xs text-[#526168]">A4縦 · {columns}列 × {rows}行 · {a4Pages.length}ページ</p>
+            {invalid && <p role="alert" className="mt-3 text-sm text-[#a53d32]">{noFields
+              ? "表示項目を選択してください。" : "QRコードをラベルの内側に収まるサイズにしてください。"}</p>}
+            {overflowCount > 0 && <p role="status" className="mt-3 text-sm text-[#a53d32]">
+              {overflowCount}件で文字が収まりません。文字サイズ・ラベル寸法・表示項目を調整してください。
+            </p>}
+          </fieldset>
+          <div className="flex min-h-0 min-w-0 flex-col bg-[#e9edef]">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#d8dfe2] bg-white px-4 py-3">
+              <div className="flex rounded border border-[#b8c3c8] p-0.5">
+                {(["individual", "a4"] as const).map((mode) => (
+                  <button key={mode} type="button" aria-pressed={previewMode === mode}
+                    onClick={() => setPreviewMode(mode)}
+                    className={`rounded px-4 py-2 text-sm ${previewMode === mode ? "bg-[#176b57] text-white" : "hover:bg-[#eef2f3]"}`}>
+                    {mode === "individual" ? "個別ラベル" : "A4全体"}
+                  </button>
+                ))}
               </div>
-              <button
-                aria-label="次のラベル"
-                className="grid size-10 shrink-0 place-items-center rounded-md border border-[#b8c3c8] bg-white text-lg hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:text-[#a8b2b6] disabled:hover:bg-white"
-                disabled={currentLabelIndex === occurrences.length - 1}
-                onClick={() => setCurrentLabelIndex((index) => index + 1)}
-                type="button"
-              >
-                &gt;
-              </button>
+              <span className="text-xs text-[#526168]">{settings.width} × {settings.height} mm</span>
             </div>
-          ) : null}
-        </div>
-
-        <footer className="flex items-center justify-between border-t border-[#d8dfe2] px-5 py-4">
-          <div className="flex items-center gap-2">
-            {previewMode === "a4" ? (
-              <>
-                <button
-                  className="h-10 rounded-md border border-[#176b57] bg-white px-4 text-sm font-medium text-[#176b57] hover:bg-[#e8f2ef] disabled:cursor-not-allowed disabled:border-[#b8c3c8] disabled:text-[#829b95] disabled:hover:bg-white"
-                  disabled={isPdfProcessing}
-                  onClick={() => void printA4Pdf()}
-                  type="button"
-                >
-                  {pdfAction === "printing" ? "準備中" : "印刷"}
-                </button>
-                <button
-                  className="h-10 rounded-md bg-[#176b57] px-4 text-sm font-medium text-white hover:bg-[#125746] disabled:cursor-not-allowed disabled:bg-[#829b95]"
-                  disabled={isPdfProcessing}
-                  onClick={() => void downloadA4Pdf()}
-                  type="button"
-                >
-                  {pdfAction === "downloading" ? "準備中" : "PDFダウンロード"}
-                </button>
-              </>
-            ) : null}
-            {pdfAction === "error" ? (
-              <p className="text-sm text-[#a53d32]">PDFを作成できませんでした</p>
-            ) : null}
+            <div ref={previewRef} className="min-h-0 flex-1 overflow-auto">
+              {!ready && <p role="status" className="p-4 text-center text-sm">{loadError ? "ラベル用データを取得できませんでした。閉じて再度お試しください。" : "ラベルを準備しています…"}</p>}
+              {previewMode === "individual" && activeOccurrence ? (
+                <div className="flex min-h-full flex-col items-center justify-center gap-6 p-5">
+                  <div style={{ width: settings.width * mmToPx * individualScale, height: settings.height * mmToPx * individualScale }}>
+                    <div style={{ width: settings.width * mmToPx, transform: `scale(${individualScale})`, transformOrigin: "top left" }}>
+                      {renderLabel(activeOccurrence)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-5">
+                    <button type="button" title="前のラベル" aria-label="前のラベル" className="size-10 rounded border border-[#b8c3c8] bg-white disabled:opacity-30"
+                      disabled={currentLabelIndex === 0} onClick={() => setCurrentLabelIndex((index) => index - 1)}>←</button>
+                    <span className="min-w-16 text-center text-sm tabular-nums">{currentLabelIndex + 1} / {occurrences.length}</span>
+                    <button type="button" title="次のラベル" aria-label="次のラベル" className="size-10 rounded border border-[#b8c3c8] bg-white disabled:opacity-30"
+                      disabled={currentLabelIndex >= occurrences.length - 1} onClick={() => setCurrentLabelIndex((index) => index + 1)}>→</button>
+                  </div>
+                </div>
+              ) : null}
+              {/* Keep unscaled sheets mounted for PDF capture, even while inspecting an individual label. */}
+              <div aria-hidden={previewMode !== "a4"} style={previewMode !== "a4" ? { position: "fixed", left: -10000, top: 0 } : undefined}
+                className="flex flex-col items-center gap-6 p-5">
+                {a4Pages.map((page, index) => (
+                  <div key={index} style={{ width: 210 * mmToPx * sheetScale, height: 297 * mmToPx * sheetScale }}>
+                    <div style={{ transform: `scale(${sheetScale})`, transformOrigin: "top left", width: "210mm" }}>
+                      <div ref={(element) => { a4PageRefs.current[index] = element; }}
+                        style={{ width: "210mm", height: "297mm", padding: "10mm 5mm", background: "#fff", boxSizing: "border-box" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, ${settings.width}mm)`, gridAutoRows: `${settings.height}mm`, gap: 0 }}>
+                          {page.map(renderLabel)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-          <button
-            className="h-10 rounded-md border border-[#b8c3c8] bg-white px-4 text-sm font-medium hover:bg-[#eef2f3]"
-            onClick={onClose}
-            type="button"
-          >
-            閉じる
-          </button>
+        </div>
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[#d8dfe2] bg-white px-5 py-3">
+          <p role="status" className="text-sm text-[#526168]">{pdfAction === "error" ? "PDFを作成できませんでした" : isPdfProcessing ? "PDFを準備しています…" : `${occurrences.length}枚 / A4 ${a4Pages.length}ページ`}</p>
+          <div className="flex gap-2">
+            <button type="button" disabled={printDisabled} onClick={() => void printA4Pdf()}
+              className="rounded border border-[#176b57] px-4 py-2 text-sm text-[#176b57] hover:bg-[#e8f2ef] disabled:opacity-40">印刷</button>
+            <button type="button" disabled={printDisabled} onClick={() => void downloadA4Pdf()}
+              className="rounded bg-[#176b57] px-4 py-2 text-sm text-white hover:bg-[#125746] disabled:opacity-40">PDFダウンロード</button>
+          </div>
         </footer>
-      </section>
-    </div>
+      </div>
+    </dialog>
   );
 }
 
-async function fetchOccurrenceCoordinates(occurrenceId: string): Promise<OccurrenceCoordinates> {
-  try {
-    const response = await fetch(
-      `${OCCURRENCE_DETAIL_API_PREFIX}/${encodeURIComponent(occurrenceId)}`,
-      { cache: "no-store", credentials: "include" },
-    );
-
-    if (!response.ok) return EMPTY_COORDINATES;
-
-    return extractCoordinatesFromNQuads(await response.text());
-  } catch {
-    return EMPTY_COORDINATES;
-  }
-}
-
-function extractCoordinatesFromNQuads(nquads: string): OccurrenceCoordinates {
-  return {
-    latitude: findLiteralObject(nquads, DECIMAL_LATITUDE_PREDICATE),
-    longitude: findLiteralObject(nquads, DECIMAL_LONGITUDE_PREDICATE),
-  };
-}
-
-function findLiteralObject(nquads: string, predicate: string): string | null {
-  const prefix = `> <${predicate}> `;
-
-  for (const line of nquads.split(String.fromCharCode(10))) {
-    if (!line.includes(prefix)) continue;
-
-    const match = line.match(/^<[^>]+> <[^>]+> "((?:\\.|[^"\\])*)"/u);
-    if (!match) continue;
-
-    return match[1].replace(/\\"/gu, "\"").replace(/\\\\/gu, "\\");
-  }
-
-  return null;
-}
-
-function OccurrenceLabel({
-  creatorName,
-  coordinates,
-  displaySize = "print",
-  occurrence,
-}: {
-  creatorName: string | null;
-  coordinates: OccurrenceCoordinates;
-  displaySize?: LabelDisplaySize;
-  occurrence: LabelOccurrence;
+function Dimension({ label, value, min, max, step = 1, onChange }: {
+  label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void;
 }) {
-  const scientificName = occurrence.scientific_name ?? "";
-  const isIndividualPreview = displaySize === "individual";
-  const labelClassName = isIndividualPreview
-    ? "relative h-[20rem] w-[40rem] max-w-none overflow-hidden border border-[#182126] bg-white p-4 text-[2.5rem] leading-tight text-[#182126]"
-    : "relative h-[20mm] w-[40mm] max-w-none overflow-hidden border border-[#182126] bg-white p-[1mm] text-[2.5mm] leading-tight text-[#182126]";
-  const headingClassName = isIndividualPreview
-    ? "mt-0 break-words text-[2.5rem] font-semibold leading-tight"
-    : "mt-0 break-words text-[2.5mm] font-semibold leading-tight";
-  const detailsClassName = isIndividualPreview
-    ? "mt-2 grid grid-cols-[minmax(0,1fr)_15rem] items-end gap-4 text-[2.5rem] leading-tight"
-    : "mt-[0.5mm] grid grid-cols-[minmax(0,1fr)_15mm] items-end gap-[1mm] text-[2.5mm] leading-tight";
-  const qrCodeClassName = isIndividualPreview
-    ? "h-[15rem] w-[15rem] bg-white p-1"
-    : "h-[15mm] w-[15mm] bg-white p-[0.25mm]";
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  return <label className="block text-xs text-[#526168]">{label}
+    <input type="number" min={min} max={max} step={step} value={draft ?? value}
+      className="mt-1 block h-9 w-full rounded border border-[#b8c3c8] bg-white px-2 text-sm text-[#182126]"
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const number = event.target.valueAsNumber;
+        if (Number.isFinite(number) && number >= min && number <= max) onChange(number);
+      }}
+      onBlur={() => {
+        if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) {
+          onChange(Math.min(max, Math.max(min, Number(draft))));
+        }
+        setDraft(null);
+      }} />
+  </label>;
+}
 
-  useEffect(() => {
-    let active = true;
+async function fetchOccurrenceValues(occurrenceId: string): Promise<Record<string, string[]>> {
+  const response = await fetch(
+    `${OCCURRENCE_DETAIL_API_PREFIX}/${encodeURIComponent(occurrenceId)}`,
+    { cache: "no-store", credentials: "include" },
+  );
+  // A network failure is not the same as an absent value: do not print incomplete records silently.
+  if (!response.ok) throw new Error("Occurrence detail could not be loaded");
+  return labelValuesFromNQuads(await response.text());
+}
 
-    void toDataURL(occurrence.occurrence_uri, {
-      color: { dark: "#182126", light: "#ffffff" },
-      errorCorrectionLevel: "M",
-      margin: 0,
-      width: 256,
-    })
-      .then((dataUrl) => {
-        if (active) setQrCodeDataUrl(dataUrl);
-      })
-      .catch(() => {
-        if (active) setQrCodeDataUrl(null);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [occurrence.occurrence_uri]);
-
+function OccurrenceLabel({ creatorName, values, customFields, occurrence, settings, fields, qrCode }: {
+  creatorName: string | null;
+  values: Record<string, string[]>;
+  customFields: LabelTerm[];
+  occurrence: LabelOccurrence;
+  settings: typeof DEFAULT_SETTINGS;
+  fields: LabelField[];
+  qrCode?: string;
+}) {
+  const withQr = fields.includes("qrCode");
+  // The same millimetre-based element is used for both previews and PDF output.
   return (
-    <article className={labelClassName}>
-      {scientificName ? <h3 className={headingClassName}>{scientificName}</h3> : null}
-      <div className={detailsClassName}>
-        <div>
-          <p>{creatorName ?? "-"}</p>
-          {coordinates.latitude && coordinates.longitude ? (
-            <p>{`${coordinates.latitude}, ${coordinates.longitude}`}</p>
-          ) : null}
-          <p className="text-[#182126]">{formatLabelDate(occurrence.created)}</p>
-        </div>
-        {qrCodeDataUrl ? (
-          <img
-            alt="オカレンス詳細ページのQRコード"
-            className={qrCodeClassName}
-            src={qrCodeDataUrl}
-          />
-        ) : null}
+    <article style={{
+      width: `${settings.width}mm`, height: `${settings.height}mm`, padding: "1mm",
+      border: "0.2mm solid #000", background: "#fff", color: "#000", overflow: "hidden",
+      fontSize: `${settings.font}mm`, lineHeight: 1.2, boxSizing: "border-box",
+      display: "grid", gridTemplateColumns: withQr ? `minmax(0, 1fr) ${settings.qr}mm` : "minmax(0, 1fr)",
+      gridTemplateRows: "minmax(0, 1fr)",
+      gap: withQr ? "1mm" : 0, alignItems: "start",
+    }}>
+      <div data-label-text style={{ overflowWrap: "anywhere", minWidth: 0, maxHeight: "100%", overflow: "hidden" }}>
+        {fields.includes("scientificName") && occurrence.scientific_name && <p style={{ margin: 0, fontWeight: 600 }}>{occurrence.scientific_name}</p>}
+        {fields.includes("creator") && <p style={{ margin: 0 }}>{creatorName ?? "-"}</p>}
+        {fields.includes("eventDate") && values[EVENT_DATE_PREDICATE]?.map((value) => <p key={value} style={{ margin: 0 }}>{value}</p>)}
+        {fields.includes("locality") && values[LOCALITY_PREDICATE]?.map((value) => <p key={value} style={{ margin: 0 }}>{value}</p>)}
+        {fields.includes("coordinates") && values[DECIMAL_LATITUDE_PREDICATE]?.[0] && values[DECIMAL_LONGITUDE_PREDICATE]?.[0] &&
+          <p style={{ margin: 0 }}>{values[DECIMAL_LATITUDE_PREDICATE][0]}, {values[DECIMAL_LONGITUDE_PREDICATE][0]}</p>}
+        {fields.includes("created") && <p style={{ margin: 0 }}>{formatLabelDate(occurrence.created)}</p>}
+        {customFields.map((term) => values[term.uri]?.map((value) =>
+          <p key={term.uri + value} style={{ margin: 0 }}>{value}</p>))}
       </div>
+      {withQr && qrCode && <img alt="オカレンス詳細ページのQRコード" src={qrCode}
+        style={{ width: `${settings.qr}mm`, height: `${settings.qr}mm`, alignSelf: "end" }} />}
     </article>
   );
 }

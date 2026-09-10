@@ -370,12 +370,6 @@ export default function OccurrenceSearchPage() {
                 {selectedOccurrenceIds.size}件選択
               </span>
             ) : null}
-            <Link
-              className="text-sm font-medium text-[#176b57] hover:underline"
-              href="/label-templates/new"
-            >
-              ラベルテンプレート
-            </Link>
             <button
               className="h-10 rounded-md border border-[#b94040] bg-white px-4 text-sm font-medium text-[#a82f2f] hover:bg-[#fff1f1] disabled:cursor-not-allowed disabled:border-[#c9d0d3] disabled:text-[#8d999e] disabled:hover:bg-white"
               disabled={deletableOccurrences.length === 0 || isDeleting}
