@@ -10,13 +10,43 @@ pub struct LabelTemplateRecord {
 pub struct LabelTemplateRepository;
 
 impl LabelTemplateRepository {
-    pub async fn create(
+    pub async fn create_if_under_limit(
         db: &PgPool,
         id: Uuid,
         user_id: Uuid,
         template_json: &str,
-    ) -> Result<LabelTemplateRecord, sqlx::Error> {
-        sqlx::query_as::<_, LabelTemplateRecord>(
+        max_templates: i64,
+    ) -> Result<Option<LabelTemplateRecord>, sqlx::Error> {
+        let mut transaction = db.begin().await?;
+
+        // Serialize template creation per user so concurrent POST requests cannot
+        // both observe the same count and exceed the per-user limit.
+        sqlx::query(
+            r#"
+            SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        let template_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM label_templates
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        if template_count >= max_templates {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
+
+        let record = sqlx::query_as::<_, LabelTemplateRecord>(
             r#"
             INSERT INTO label_templates (id, user_id, template)
             VALUES ($1, $2, $3::jsonb)
@@ -26,8 +56,11 @@ impl LabelTemplateRepository {
         .bind(id)
         .bind(user_id)
         .bind(template_json)
-        .fetch_one(db)
-        .await
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+        Ok(Some(record))
     }
 
     pub async fn list_by_user(
