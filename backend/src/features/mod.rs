@@ -5,6 +5,8 @@ pub mod occurrences;
 pub mod occurrence_map;
 // mediaは添付ファイルのmetadataとobject storage連携を担当する。
 pub mod media;
+// label_templatesは利用者ごとの標本ラベル設定をPostgreSQLへ永続化する。
+pub mod label_templates;
 // paper_importは論文PDFの受信から論文由来データのimport処理を担当する。
 pub mod paper_import;
 // user_searchはOccurrence検索UIからユーザー名をstable user URIへ解決する候補APIを担当する。

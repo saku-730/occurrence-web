@@ -36,6 +36,7 @@ async fn main() {
         media_object_store,
     );
     let app = build_app(state.clone())
+        .merge(backend::features::label_templates::router(state.clone()))
         .merge(backend::features::paper_import::router(state.clone()))
         .merge(occurrence_map::router(state.clone()))
         .merge(backend::features::user_search::router(state))

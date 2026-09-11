@@ -8,6 +8,11 @@ use crate::features::auth::dto::{
     UpdateUserNameRequest,
 };
 
+use crate::features::label_templates::dto::{
+    DeleteLabelTemplateResponse, LabelTemplateDefinition, LabelTemplateField,
+    LabelTemplateFieldType, LabelTemplateQr, LabelTemplateResponse, ListLabelTemplatesResponse,
+    SaveLabelTemplateRequest,
+};
 use crate::features::media::dto::{DeleteMediaResponse, UploadMediaRequest, UploadMediaResponse};
 
 use crate::features::occurrence_map::dto::{
@@ -47,6 +52,11 @@ use crate::features::occurrences::dto::{
         crate::features::media::handler::upload_media,
         crate::features::media::handler::get_media,
         crate::features::media::handler::delete_media,
+        crate::features::label_templates::handler::create_label_template,
+        crate::features::label_templates::handler::list_label_templates,
+        crate::features::label_templates::handler::get_label_template,
+        crate::features::label_templates::handler::update_label_template,
+        crate::features::label_templates::handler::delete_label_template,
     ),
     components(
         schemas(
@@ -83,12 +93,21 @@ use crate::features::occurrences::dto::{
             UploadMediaRequest,
             UploadMediaResponse,
             DeleteMediaResponse,
+            LabelTemplateDefinition,
+            LabelTemplateQr,
+            LabelTemplateField,
+            LabelTemplateFieldType,
+            SaveLabelTemplateRequest,
+            LabelTemplateResponse,
+            ListLabelTemplatesResponse,
+            DeleteLabelTemplateResponse,
         )
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),
         (name = "occurrences", description = "Occurrence RDF endpoints"),
         (name = "media", description = "Media attachment endpoints"),
+        (name = "label-templates", description = "Per-user specimen label template endpoints"),
         (name = "paper-import", description = "Paper PDF import endpoints"),
         (name = "vocabularies", description = "Read-only RDF vocabulary endpoints")
     )
