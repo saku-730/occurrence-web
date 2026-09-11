@@ -247,6 +247,82 @@ Identification、Event、LocationのNamed Node、`rdf:type`、Occurrenceから�
 
 ---
 
+## ラベルテンプレートAPI
+
+ログイン済み利用者ごとに、標本ラベルの設定をPostgreSQLの `label_templates.template` JSONBへ保存する。frontendはPostgreSQLへ直接接続せず、以下のbackend APIだけを利用する。
+
+Endpoint。
+
+- `POST /label-templates`: テンプレート作成
+- `GET /label-templates`: 自分のテンプレート一覧取得
+- `GET /label-templates/{template_id}`: 自分のテンプレート取得
+- `PUT /label-templates/{template_id}`: 自分のテンプレート更新
+- `DELETE /label-templates/{template_id}`: 自分のテンプレート削除
+
+POST/PUT Request例。
+
+```json
+{
+  "template": {
+    "version": 1,
+    "name": "採集標本ラベル",
+    "widthMm": 40,
+    "heightMm": 20,
+    "fontSizeMm": 2.5,
+    "qr": {
+      "enabled": true,
+      "sizeMm": 15
+    },
+    "fields": [
+      {
+        "type": "builtin",
+        "key": "scientificName",
+        "enabled": true
+      },
+      {
+        "type": "darwinCore",
+        "uri": "http://rs.tdwg.org/dwc/terms/eventDate",
+        "enabled": false
+      }
+    ]
+  }
+}
+```
+
+単体Response例。
+
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "template": {
+    "version": 1,
+    "name": "採集標本ラベル",
+    "widthMm": 40,
+    "heightMm": 20,
+    "fontSizeMm": 2.5,
+    "qr": {
+      "enabled": true,
+      "sizeMm": 15
+    },
+    "fields": []
+  }
+}
+```
+
+一覧Responseは `{"templates": [...]}`、削除Responseは `{"deleted": true}` とする。
+
+認証・認可と保存ルール。
+
+- `id` はbackendが発行する。
+- `user_id` はsessionからbackendが決定し、Requestでは受け取らない。
+- Responseにもfrontendで不要な `user_id` は含めない。
+- 未ログインは `401 Unauthorized` とする。
+- 存在しないIDと他利用者所有のIDはいずれも `404 Not Found` とし、他利用者のテンプレート存在を通知しない。
+- `version`、名前、寸法、文字サイズ、QRサイズ、表示項目、Darwin Core URIをbackendで検証し、不正値は `400 Bad Request` とする。
+- JSONに定義外のフィールドを含むRequestは受け付けない。
+
+---
+
 ## CSRF
 
 状態変更APIでは `X-CSRF-Token` を要求する。
