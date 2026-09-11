@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toDataURL } from "qrcode";
+import { ApiError, apiFetch } from "@/lib/api";
 import { labelValuesFromNQuads } from "@/lib/label-values";
 import { LabelFieldPicker, type LabelTerm } from "@/components/label-field-picker";
 
 const OCCURRENCE_DETAIL_API_PREFIX = "/api/backend/occurrences";
+const LABEL_TEMPLATE_API_PATH = "/label-templates";
+const MAX_LABEL_TEMPLATES = 10;
 const DECIMAL_LATITUDE_PREDICATE = "http://rs.tdwg.org/dwc/terms/decimalLatitude";
 const DECIMAL_LONGITUDE_PREDICATE = "http://rs.tdwg.org/dwc/terms/decimalLongitude";
 const EVENT_DATE_PREDICATE = "http://rs.tdwg.org/dwc/terms/eventDate";
@@ -17,11 +20,33 @@ const FIELD_OPTIONS = [
   ["coordinates", "緯度・経度"], ["created", "作成日"], ["qrCode", "QRコード"],
 ] as const;
 type LabelField = typeof FIELD_OPTIONS[number][0];
+type TemplateBuiltinField = Exclude<LabelField, "qrCode">;
+const TEMPLATE_BUILTIN_FIELDS: TemplateBuiltinField[] = [
+  "scientificName", "creator", "eventDate", "locality", "coordinates", "created",
+];
 const DEFAULT_FIELDS: LabelField[] = ["scientificName", "creator", "coordinates", "created", "qrCode"];
 const DEFAULT_SETTINGS = { width: 40, height: 20, qr: 15, font: 2.5 };
 
 
 type LabelPreviewMode = "a4" | "individual";
+type TemplateAction = "idle" | "loading" | "saving" | "updating" | "deleting";
+type LabelTemplateField = {
+  type: "builtin" | "darwinCore";
+  key?: string;
+  uri?: string;
+  enabled: boolean;
+};
+type LabelTemplateDefinition = {
+  version: 1;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  fontSizeMm: number;
+  qr: { enabled: boolean; sizeMm: number };
+  fields: LabelTemplateField[];
+};
+type LabelTemplateResponse = { id: string; template: LabelTemplateDefinition };
+type ListLabelTemplatesResponse = { templates: LabelTemplateResponse[] };
 
 
 export interface LabelOccurrence {
@@ -51,6 +76,11 @@ export function LabelPreviewDialog({
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [overflowCount, setOverflowCount] = useState(0);
+  const [savedTemplates, setSavedTemplates] = useState<LabelTemplateResponse[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState("");
+  const [templateAction, setTemplateAction] = useState<TemplateAction>("loading");
+  const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const [previewWidth, setPreviewWidth] = useState(600);
@@ -68,6 +98,22 @@ export function LabelPreviewDialog({
       document.body.style.overflow = previous;
       observer.disconnect();
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void apiFetch<ListLabelTemplatesResponse>(LABEL_TEMPLATE_API_PATH, { cache: "no-store" })
+      .then((response) => {
+        if (!active) return;
+        setSavedTemplates(response.templates);
+        setTemplateAction("idle");
+      })
+      .catch(() => {
+        if (!active) return;
+        setTemplateAction("idle");
+        setTemplateMessage("保存済みテンプレートを取得できませんでした。");
+      });
+    return () => { active = false; };
   }, []);
 
   const a4PageRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -122,6 +168,146 @@ export function LabelPreviewDialog({
   );
   const activeOccurrence = occurrences[currentLabelIndex] ?? occurrences[0];
   const isPdfProcessing = pdfAction === "printing" || pdfAction === "downloading";
+  const isTemplateBusy = templateAction !== "idle";
+
+  function resetToDefault() {
+    setSettings(DEFAULT_SETTINGS);
+    setFields(DEFAULT_FIELDS);
+    setCustomFields([]);
+    setSelectedTemplateId(null);
+    setTemplateName("");
+    setTemplateMessage(null);
+  }
+
+  function applyTemplate(record: LabelTemplateResponse) {
+    const definition = record.template;
+    const enabledBuiltin = definition.fields
+      .filter((field): field is LabelTemplateField & { key: TemplateBuiltinField } =>
+        field.type === "builtin" && field.enabled && isTemplateBuiltinField(field.key))
+      .map((field) => field.key);
+    const enabledCustom = definition.fields
+      .filter((field): field is LabelTemplateField & { uri: string } =>
+        field.type === "darwinCore" && field.enabled && typeof field.uri === "string")
+      .map((field) => ({ uri: field.uri, local_name: labelFromDarwinCoreUri(field.uri) }));
+
+    setSettings({
+      width: definition.widthMm,
+      height: definition.heightMm,
+      qr: definition.qr.sizeMm,
+      font: definition.fontSizeMm,
+    });
+    setFields(definition.qr.enabled ? [...enabledBuiltin, "qrCode"] : enabledBuiltin);
+    setCustomFields(enabledCustom);
+    setSelectedTemplateId(record.id);
+    setTemplateName(definition.name);
+    setTemplateMessage(null);
+  }
+
+  function currentTemplateDefinition(): LabelTemplateDefinition | null {
+    const name = templateName.trim();
+    if (!name) {
+      setTemplateMessage("テンプレート名を入力してください。");
+      return null;
+    }
+    if (name.length > 100) {
+      setTemplateMessage("テンプレート名は100文字以内にしてください。");
+      return null;
+    }
+    if (customFields.some((field) => !isDarwinCoreUri(field.uri))) {
+      setTemplateMessage("保存できる任意項目はDarwin CoreのURIだけです。");
+      return null;
+    }
+
+    return {
+      version: 1,
+      name,
+      widthMm: settings.width,
+      heightMm: settings.height,
+      fontSizeMm: settings.font,
+      qr: { enabled: fields.includes("qrCode"), sizeMm: settings.qr },
+      fields: [
+        ...TEMPLATE_BUILTIN_FIELDS.map((key) => ({
+          type: "builtin" as const,
+          key,
+          enabled: fields.includes(key),
+        })),
+        ...customFields.map((field) => ({
+          type: "darwinCore" as const,
+          uri: field.uri,
+          enabled: true,
+        })),
+      ],
+    };
+  }
+
+  async function saveTemplate() {
+    if (savedTemplates.length >= MAX_LABEL_TEMPLATES) {
+      setTemplateMessage(`保存できるテンプレートは${MAX_LABEL_TEMPLATES}件までです。`);
+      return;
+    }
+    const template = currentTemplateDefinition();
+    if (!template) return;
+
+    setTemplateAction("saving");
+    setTemplateMessage(null);
+    try {
+      const created = await apiFetch<LabelTemplateResponse>(LABEL_TEMPLATE_API_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template }),
+      });
+      setSavedTemplates((current) => [...current, created]);
+      setSelectedTemplateId(created.id);
+      setTemplateName(created.template.name);
+      setTemplateMessage("テンプレートを保存しました。");
+    } catch (error) {
+      setTemplateMessage(templateErrorMessage(error));
+    } finally {
+      setTemplateAction("idle");
+    }
+  }
+
+  async function updateTemplate() {
+    if (!selectedTemplateId) return;
+    const template = currentTemplateDefinition();
+    if (!template) return;
+
+    setTemplateAction("updating");
+    setTemplateMessage(null);
+    try {
+      const updated = await apiFetch<LabelTemplateResponse>(`${LABEL_TEMPLATE_API_PATH}/${encodeURIComponent(selectedTemplateId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template }),
+      });
+      setSavedTemplates((current) => current.map((record) => record.id === updated.id ? updated : record));
+      setTemplateName(updated.template.name);
+      setTemplateMessage("テンプレートを更新しました。");
+    } catch (error) {
+      setTemplateMessage(templateErrorMessage(error));
+    } finally {
+      setTemplateAction("idle");
+    }
+  }
+
+  async function deleteTemplate() {
+    if (!selectedTemplateId) return;
+    const deletingId = selectedTemplateId;
+    setTemplateAction("deleting");
+    setTemplateMessage(null);
+    try {
+      await apiFetch<{ deleted: boolean }>(`${LABEL_TEMPLATE_API_PATH}/${encodeURIComponent(deletingId)}`, {
+        method: "DELETE",
+      });
+      setSavedTemplates((current) => current.filter((record) => record.id !== deletingId));
+      resetToDefault();
+      setTemplateMessage("テンプレートを削除しました。");
+    } catch (error) {
+      setTemplateMessage(templateErrorMessage(error));
+    } finally {
+      setTemplateAction("idle");
+    }
+  }
 
   async function createA4Pdf(): Promise<Blob> {
     await document.fonts.ready;
@@ -246,13 +432,61 @@ export function LabelPreviewDialog({
           <button type="button" title="閉じる" aria-label="ラベル作成を閉じる" disabled={isPdfProcessing}
             onClick={onClose} className="size-9 rounded hover:bg-[#eef2f3] disabled:opacity-40">×</button>
         </header>
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[260px_minmax(0,1fr)] md:grid-rows-1">
-          <fieldset disabled={isPdfProcessing} className="max-h-[32dvh] overflow-y-auto border-b border-[#d8dfe2] p-5 md:max-h-none md:border-r md:border-b-0">
+        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[280px_minmax(0,1fr)] md:grid-rows-1">
+          <fieldset disabled={isPdfProcessing} className="max-h-[40dvh] overflow-y-auto border-b border-[#d8dfe2] p-5 md:max-h-none md:border-r md:border-b-0">
+            <section className="mb-5 border-b border-[#d8dfe2] pb-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold">テンプレート</h3>
+                <span className="text-xs tabular-nums text-[#526168]">{savedTemplates.length} / {MAX_LABEL_TEMPLATES}</span>
+              </div>
+              <label className="mt-3 block text-xs text-[#526168]">保存済みテンプレート
+                <select value={selectedTemplateId ?? ""} disabled={isTemplateBusy}
+                  className="mt-1 block h-9 w-full rounded border border-[#b8c3c8] bg-white px-2 text-sm text-[#182126] disabled:opacity-50"
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    if (!id) {
+                      resetToDefault();
+                      return;
+                    }
+                    const record = savedTemplates.find((template) => template.id === id);
+                    if (record) applyTemplate(record);
+                  }}>
+                  <option value="">デフォルト</option>
+                  {savedTemplates.map((record) => <option key={record.id} value={record.id}>{record.template.name}</option>)}
+                </select>
+              </label>
+              <label className="mt-3 block text-xs text-[#526168]">テンプレート名
+                <input type="text" maxLength={100} value={templateName} disabled={isTemplateBusy}
+                  placeholder="例: ミミズ標本 40×20"
+                  className="mt-1 block h-9 w-full rounded border border-[#b8c3c8] bg-white px-2 text-sm text-[#182126] disabled:opacity-50"
+                  onChange={(event) => { setTemplateName(event.target.value); setTemplateMessage(null); }} />
+              </label>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button type="button" disabled={isTemplateBusy || invalid || savedTemplates.length >= MAX_LABEL_TEMPLATES}
+                  onClick={() => void saveTemplate()}
+                  className="rounded bg-[#176b57] px-3 py-2 text-sm text-white hover:bg-[#125746] disabled:opacity-40">
+                  {templateAction === "saving" ? "保存中…" : "新規保存"}
+                </button>
+                <button type="button" disabled={isTemplateBusy || invalid || !selectedTemplateId}
+                  onClick={() => void updateTemplate()}
+                  className="rounded border border-[#176b57] px-3 py-2 text-sm text-[#176b57] hover:bg-[#e8f2ef] disabled:opacity-40">
+                  {templateAction === "updating" ? "更新中…" : "上書き"}
+                </button>
+              </div>
+              {selectedTemplateId && <button type="button" disabled={isTemplateBusy}
+                onClick={() => void deleteTemplate()}
+                className="mt-2 w-full rounded border border-[#b8c3c8] px-3 py-2 text-sm text-[#526168] hover:bg-[#eef2f3] disabled:opacity-40">
+                {templateAction === "deleting" ? "削除中…" : "このテンプレートを削除"}
+              </button>}
+              {templateAction === "loading" && <p role="status" className="mt-2 text-xs text-[#526168]">テンプレートを読み込んでいます…</p>}
+              {savedTemplates.length >= MAX_LABEL_TEMPLATES && <p className="mt-2 text-xs text-[#526168]">上限に達しています。新規保存するには既存テンプレートを削除してください。</p>}
+              {templateMessage && <p role="status" className="mt-2 text-xs text-[#526168]">{templateMessage}</p>}
+            </section>
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">レイアウト</h3>
               <button type="button" title="デフォルトに戻す" aria-label="デフォルトに戻す"
                 className="size-8 rounded hover:bg-[#eef2f3]"
-                onClick={() => { setSettings(DEFAULT_SETTINGS); setFields(DEFAULT_FIELDS); setCustomFields([]); }}>↺</button>
+                onClick={resetToDefault}>↺</button>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Dimension label="横幅 (mm)" value={settings.width} min={20} max={200}
@@ -403,6 +637,29 @@ async function fetchOccurrenceValues(occurrenceId: string): Promise<Record<strin
   // A network failure is not the same as an absent value: do not print incomplete records silently.
   if (!response.ok) throw new Error("Occurrence detail could not be loaded");
   return labelValuesFromNQuads(await response.text());
+}
+
+function isTemplateBuiltinField(value: string | undefined): value is TemplateBuiltinField {
+  return TEMPLATE_BUILTIN_FIELDS.some((field) => field === value);
+}
+
+function isDarwinCoreUri(uri: string): boolean {
+  return /^https?:\/\/rs\.tdwg\.org\/dwc\/terms\/[^\s<>"']+$/u.test(uri);
+}
+
+function labelFromDarwinCoreUri(uri: string): string {
+  const tail = uri.split("/").filter(Boolean).pop();
+  return tail ? decodeURIComponent(tail) : uri;
+}
+
+function templateErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 409) return `保存できるテンプレートは${MAX_LABEL_TEMPLATES}件までです。`;
+    if (error.status === 401) return "ログイン状態を確認してください。";
+    if (error.status === 404) return "テンプレートが見つかりません。再読み込みしてください。";
+    if (error.status === 400) return "テンプレートの内容を保存できません。入力内容を確認してください。";
+  }
+  return "テンプレートを保存できませんでした。もう一度お試しください。";
 }
 
 function OccurrenceLabel({ creatorName, values, customFields, occurrence, settings, fields, qrCode }: {
