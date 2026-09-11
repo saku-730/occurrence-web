@@ -13,6 +13,7 @@ use super::{
 
 const SUPPORTED_TEMPLATE_VERSION: u32 = 1;
 const MAX_TEMPLATE_NAME_CHARS: usize = 100;
+const MAX_TEMPLATES_PER_USER: i64 = 10;
 const MIN_WIDTH_MM: f64 = 20.0;
 const MAX_WIDTH_MM: f64 = 200.0;
 const MIN_HEIGHT_MM: f64 = 15.0;
@@ -34,6 +35,7 @@ const ALLOWED_BUILTIN_KEYS: &[&str] = &[
 #[derive(Debug)]
 pub enum LabelTemplateServiceError {
     Validation(String),
+    LimitReached,
     NotFound,
     Database(sqlx::Error),
     StoredTemplateInvalid,
@@ -60,7 +62,15 @@ impl LabelTemplateService {
         let id = Uuid::new_v4();
         let template_json = serde_json::to_string(&template)
             .map_err(|_| LabelTemplateServiceError::Serialization)?;
-        let record = LabelTemplateRepository::create(db, id, user_id, &template_json).await?;
+        let record = LabelTemplateRepository::create_if_under_limit(
+            db,
+            id,
+            user_id,
+            &template_json,
+            MAX_TEMPLATES_PER_USER,
+        )
+        .await?
+        .ok_or(LabelTemplateServiceError::LimitReached)?;
 
         response_from_record(record)
     }
