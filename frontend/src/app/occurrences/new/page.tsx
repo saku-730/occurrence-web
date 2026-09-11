@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { SiteHeader } from "@/components/site-header";
@@ -326,6 +327,15 @@ export default function NewOccurrencePage() {
       <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold">データ登録</h1>
+        </div>
+
+        <div className="mb-3 flex justify-end">
+          <Link
+            className="text-sm font-medium text-[#176b57] hover:underline"
+            href="/darwin-core"
+          >
+            Darwin Core項目一覧
+          </Link>
         </div>
 
         <section className="overflow-visible rounded-md border border-[#d8dfe2] bg-white">
