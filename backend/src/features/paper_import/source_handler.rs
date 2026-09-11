@@ -238,7 +238,8 @@ pub async fn receive_pdf(
         }
 
         original_filename = filename;
-        content_type = Some(field_content_type);
+        // Store one canonical value even when multipart uses a valid casing variant.
+        content_type = Some("application/pdf".to_string());
         received = Some(receive_to_temporary_file(&mut field).await?);
     }
 
@@ -276,12 +277,13 @@ async fn receive_pdf_inner(
 ) -> Result<(StatusCode, Json<ReceivePaperSourceResponse>), PaperSourceHandlerError> {
     if let Some(existing) = PaperRepository::find_by_sha256(&state.posgre, &received.sha256).await?
     {
-        if existing.status == PAPER_STATUS_REGISTERED {
-            return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
-        }
-
-        let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
-        return Ok((StatusCode::OK, Json(response_from_paper(paper, false))));
+        // SHA-256 identifies the stored PDF globally. Reusing that row must not
+        // repeat either the Garage write or the external GROBID request.
+        let duplicate = existing.status == PAPER_STATUS_REGISTERED;
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_paper(existing, duplicate)),
+        ));
     }
 
     let paper_id = Uuid::new_v4();
@@ -331,12 +333,11 @@ async fn receive_pdf_inner(
             .await?
             .ok_or(PaperSourceHandlerError::NotFound)?;
 
-        if existing.status == PAPER_STATUS_REGISTERED {
-            return Ok((StatusCode::OK, Json(response_from_paper(existing, true))));
-        }
-
-        let paper = run_grobid_and_fill_metadata(state, existing.id, received).await?;
-        return Ok((StatusCode::OK, Json(response_from_paper(paper, false))));
+        let duplicate = existing.status == PAPER_STATUS_REGISTERED;
+        return Ok((
+            StatusCode::OK,
+            Json(response_from_paper(existing, duplicate)),
+        ));
     }
 
     let paper = run_grobid_and_fill_metadata(state, paper_id, received).await?;

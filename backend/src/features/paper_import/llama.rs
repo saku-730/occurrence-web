@@ -107,9 +107,13 @@ impl LlamaClient {
     /// 接続先をコードから分離し、開発・本番で同じbinaryを利用できるようにする。
     pub fn from_env() -> Result<Self, LlamaError> {
         let _ = dotenvy::dotenv();
-        let endpoint = env::var(LLAMA_CHAT_COMPLETIONS_URL_ENV)
-            .map_err(|_| LlamaError::InvalidConfiguration)?;
-        let model = env::var(LLAMA_MODEL_ENV).map_err(|_| LlamaError::InvalidConfiguration)?;
+        Self::from_lookup(|key| env::var(key).ok())
+    }
+
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, LlamaError> {
+        let endpoint =
+            lookup(LLAMA_CHAT_COMPLETIONS_URL_ENV).ok_or(LlamaError::InvalidConfiguration)?;
+        let model = lookup(LLAMA_MODEL_ENV).ok_or(LlamaError::InvalidConfiguration)?;
 
         Self::new(&endpoint, &model, LLAMA_REQUEST_TIMEOUT)
     }
@@ -412,31 +416,6 @@ mod tests {
 
     use super::*;
     use crate::features::paper_import::preprocess::PAPER_PAGE_IMAGE_MEDIA_TYPE;
-
-    struct EnvGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = env::var(key).ok();
-            // 環境変数はprocess全体で共有されるため、このテスト群は指定どおり直列実行する。
-            unsafe { env::set_var(key, value) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.previous {
-                    Some(value) => env::set_var(self.key, value),
-                    None => env::remove_var(self.key),
-                }
-            }
-        }
-    }
 
     #[derive(Clone)]
     struct MockLlamaResponse {
@@ -950,10 +929,12 @@ mod tests {
     #[test]
     fn llama_client_reads_endpoint_and_model_from_environment() {
         let endpoint = "http://127.0.0.1:18080/v1/chat/completions";
-        let _endpoint_guard = EnvGuard::set(LLAMA_CHAT_COMPLETIONS_URL_ENV, endpoint);
-        let _model_guard = EnvGuard::set(LLAMA_MODEL_ENV, "environment-model");
-
-        let client = LlamaClient::from_env().expect("environment configuration should be valid");
+        let client = LlamaClient::from_lookup(|key| match key {
+            LLAMA_CHAT_COMPLETIONS_URL_ENV => Some(endpoint.to_string()),
+            LLAMA_MODEL_ENV => Some("environment-model".to_string()),
+            _ => None,
+        })
+        .expect("environment configuration should be valid");
 
         assert_eq!(client.endpoint, endpoint);
         assert_eq!(client.model, "environment-model");

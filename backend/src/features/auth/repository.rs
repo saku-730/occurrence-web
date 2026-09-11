@@ -4,12 +4,12 @@ use uuid::Uuid;
 // SQLをこの層に閉じ込め、serviceは認証ルールに集中させる。
 pub struct AuthRepository;
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct PendingRegistration {
     pub email: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct UserForAuth {
     pub id: Uuid,
     pub email: String,
@@ -24,20 +24,20 @@ pub struct DemoUser {
     pub user_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct UserForSession {
     pub email: String,
     pub user_name: String,
     pub user_id: Uuid,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct UserForSummary {
     pub user_id: Uuid,
     pub user_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 pub struct PasswordResetTokenForUpdate {
     pub user_id: Uuid,
 }
@@ -102,8 +102,7 @@ impl AuthRepository {
         db: &PgPool,
         token_hash: &str,
     ) -> Result<Option<PendingRegistration>, sqlx::Error> {
-        let row = sqlx::query_as!(
-            PendingRegistration,
+        let row = sqlx::query_as::<_, PendingRegistration>(
             r#"
             SELECT email
             FROM pending_registrations
@@ -111,8 +110,8 @@ impl AuthRepository {
                 AND completed_at IS NULL
                 AND expires_at > now()
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .fetch_optional(db)
         .await?;
 
@@ -125,7 +124,7 @@ impl AuthRepository {
         user_name: &str,
         password_hash: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO users (
                 email,
@@ -134,10 +133,10 @@ impl AuthRepository {
             )
             VALUES ($1, $2, $3)
             "#,
-            email,
-            user_name,
-            password_hash
         )
+        .bind(email)
+        .bind(user_name)
+        .bind(password_hash)
         .execute(db)
         .await?;
 
@@ -149,15 +148,15 @@ impl AuthRepository {
         db: &PgPool,
         token_hash: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE pending_registrations
             SET completed_at = now()
             WHERE token_hash = $1
                 AND completed_at IS NULL
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .execute(db)
         .await?;
 
@@ -165,20 +164,20 @@ impl AuthRepository {
     }
 
     pub async fn user_exists_by_email(db: &PgPool, email: &str) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query!(
+        let exists = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS(
                 SELECT 1
                 FROM users
                 WHERE email = $1
-            ) AS "exists!"
+            )
             "#,
-            email
         )
+        .bind(email)
         .fetch_one(db)
         .await?;
 
-        Ok(row.exists)
+        Ok(exists)
     }
 
     // 本登録ではユーザー作成とpending完了を同じtransactionにするため、tx版を使う。
@@ -186,8 +185,7 @@ impl AuthRepository {
         tx: &mut Transaction<'_, Postgres>,
         token_hash: &str,
     ) -> Result<Option<PendingRegistration>, sqlx::Error> {
-        let row = sqlx::query_as!(
-            PendingRegistration,
+        let row = sqlx::query_as::<_, PendingRegistration>(
             r#"
             SELECT email
             FROM pending_registrations
@@ -195,8 +193,8 @@ impl AuthRepository {
                 AND completed_at IS NULL
                 AND expires_at > now()
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .fetch_optional(&mut **tx)
         .await?;
 
@@ -207,20 +205,20 @@ impl AuthRepository {
         tx: &mut Transaction<'_, Postgres>,
         email: &str,
     ) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query!(
+        let exists = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS(
                 SELECT 1
                 FROM users
                 WHERE email = $1
-            ) AS "exists!"
+            )
             "#,
-            email
         )
+        .bind(email)
         .fetch_one(&mut **tx)
         .await?;
 
-        Ok(row.exists)
+        Ok(exists)
     }
 
     pub async fn create_user_in_tx(
@@ -229,7 +227,7 @@ impl AuthRepository {
         user_name: &str,
         password_hash: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO users (
                 email,
@@ -238,10 +236,10 @@ impl AuthRepository {
             )
             VALUES ($1, $2, $3)
             "#,
-            email,
-            user_name,
-            password_hash
         )
+        .bind(email)
+        .bind(user_name)
+        .bind(password_hash)
         .execute(&mut **tx)
         .await?;
 
@@ -252,15 +250,15 @@ impl AuthRepository {
         tx: &mut Transaction<'_, Postgres>,
         token_hash: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE pending_registrations
             SET completed_at = now()
             WHERE token_hash = $1
                 AND completed_at IS NULL
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .execute(&mut **tx)
         .await?;
 
@@ -272,15 +270,14 @@ impl AuthRepository {
         db: &PgPool,
         email: &str,
     ) -> Result<Option<UserForAuth>, sqlx::Error> {
-        let row = sqlx::query_as!(
-            UserForAuth,
+        let row = sqlx::query_as::<_, UserForAuth>(
             r#"
             SELECT id, email, user_name, password_hash
             FROM users
             WHERE email = $1
             "#,
-            email
         )
+        .bind(email)
         .fetch_optional(db)
         .await?;
 
@@ -292,15 +289,14 @@ impl AuthRepository {
         user_id: Uuid,
     ) -> Result<Option<UserForSummary>, sqlx::Error> {
         // 詳細画面では作成者の表示名だけが必要なので、認証情報は返さない。
-        let row = sqlx::query_as!(
-            UserForSummary,
+        let row = sqlx::query_as::<_, UserForSummary>(
             r#"
             SELECT id AS user_id, user_name
             FROM users
             WHERE id = $1
             "#,
-            user_id
         )
+        .bind(user_id)
         .fetch_optional(db)
         .await?;
 
@@ -335,7 +331,7 @@ impl AuthRepository {
         user_id: Uuid,
         session_token_hash: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO sessions (
                 user_id,
@@ -348,9 +344,9 @@ impl AuthRepository {
                 now() + interval '7 days'
             )
             "#,
-            user_id,
-            session_token_hash
         )
+        .bind(user_id)
+        .bind(session_token_hash)
         .execute(db)
         .await?;
 
@@ -364,7 +360,7 @@ impl AuthRepository {
     ) -> Result<(), sqlx::Error> {
         // password_reset_tokensはuser_idを主キーにして、ユーザーごとに最新tokenだけを保持する。
         // 再発行時に古いtoken_hashを上書きすることで、古いリセットURLを即時に無効化する。
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO password_reset_tokens (
                 user_id,
@@ -383,9 +379,9 @@ impl AuthRepository {
                 used_at = NULL,
                 created_at = now()
             "#,
-            user_id,
-            token_hash
         )
+        .bind(user_id)
+        .bind(token_hash)
         .execute(db)
         .await?;
 
@@ -397,8 +393,7 @@ impl AuthRepository {
         token_hash: &str,
     ) -> Result<Option<PasswordResetTokenForUpdate>, sqlx::Error> {
         // reset tokenは一度使ったら再利用できない。期限とused_atをSQL側で同時に見る。
-        let row = sqlx::query_as!(
-            PasswordResetTokenForUpdate,
+        let row = sqlx::query_as::<_, PasswordResetTokenForUpdate>(
             r#"
             SELECT user_id
             FROM password_reset_tokens
@@ -406,8 +401,8 @@ impl AuthRepository {
                 AND used_at IS NULL
                 AND expires_at > now()
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .fetch_optional(&mut **tx)
         .await?;
 
@@ -420,16 +415,16 @@ impl AuthRepository {
         password_hash: &str,
     ) -> Result<(), sqlx::Error> {
         // password更新時はupdated_atも更新する。認証情報変更の時刻をusers側に残すため。
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE users
             SET password_hash = $2,
                 updated_at = now()
             WHERE id = $1
             "#,
-            user_id,
-            password_hash
         )
+        .bind(user_id)
+        .bind(password_hash)
         .execute(&mut **tx)
         .await?;
 
@@ -441,15 +436,15 @@ impl AuthRepository {
         token_hash: &str,
     ) -> Result<(), sqlx::Error> {
         // パスワード更新が成功したtokenは使用済みにする。再送信やリプレイを防ぐため。
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE password_reset_tokens
             SET used_at = now()
             WHERE token_hash = $1
                 AND used_at IS NULL
             "#,
-            token_hash
         )
+        .bind(token_hash)
         .execute(&mut **tx)
         .await?;
 
@@ -462,7 +457,7 @@ impl AuthRepository {
     ) -> Result<(), sqlx::Error> {
         // パスワードリセット後は、漏洩済み・第三者利用中の可能性がある既存sessionを全て無効化する。
         // reset_password全体のtransaction内で実行し、password更新だけ成功してsessionが残る状態を避ける。
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE sessions
             SET revoked_at = now()
@@ -470,8 +465,8 @@ impl AuthRepository {
                 AND revoked_at IS NULL
                 AND expires_at > now()
             "#,
-            user_id
         )
+        .bind(user_id)
         .execute(&mut **tx)
         .await?;
 
@@ -483,7 +478,7 @@ impl AuthRepository {
         db: &PgPool,
         session_token_hash: &str,
     ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             UPDATE sessions
             SET revoked_at = now()
@@ -491,8 +486,8 @@ impl AuthRepository {
                 AND revoked_at IS NULL
                 AND expires_at > now()
             "#,
-            session_token_hash
         )
+        .bind(session_token_hash)
         .execute(db)
         .await?;
 
@@ -505,8 +500,7 @@ impl AuthRepository {
         session_token_hash: &str,
     ) -> Result<Option<UserForSession>, sqlx::Error> {
         // revoked_atとexpires_atを同時に見ることで、ログアウト済み・期限切れsessionを弾く。
-        let row = sqlx::query_as!(
-            UserForSession,
+        let row = sqlx::query_as::<_, UserForSession>(
             r#"
             SELECT
                 u.id AS user_id,
@@ -519,8 +513,8 @@ impl AuthRepository {
                 AND s.revoked_at IS NULL
                 AND s.expires_at > now()
             "#,
-            session_token_hash
         )
+        .bind(session_token_hash)
         .fetch_optional(db)
         .await?;
 
@@ -531,7 +525,7 @@ impl AuthRepository {
 #[cfg(test)]
 mod tests {
     use super::AuthRepository;
-    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use sqlx::PgPool;
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -539,8 +533,7 @@ mod tests {
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for repository tests");
 
-        PgPoolOptions::new()
-            .max_connections(5)
+        crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("failed to connect test database")

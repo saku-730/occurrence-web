@@ -1,3 +1,6 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
+
 use std::sync::Arc;
 
 use axum::{
@@ -20,7 +23,7 @@ use backend::{
     state::AppState,
 };
 use futures_util::StreamExt;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -75,8 +78,7 @@ async fn paper_import_route_works_with_real_postgresql_garage_and_grobid() {
     dotenvy::dotenv().ok();
     let config = Config::from_env().expect("integration configuration should be valid");
     let bucket = config.garage.bucket.clone();
-    let db = PgPoolOptions::new()
-        .max_connections(5)
+    let db = test_support::pool_options()
         .connect(&config.posgre.url)
         .await
         .expect("failed to connect real PostgreSQL");
@@ -142,11 +144,11 @@ async fn paper_import_route_works_with_real_postgresql_garage_and_grobid() {
     let json: serde_json::Value =
         serde_json::from_slice(&response_body).expect("E2E response should be JSON");
     let paper_id = Uuid::parse_str(
-        json["paper_id"]
+        json["source_id"]
             .as_str()
-            .expect("paper_id should be returned"),
+            .expect("source_id should be returned"),
     )
-    .expect("paper_id should be a UUID");
+    .expect("source_id should be a UUID");
     let object_key = format!("papers/{paper_id}/original.pdf");
 
     let row: (String, String, Option<String>, Option<String>) =

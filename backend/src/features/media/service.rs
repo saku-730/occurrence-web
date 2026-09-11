@@ -531,7 +531,6 @@ mod tests {
     use super::*;
     use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
-    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     // inferがJPEGとして判定できる最小限のsignatureを正常系fixtureで共用する。
@@ -714,8 +713,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -789,7 +787,7 @@ mod tests {
     async fn upload_media_rejects_unsupported_content_type_and_does_not_write_object() {
         let store = RecordingMediaObjectStore::default();
         // 入力検証でDB到達前に失敗することも確認できるよう、接続を確立しないpoolを使う。
-        let db = PgPoolOptions::new()
+        let db = crate::test_support::pool_options()
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .expect("lazy PostgreSQL pool should be constructible");
         let (_temp_path, input) = test_upload_input(
@@ -823,8 +821,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -860,8 +857,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -910,8 +906,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -977,8 +972,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -1042,8 +1036,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -1087,8 +1080,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -1156,8 +1148,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -1230,8 +1221,7 @@ mod tests {
 
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for media tests");
-        let db = PgPoolOptions::new()
-            .max_connections(1)
+        let db = crate::test_support::pool_options()
             .connect(&database_url)
             .await
             .expect("PostgreSQL should be available for media tests");
@@ -1275,13 +1265,13 @@ mod tests {
             .execute(&db)
             .await
             .expect("stale delete failure trigger should be removed");
-        sqlx::query("DROP FUNCTION IF EXISTS media_delete_failure_test()")
+        sqlx::query("DROP FUNCTION IF EXISTS pg_temp.media_delete_failure_test()")
             .execute(&db)
             .await
             .expect("stale delete failure function should be removed");
         sqlx::query(
             r#"
-            CREATE FUNCTION media_delete_failure_test()
+            CREATE FUNCTION pg_temp.media_delete_failure_test()
             RETURNS trigger
             LANGUAGE plpgsql
             AS $$
@@ -1300,7 +1290,7 @@ mod tests {
             BEFORE DELETE ON media_objects
             FOR EACH ROW
             WHEN (OLD.id = '{}')
-            EXECUTE FUNCTION media_delete_failure_test()
+            EXECUTE FUNCTION pg_temp.media_delete_failure_test()
             "#,
             media_id
         );
@@ -1322,7 +1312,7 @@ mod tests {
             .execute(&db)
             .await
             .expect("delete failure trigger should be removed");
-        sqlx::query("DROP FUNCTION media_delete_failure_test()")
+        sqlx::query("DROP FUNCTION pg_temp.media_delete_failure_test()")
             .execute(&db)
             .await
             .expect("delete failure function should be removed");

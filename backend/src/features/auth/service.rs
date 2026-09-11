@@ -435,7 +435,7 @@ mod tests {
     use crate::features::auth::service::hash_password;
     use crate::features::auth::service::hash_token;
     use chrono;
-    use sqlx::{PgPool, postgres::PgPoolOptions};
+    use sqlx::PgPool;
 
     async fn test_db_pool() -> PgPool {
         dotenvy::dotenv().ok();
@@ -443,33 +443,7 @@ mod tests {
         let database_url =
             std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for DB tests");
 
-        let db = PgPoolOptions::new()
-            // TEMP TABLEはconnection単位なので、service呼び出しも同じconnectionを使う。
-            .max_connections(1)
-            .connect(&database_url)
-            .await
-            .expect("failed to connect test database");
-
-        // public tableをTRUNCATEせず、同名の一時tableでこのテストだけを隔離する。
-        // 一時tableはpoolのconnection終了時にPostgreSQLが自動削除するため、
-        // テスト前から存在するユーザーやsessionを削除しない。
-        sqlx::raw_sql(
-            r#"
-            CREATE TEMPORARY TABLE users
-                (LIKE public.users INCLUDING ALL);
-            CREATE TEMPORARY TABLE pending_registrations
-                (LIKE public.pending_registrations INCLUDING ALL);
-            CREATE TEMPORARY TABLE sessions
-                (LIKE public.sessions INCLUDING ALL);
-            CREATE TEMPORARY TABLE password_reset_tokens
-                (LIKE public.password_reset_tokens INCLUDING ALL);
-            "#,
-        )
-        .execute(&db)
-        .await
-        .expect("isolated auth test tables should be created");
-
-        db
+        crate::test_support::isolated_pool(&database_url)
     }
 
     async fn delete_pending_registration_by_email(db: &PgPool, email: &str) {
@@ -1388,7 +1362,7 @@ mod tests {
 
         sqlx::query(
             r#"
-            CREATE OR REPLACE FUNCTION fail_pending_registration_completion()
+            CREATE OR REPLACE FUNCTION pg_temp.fail_pending_registration_completion()
             RETURNS trigger AS $$
             BEGIN
                 RAISE EXCEPTION 'forced pending registration completion failure';
@@ -1407,7 +1381,7 @@ mod tests {
             ON pending_registrations
             FOR EACH ROW
             WHEN (NEW.completed_at IS NOT NULL)
-            EXECUTE FUNCTION fail_pending_registration_completion();
+            EXECUTE FUNCTION pg_temp.fail_pending_registration_completion();
             "#,
         )
         .execute(&db)
@@ -1434,7 +1408,7 @@ mod tests {
 
         sqlx::query(
             r#"
-            DROP FUNCTION IF EXISTS fail_pending_registration_completion();
+            DROP FUNCTION IF EXISTS pg_temp.fail_pending_registration_completion();
             "#,
         )
         .execute(&db)

@@ -1,3 +1,6 @@
+#[path = "../src/test_support.rs"]
+mod test_support;
+
 use std::{
     ffi::OsString,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
@@ -25,7 +28,7 @@ use backend::{
     },
     state::AppState,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -152,8 +155,7 @@ fn database_url() -> String {
 }
 
 async fn test_db_pool() -> PgPool {
-    PgPoolOptions::new()
-        .max_connections(5)
+    test_support::pool_options()
         .connect(&database_url())
         .await
         .expect("failed to connect test PostgreSQL")
@@ -220,11 +222,6 @@ async fn create_test_user_and_session(db: &PgPool) -> (Uuid, String) {
 }
 
 async fn cleanup_user(db: &PgPool, user_id: Uuid) {
-    sqlx::query("DELETE FROM paper_imports WHERE uploaded_by = $1")
-        .bind(user_id)
-        .execute(db)
-        .await
-        .expect("failed to delete staged paper imports");
     sqlx::query("DELETE FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .execute(db)
@@ -373,8 +370,10 @@ async fn oversized_content_length_returns_413_before_side_effects() {
                 .header(COOKIE, format!("session={token}"))
                 .header(
                     CONTENT_LENGTH,
-                    (paper_import::handler::PAPER_PDF_REQUEST_BODY_LIMIT_BYTES as u64 + 1)
-                        .to_string(),
+                    (paper_import::source_handler::PAPER_SOURCE_PDF_REQUEST_BODY_LIMIT_BYTES
+                        as u64
+                        + 1)
+                    .to_string(),
                 )
                 .body(Body::from(body))
                 .expect("failed to build request"),
@@ -427,7 +426,6 @@ async fn missing_file_field_returns_400_without_side_effects() {
     let status = response.status();
     let puts = store.put_count();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
-
     cleanup_user(&db, user_id).await;
     server.abort();
 
@@ -461,7 +459,6 @@ async fn missing_filename_returns_400_without_side_effects() {
     let status = response.status();
     let puts = store.put_count();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
-
     cleanup_user(&db, user_id).await;
     server.abort();
 
@@ -575,7 +572,6 @@ async fn empty_pdf_returns_400_without_side_effects() {
     let status = response.status();
     let puts = store.put_count();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
-
     cleanup_user(&db, user_id).await;
     server.abort();
 
@@ -653,6 +649,12 @@ async fn uppercase_pdf_extension_and_mime_are_accepted() {
     let status = response.status();
     let puts = store.put_count();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
+    let stored_content_type: (String,) =
+        sqlx::query_as("SELECT content_type FROM papers WHERE uploaded_by = $1")
+            .bind(user_id)
+            .fetch_one(&db)
+            .await
+            .expect("accepted PDF should be saved with canonical MIME");
 
     cleanup_user(&db, user_id).await;
     server.abort();
@@ -664,6 +666,7 @@ async fn uppercase_pdf_extension_and_mime_are_accepted() {
     );
     assert_eq!(puts, 1);
     assert_eq!(grobid_calls, 1);
+    assert_eq!(stored_content_type.0, "application/pdf");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -707,7 +710,7 @@ async fn streamed_pdf_over_limit_returns_413_without_side_effects() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn garage_put_failure_returns_502_after_grobid_without_database_row() {
+async fn garage_put_failure_returns_502_before_grobid_without_database_row() {
     let _env_lock = env_lock();
     let db = test_db_pool().await;
     let (user_id, token) = create_test_user_and_session(&db).await;
@@ -736,12 +739,6 @@ async fn garage_put_failure_returns_502_after_grobid_without_database_row() {
         .expect("request failed");
     let status = response.status();
     let grobid_calls = *grobid_count.lock().expect("GROBID count lock poisoned");
-    let staged_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM paper_imports WHERE uploaded_by = $1")
-            .bind(user_id)
-            .fetch_one(&db)
-            .await
-            .expect("failed to count staged paper imports");
     let paper_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM papers WHERE uploaded_by = $1")
         .bind(user_id)
         .fetch_one(&db)
@@ -753,7 +750,6 @@ async fn garage_put_failure_returns_502_after_grobid_without_database_row() {
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(store.put_count(), 0);
-    assert_eq!(grobid_calls, 1);
-    assert_eq!(staged_count.0, 0);
+    assert_eq!(grobid_calls, 0);
     assert_eq!(paper_count.0, 0);
 }

@@ -72,12 +72,23 @@ impl PaperPdfPreprocessor {
     /// GROBID fulltext extraction is best effort. Any GROBID failure falls back
     /// to image-only extraction as long as every PDF page can still be rendered.
     pub async fn preprocess(pdf_path: &Path) -> Result<PreprocessedPaper, PaperPreprocessError> {
+        let renderer =
+            env::var("PDFTOPPM_BIN").unwrap_or_else(|_| DEFAULT_PDFTOPPM_BIN.to_string());
+        Self::preprocess_with(pdf_path, GrobidFulltextClient::from_env(), &renderer).await
+    }
+
+    // Explicit dependencies let each test run its own renderer and GROBID server concurrently.
+    async fn preprocess_with(
+        pdf_path: &Path,
+        grobid: Result<GrobidFulltextClient, GrobidError>,
+        renderer: &str,
+    ) -> Result<PreprocessedPaper, PaperPreprocessError> {
         let metadata = tokio::fs::metadata(pdf_path).await?;
         if !metadata.is_file() || metadata.len() == 0 {
             return Err(PaperPreprocessError::InvalidInput);
         }
 
-        let text = match GrobidFulltextClient::from_env() {
+        let text = match grobid {
             Ok(grobid) => match grobid.extract_tei(pdf_path, metadata.len()).await {
                 Ok(tei) => tei_to_llm_text(&tei),
                 Err(_) => String::new(),
@@ -89,7 +100,7 @@ impl PaperPdfPreprocessor {
         let workspace = tempfile::Builder::new()
             .prefix("paper-llm-preprocess-")
             .tempdir()?;
-        let page_images = render_all_pages(pdf_path, workspace.path()).await?;
+        let page_images = render_all_pages(pdf_path, workspace.path(), renderer).await?;
 
         Ok(PreprocessedPaper {
             text,
@@ -103,8 +114,8 @@ impl PaperPdfPreprocessor {
 async fn render_all_pages(
     pdf_path: &Path,
     output_dir: &Path,
+    renderer: &str,
 ) -> Result<Vec<PreprocessedPageImage>, PaperPreprocessError> {
-    let renderer = env::var("PDFTOPPM_BIN").unwrap_or_else(|_| DEFAULT_PDFTOPPM_BIN.to_string());
     let renderer = renderer.trim();
     if renderer.is_empty() {
         return Err(PaperPreprocessError::RendererUnavailable);
@@ -332,23 +343,11 @@ fn collapse_whitespace(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        os::unix::fs::PermissionsExt,
-        sync::{Mutex, OnceLock},
-    };
+    use std::os::unix::fs::PermissionsExt;
 
     use axum::{Router, body::Bytes, http::StatusCode, response::IntoResponse, routing::post};
 
     use super::*;
-
-    static ENVIRONMENT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENVIRONMENT_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     fn write_fake_renderer(script: &str) -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("fake renderer directory should be created");
@@ -458,7 +457,6 @@ mod tests {
 
     #[tokio::test]
     async fn preprocess_keeps_tei_text_and_sorts_all_rendered_page_images() {
-        let _guard = environment_lock();
         let (grobid_base_url, server) = start_grobid(
             StatusCode::OK,
             "<TEI><text><front><p>Paper title</p></front><body><p>Observed in Kyoto.</p></body><back><p>Cited-only</p></back></text></TEI>",
@@ -475,21 +473,15 @@ mod tests {
         let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
         std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
 
-        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
-        let old_renderer = env::var_os("PDFTOPPM_BIN");
-        unsafe {
-            env::set_var("GROBID_BASE_URL", grobid_base_url);
-            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
-        }
-        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
-        match old_grobid_base_url {
-            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
-            None => unsafe { env::remove_var("GROBID_BASE_URL") },
-        }
-        match old_renderer {
-            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
-            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
-        }
+        let output = PaperPdfPreprocessor::preprocess_with(
+            pdf.path(),
+            GrobidFulltextClient::from_base_url_with_timeout(
+                &grobid_base_url,
+                std::time::Duration::from_secs(5),
+            ),
+            renderer.path().join("pdftoppm").to_str().unwrap(),
+        )
+        .await;
         server.abort();
 
         let output = output.expect("text and rendered pages should be returned");
@@ -520,19 +512,17 @@ mod tests {
 
     #[tokio::test]
     async fn preprocess_rejects_renderer_failure_and_empty_output() {
-        let _guard = environment_lock();
         let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
         std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
-        let old_renderer = env::var_os("PDFTOPPM_BIN");
 
         let failing_renderer =
             write_fake_renderer("#!/bin/sh\necho rendering failed >&2\nexit 4\n");
-        unsafe { env::set_var("PDFTOPPM_BIN", failing_renderer.path().join("pdftoppm")) };
         let failed = render_all_pages(
             pdf.path(),
             tempfile::tempdir()
                 .expect("render output directory should be created")
                 .path(),
+            failing_renderer.path().join("pdftoppm").to_str().unwrap(),
         )
         .await;
         assert!(
@@ -540,25 +530,20 @@ mod tests {
         );
 
         let empty_renderer = write_fake_renderer("#!/bin/sh\nexit 0\n");
-        unsafe { env::set_var("PDFTOPPM_BIN", empty_renderer.path().join("pdftoppm")) };
         let empty = render_all_pages(
             pdf.path(),
             tempfile::tempdir()
                 .expect("render output directory should be created")
                 .path(),
+            empty_renderer.path().join("pdftoppm").to_str().unwrap(),
         )
         .await;
-        match old_renderer {
-            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
-            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
-        }
 
         assert!(matches!(empty, Err(PaperPreprocessError::NoPageImages)));
     }
 
     #[tokio::test]
     async fn preprocess_continues_with_page_images_when_grobid_has_no_content() {
-        let _guard = environment_lock();
         let (grobid_base_url, server) = start_grobid(StatusCode::NO_CONTENT, "").await;
         let renderer = write_fake_renderer(
             "#!/bin/sh\n\
@@ -569,21 +554,15 @@ mod tests {
         let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
         std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
 
-        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
-        let old_renderer = env::var_os("PDFTOPPM_BIN");
-        unsafe {
-            env::set_var("GROBID_BASE_URL", grobid_base_url);
-            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
-        }
-        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
-        match old_grobid_base_url {
-            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
-            None => unsafe { env::remove_var("GROBID_BASE_URL") },
-        }
-        match old_renderer {
-            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
-            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
-        }
+        let output = PaperPdfPreprocessor::preprocess_with(
+            pdf.path(),
+            GrobidFulltextClient::from_base_url_with_timeout(
+                &grobid_base_url,
+                std::time::Duration::from_secs(5),
+            ),
+            renderer.path().join("pdftoppm").to_str().unwrap(),
+        )
+        .await;
         server.abort();
 
         let output = output.expect("image-only preprocessing should succeed");
@@ -603,7 +582,6 @@ mod tests {
 
     #[tokio::test]
     async fn preprocess_continues_with_page_images_when_grobid_returns_error() {
-        let _guard = environment_lock();
         let (grobid_base_url, server) =
             start_grobid(StatusCode::SERVICE_UNAVAILABLE, "GROBID unavailable").await;
         let renderer = write_fake_renderer(
@@ -614,21 +592,15 @@ mod tests {
         let pdf = tempfile::NamedTempFile::with_suffix(".pdf").expect("test PDF should be created");
         std::fs::write(pdf.path(), b"%PDF-1.7\nmock").expect("test PDF should be written");
 
-        let old_grobid_base_url = env::var_os("GROBID_BASE_URL");
-        let old_renderer = env::var_os("PDFTOPPM_BIN");
-        unsafe {
-            env::set_var("GROBID_BASE_URL", grobid_base_url);
-            env::set_var("PDFTOPPM_BIN", renderer.path().join("pdftoppm"));
-        }
-        let output = PaperPdfPreprocessor::preprocess(pdf.path()).await;
-        match old_grobid_base_url {
-            Some(value) => unsafe { env::set_var("GROBID_BASE_URL", value) },
-            None => unsafe { env::remove_var("GROBID_BASE_URL") },
-        }
-        match old_renderer {
-            Some(value) => unsafe { env::set_var("PDFTOPPM_BIN", value) },
-            None => unsafe { env::remove_var("PDFTOPPM_BIN") },
-        }
+        let output = PaperPdfPreprocessor::preprocess_with(
+            pdf.path(),
+            GrobidFulltextClient::from_base_url_with_timeout(
+                &grobid_base_url,
+                std::time::Duration::from_secs(5),
+            ),
+            renderer.path().join("pdftoppm").to_str().unwrap(),
+        )
+        .await;
         server.abort();
 
         let output = output.expect("GROBID failure must fall back to image-only preprocessing");

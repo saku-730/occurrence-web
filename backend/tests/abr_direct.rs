@@ -16,23 +16,18 @@ fn database_url() -> String {
 
 async fn pool() -> PgPool {
     PgPoolOptions::new()
-        .max_connections(3)
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&database_url())
         .await
         .expect("test PostgreSQL should be available")
 }
 
 async fn create_fake_abr(pool: &PgPool) {
-    for table in ["mt_town_unified", "mt_city_unified", "mt_pref_unified"] {
-        sqlx::query(&format!("DROP TABLE IF EXISTS public.{table}"))
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
     sqlx::query(
         r#"
-        CREATE TABLE public.mt_pref_unified (
+        CREATE TEMPORARY TABLE mt_pref_unified (
             lg_code TEXT NOT NULL,
             pref TEXT
         )
@@ -44,7 +39,7 @@ async fn create_fake_abr(pool: &PgPool) {
 
     sqlx::query(
         r#"
-        CREATE TABLE public.mt_city_unified (
+        CREATE TEMPORARY TABLE mt_city_unified (
             lg_code TEXT NOT NULL,
             county TEXT,
             city TEXT,
@@ -58,7 +53,7 @@ async fn create_fake_abr(pool: &PgPool) {
 
     sqlx::query(
         r#"
-        CREATE TABLE public.mt_town_unified (
+        CREATE TEMPORARY TABLE mt_town_unified (
             lg_code TEXT NOT NULL,
             machiaza_id TEXT NOT NULL,
             oaza_cho TEXT,
@@ -73,13 +68,13 @@ async fn create_fake_abr(pool: &PgPool) {
     .await
     .unwrap();
 
-    sqlx::query("INSERT INTO public.mt_pref_unified (lg_code, pref) VALUES ('250007', '滋賀県')")
+    sqlx::query("INSERT INTO pg_temp.mt_pref_unified (lg_code, pref) VALUES ('250007', '滋賀県')")
         .execute(pool)
         .await
         .unwrap();
 
     sqlx::query(
-        "INSERT INTO public.mt_city_unified (lg_code, county, city, ward) VALUES ('252018', NULL, '大津市', NULL)",
+        "INSERT INTO pg_temp.mt_city_unified (lg_code, county, city, ward) VALUES ('252018', NULL, '大津市', NULL)",
     )
     .execute(pool)
     .await
@@ -87,7 +82,7 @@ async fn create_fake_abr(pool: &PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO public.mt_town_unified
+        INSERT INTO pg_temp.mt_town_unified
             (lg_code, machiaza_id, oaza_cho, chome, koaza, rsdt_addr_flg, koaza_aka_code)
         VALUES
             ('252018', '0000000', NULL, NULL, NULL, '0', NULL),
@@ -102,7 +97,7 @@ async fn create_fake_abr(pool: &PgPool) {
 
 async fn drop_fake_abr(pool: &PgPool) {
     for table in ["mt_town_unified", "mt_city_unified", "mt_pref_unified"] {
-        sqlx::query(&format!("DROP TABLE IF EXISTS public.{table}"))
+        sqlx::query(&format!("DROP TABLE IF EXISTS pg_temp.{table}"))
             .execute(pool)
             .await
             .unwrap();
@@ -137,7 +132,7 @@ async fn abr_split_drives_nominatim_and_only_nominatim_is_recorded_as_source() {
     let pool = pool().await;
     create_fake_abr(&pool).await;
 
-    let abr = AbrClient::new(&database_url(), 16).expect("ABR client should build");
+    let abr = AbrClient::from_pool(pool.clone(), 16);
     let queries = Arc::new(Mutex::new(Vec::new()));
     let geocoder = FallbackGeocoder {
         queries: queries.clone(),

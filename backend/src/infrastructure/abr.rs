@@ -123,7 +123,7 @@ impl AbrClient {
         let prefecture_row = sqlx::query(
             r#"
             SELECT SUBSTRING(lg_code::text, 1, 2) AS pref_code, pref
-            FROM public.mt_pref_unified
+            FROM mt_pref_unified
             WHERE pref IS NOT NULL
               AND BTRIM(pref) <> ''
               AND $1 LIKE pref || '%'
@@ -161,7 +161,7 @@ impl AbrClient {
                 SELECT
                     lg_code::text AS lg_code,
                     CONCAT(COALESCE(county, ''), COALESCE(city, ''), COALESCE(ward, '')) AS match_name
-                FROM public.mt_city_unified
+                FROM mt_city_unified
                 WHERE SUBSTRING(lg_code::text, 1, 2) = $1
             )
             SELECT lg_code, match_name
@@ -203,7 +203,7 @@ impl AbrClient {
                         THEN CONCAT(COALESCE(koaza, ''), COALESCE(oaza_cho, ''), COALESCE(chome, ''))
                         ELSE CONCAT(COALESCE(oaza_cho, ''), COALESCE(chome, ''), COALESCE(koaza, ''))
                     END AS match_name
-                FROM public.mt_town_unified
+                FROM mt_town_unified
                 WHERE lg_code::text = $1
                   AND machiaza_id::text <> $3
             )

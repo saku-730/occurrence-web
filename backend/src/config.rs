@@ -100,40 +100,45 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let _ = dotenvy::dotenv(); //.envから環境変数へ
 
+        Self::from_lookup(|key| env::var(key).ok())
+    }
+
+    // Inject the source, not process-global variables, when testing configuration parsing.
+    fn from_lookup(lookup: impl Fn(&'static str) -> Option<String>) -> Result<Self, ConfigError> {
         let app = AppConfig {
             // アプリ基本設定は開発環境で起動しやすいようにdefaultを持つ。
-            host: get_env_or("APP_HOST", "127.0.0.1"),
-            port: parse_u16_env_or("APP_PORT", 3000)?,
-            app_base_url: get_env_or("APP_BASE_URL", "http://127.0.0.1:3000"),
-            environment: get_env_or("APP_ENV", "development"),
+            host: get_env_or(&lookup, "APP_HOST", "127.0.0.1"),
+            port: parse_u16_env_or(&lookup, "APP_PORT", 3000)?,
+            app_base_url: get_env_or(&lookup, "APP_BASE_URL", "http://127.0.0.1:3000"),
+            environment: get_env_or(&lookup, "APP_ENV", "development"),
             // COOKIE_SECUREは本番でtrueにする。未指定時falseなのはローカルHTTP開発を妨げないため。
-            cookie_secure: parse_bool_env_or("COOKIE_SECURE", false)?,
-            demo_auth_enabled: parse_bool_env_or("DEMO_AUTH_ENABLED", false)?,
+            cookie_secure: parse_bool_env_or(&lookup, "COOKIE_SECURE", false)?,
+            demo_auth_enabled: parse_bool_env_or(&lookup, "DEMO_AUTH_ENABLED", false)?,
         };
 
         validate_app_config(&app)?;
 
         let posgre = PosgreConfig {
-            url: get_required_env("DATABASE_URL")?,
+            url: get_required_env(&lookup, "DATABASE_URL")?,
         };
 
         let smtp = SmtpConfig {
-            host: get_env_or("SMTP_HOST", "127.0.0.1"),
-            port: parse_u16_env_or("SMTP_PORT", 1025)?,
-            username: get_env_or("SMTP_USERNAME", ""),
-            password: get_env_or("SMTP_PASSWORD", ""),
-            tls: get_env_or("SMTP_TLS", "none"),
-            from: get_env_or("MAIL_FROM", "no-reply@example.com"),
+            host: get_env_or(&lookup, "SMTP_HOST", "127.0.0.1"),
+            port: parse_u16_env_or(&lookup, "SMTP_PORT", 1025)?,
+            username: get_env_or(&lookup, "SMTP_USERNAME", ""),
+            password: get_env_or(&lookup, "SMTP_PASSWORD", ""),
+            tls: get_env_or(&lookup, "SMTP_TLS", "none"),
+            from: get_env_or(&lookup, "MAIL_FROM", "no-reply@example.com"),
         };
 
         let fuseki = FusekiConfig {
-            base_url: get_required_env("FUSEKI_BASE_URL")?,
-            user: get_required_env("FUSEKI_USER")?,
-            password: get_required_env("FUSEKI_PASSWORD")?,
+            base_url: get_required_env(&lookup, "FUSEKI_BASE_URL")?,
+            user: get_required_env(&lookup, "FUSEKI_USER")?,
+            password: get_required_env(&lookup, "FUSEKI_PASSWORD")?,
         };
 
         let garage = GarageConfig {
-            bucket: get_required_env("S3_BUCKET")?,
+            bucket: get_required_env(&lookup, "S3_BUCKET")?,
         };
 
         Ok(Self {
@@ -146,24 +151,35 @@ impl Config {
     }
 }
 
-fn get_env_or(key: &'static str, default: &str) -> String {
-    match env::var(key) {
-        Ok(value) if !value.trim().is_empty() => value,
+fn get_env_or(
+    lookup: &impl Fn(&'static str) -> Option<String>,
+    key: &'static str,
+    default: &str,
+) -> String {
+    match lookup(key) {
+        Some(value) if !value.trim().is_empty() => value,
         _ => default.to_string(),
     }
 }
 
 // 外部サービス接続に必須な値は、空文字defaultで起動して失敗するより起動時に明示的に落とす。
-fn get_required_env(key: &'static str) -> Result<String, ConfigError> {
-    match env::var(key) {
-        Ok(value) if !value.trim().is_empty() => Ok(value),
+fn get_required_env(
+    lookup: &impl Fn(&'static str) -> Option<String>,
+    key: &'static str,
+) -> Result<String, ConfigError> {
+    match lookup(key) {
+        Some(value) if !value.trim().is_empty() => Ok(value),
         _ => Err(ConfigError::MissingVar(key)),
     }
 }
 
-fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError> {
-    match env::var(key) {
-        Ok(value) if !value.trim().is_empty() => value
+fn parse_u16_env_or(
+    lookup: &impl Fn(&'static str) -> Option<String>,
+    key: &'static str,
+    default: u16,
+) -> Result<u16, ConfigError> {
+    match lookup(key) {
+        Some(value) if !value.trim().is_empty() => value
             .parse::<u16>()
             .map_err(|_| ConfigError::InvalidVar { key, value }),
         _ => Ok(default),
@@ -171,9 +187,13 @@ fn parse_u16_env_or(key: &'static str, default: u16) -> Result<u16, ConfigError>
 }
 
 // DockerやPaaSの環境変数表現に合わせて、true/falseだけでなく1/0なども受け付ける。
-fn parse_bool_env_or(key: &'static str, default: bool) -> Result<bool, ConfigError> {
-    match env::var(key) {
-        Ok(value) if !value.trim().is_empty() => {
+fn parse_bool_env_or(
+    lookup: &impl Fn(&'static str) -> Option<String>,
+    key: &'static str,
+    default: bool,
+) -> Result<bool, ConfigError> {
+    match lookup(key) {
+        Some(value) if !value.trim().is_empty() => {
             let normalized = value.trim().to_ascii_lowercase();
             match normalized.as_str() {
                 "true" | "1" | "yes" | "on" => Ok(true),
@@ -201,66 +221,39 @@ fn validate_app_config(app: &AppConfig) -> Result<(), ConfigError> {
 mod tests {
     use super::*;
 
-    struct EnvGuard {
-        key: &'static str,
-        old_value: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old_value = env::var(key).ok();
-            // Rust 2024では環境変数変更がunsafe。テストは --test-threads=1 で直列実行し、
-            // Dropで必ず元の値へ戻すことでDB接続など後続テストへの影響を残さない。
-            unsafe {
-                env::set_var(key, value);
-            }
-
-            Self { key, old_value }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // unset/setどちらもプロセス全体へ影響するためunsafe。
-            // guardの寿命をテスト関数内に閉じ、panic時も復元されるようDropに寄せる。
-            unsafe {
-                match &self.old_value {
-                    Some(value) => env::set_var(self.key, value),
-                    None => env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
-    fn set_required_config_env() -> Vec<EnvGuard> {
-        vec![
-            EnvGuard::set(
+    fn required_config() -> std::collections::HashMap<&'static str, String> {
+        [
+            (
                 "DATABASE_URL",
                 "postgres://user:password@localhost:5432/test",
             ),
-            EnvGuard::set("FUSEKI_BASE_URL", "http://127.0.0.1:3030/ds"),
-            EnvGuard::set("FUSEKI_USER", "admin"),
-            EnvGuard::set("FUSEKI_PASSWORD", "password"),
-            EnvGuard::set("S3_BUCKET", "test-required-bucket"),
+            ("FUSEKI_BASE_URL", "http://127.0.0.1:3030/ds"),
+            ("FUSEKI_USER", "admin"),
+            ("FUSEKI_PASSWORD", "password"),
+            ("S3_BUCKET", "test-required-bucket"),
         ]
+        .into_iter()
+        .map(|(key, value)| (key, value.to_string()))
+        .collect()
     }
 
     #[test]
     fn from_env_reads_s3_bucket() {
-        let _guards = set_required_config_env();
+        let values = required_config();
 
-        let config = Config::from_env().expect("config should load S3 bucket");
+        let config = Config::from_lookup(|key| values.get(key).cloned())
+            .expect("config should load S3 bucket");
 
         assert_eq!(config.garage.bucket, "test-required-bucket");
     }
 
     #[test]
     fn from_env_rejects_insecure_cookie_in_production() {
-        let mut guards = set_required_config_env();
-        guards.push(EnvGuard::set("APP_ENV", "production"));
-        guards.push(EnvGuard::set("COOKIE_SECURE", "false"));
+        let mut values = required_config();
+        values.insert("APP_ENV", "production".to_string());
+        values.insert("COOKIE_SECURE", "false".to_string());
 
-        let result = Config::from_env();
+        let result = Config::from_lookup(|key| values.get(key).cloned());
 
         assert!(
             matches!(result, Err(ConfigError::InvalidCombination { .. })),
@@ -271,11 +264,12 @@ mod tests {
 
     #[test]
     fn from_env_accepts_secure_cookie_in_production() {
-        let mut guards = set_required_config_env();
-        guards.push(EnvGuard::set("APP_ENV", "production"));
-        guards.push(EnvGuard::set("COOKIE_SECURE", "true"));
+        let mut values = required_config();
+        values.insert("APP_ENV", "production".to_string());
+        values.insert("COOKIE_SECURE", "true".to_string());
 
-        let config = Config::from_env().expect("production config should load with secure cookie");
+        let config = Config::from_lookup(|key| values.get(key).cloned())
+            .expect("production config should load with secure cookie");
 
         assert_eq!(config.app.environment, "production");
         assert!(config.app.cookie_secure);

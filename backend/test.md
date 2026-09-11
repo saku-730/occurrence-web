@@ -435,13 +435,13 @@
 - [x] 未知のmultipart fieldは無視し、後続のfile fieldを処理する`unknown_multipart_field_is_ignored_before_pdf_file`
 - [x] 空PDFは400でGarage・GROBID・DBに副作用を残さない`empty_pdf_returns_400_without_side_effects`
 - [x] file fieldが複数なら400でGarage・GROBID・DBに副作用を残さない`multiple_file_fields_return_400_without_side_effects`
-- [x] `.PDF`拡張子と大文字小文字を含むPDF MIMEを受理する`uppercase_pdf_extension_and_mime_are_accepted`
+- [x] `.PDF`拡張子と大文字小文字を含むPDF MIMEを受理し、DBには`application/pdf`として保存する`uppercase_pdf_extension_and_mime_are_accepted`
 - [x] HTTP経由の重複PDFは200を返しGarage PUT・GROBIDを再実行しない`duplicate_pdf_request_returns_ok_without_repeating_side_effects`
-- [x] GROBID 204・500・不正BibTeXは502を返しGarage objectとDB rowを残さない`grobid_http_failures_return_502_and_rollback`
+- [x] GROBID 204・500・不正BibTeXでもPDFを失わず201で保存し、書誌情報の手動補完を要求する`grobid_http_failures_still_save_papers_for_manual_metadata`
 - [x] Garage PUT失敗はHTTP 502を返しGROBID・DBへ進まない`garage_put_failure_returns_502_without_grobid_or_database_row`
-- [x] GROBIDがDOI・titleを取得できないPDFは201と`metadata_required`を返してDBに保存する`paper_import_without_minimum_metadata_returns_metadata_required`
-- [x] 書誌情報未設定の重複PDFは副作用を再実行せず200と`metadata_required`を返す`duplicate_pdf_without_metadata_returns_metadata_required_ok`
-- [ ] `PATCH /papers/{paper_id}/bibliographic-metadata`はログインユーザーのDOIまたはtitle補完を200で返す`authenticated_user_can_complete_bibliographic_metadata_through_app`
+- [x] GROBIDがDOI・titleを取得できないPDFは201、`unregistered`、`requires_bibliographic_input=true`を返してDBに保存する`paper_import_without_minimum_metadata_returns_metadata_required`
+- [x] 書誌情報未設定の重複PDFは副作用を再実行せず200と手動補完要求を返す`duplicate_pdf_without_metadata_reuses_unregistered_paper`
+- [ ] `PATCH /paper-sources/paper/{paper_id}/bibliographic-metadata`はログインユーザーのDOIまたはtitle補完を200で返す`authenticated_user_can_complete_bibliographic_metadata_through_app`
 - [ ] 補完APIは未ログイン401、不正UUID・空入力400、存在しないpaper 404を返す`bibliographic_metadata_route_rejects_invalid_requests`
 - [ ] ログイン中の非uploadユーザーも全ユーザー共通paperの未設定書誌情報を補完できる`authenticated_non_uploader_can_complete_bibliographic_metadata_through_app`
 - [x] 補完APIは既存GROBID値を上書きしない`bibliographic_metadata_route_preserves_existing_values`
@@ -452,3 +452,17 @@
 - [x] 構造的に有効な生成PDFを実GROBIDへ送りtitleを抽出できる（ignored）`real_grobid_extracts_header_from_valid_pdf`
 - [x] repositoryに同梱した実在研究論文PDF群から期待するtitle・DOI等を抽出できる（ignored）`real_grobid_extracts_metadata_from_research_paper_fixtures`
 - [x] real HTTP・PostgreSQL・Garage・GROBIDで新規PDFを201登録しGarage objectとpapers rowを確認する（ignored）`paper_import_route_works_with_real_postgresql_garage_and_grobid`
+## テスト隔離・並列実行
+
+- [ ] テスト用poolは既存publicデータを変更せず、接続専用の空テーブルを使う。`independent_fixtures_preserve_public_users_and_each_other`
+- [ ] 独立したpoolで同じメールアドレスを同時登録でき、一方の削除が他方へ影響しない。`independent_fixtures_preserve_public_users_and_each_other`
+- [ ] 隔離テーブルでも外部キー制約が機能し、存在しないユーザーを参照できない。`isolated_fixtures_enforce_foreign_keys`
+- [x] Configテストはプロセス環境変数を書き換えず、独立した設定値で並列実行する。
+- [ ] ABRテストは既存publicマスターテーブルをDROPしない。
+- 検証コマンド: `cargo test`（`--test-threads=1`を指定しない）。
+
+2026-09-11検証: Config・PDF前処理・GROBID・llamaの関連ソースを読み込む一時検証crateで、
+DB・HTTP接続不要の24件が並列実行で成功した。DB隔離テスト2件もコンパイル済み。
+通常の`cargo test`と`cargo check --all-targets`は、環境のPostgreSQL接続制限
+(`Operation not permitted`)によりSQLxのコンパイル時検証で停止した。
+DB隔離テストの直接実行も同じ接続制限で失敗しており、全件greenは未確認。

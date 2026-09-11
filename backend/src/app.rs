@@ -92,7 +92,7 @@ mod tests {
         http::{Method, Request, StatusCode, header},
     };
     use sha2::Digest;
-    use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
+    use sqlx::PgPool;
     use tower::util::ServiceExt; // oneshot
 
     use crate::features::media::service::{
@@ -113,34 +113,7 @@ mod tests {
     const TEST_JPEG_BYTES: &[u8] = &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00];
 
     fn isolated_test_pool(database_url: &str) -> PgPool {
-        PgPoolOptions::new()
-            // PostgreSQLのTEMP TABLEはconnection単位のため、全requestで同じconnectionを使う。
-            .max_connections(1)
-            .after_connect(|connection, _metadata| {
-                Box::pin(async move {
-                    // public tableと同名の一時tableを先に解決させ、appテストによる
-                    // INSERT/UPDATE/DELETEが既存の開発データへ到達しないようにする。
-                    connection
-                        .execute(
-                            r#"
-                            CREATE TEMPORARY TABLE users
-                                (LIKE public.users INCLUDING ALL);
-                            CREATE TEMPORARY TABLE pending_registrations
-                                (LIKE public.pending_registrations INCLUDING ALL);
-                            CREATE TEMPORARY TABLE sessions
-                                (LIKE public.sessions INCLUDING ALL);
-                            CREATE TEMPORARY TABLE password_reset_tokens
-                                (LIKE public.password_reset_tokens INCLUDING ALL);
-                            CREATE TEMPORARY TABLE media_objects
-                                (LIKE public.media_objects INCLUDING ALL);
-                            "#,
-                        )
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy(database_url)
-            .expect("failed to create isolated lazy database pool")
+        crate::test_support::isolated_pool(database_url)
     }
 
     // appテストはrouterを直接叩くため、実HTTP serverを立てずにAppStateだけ構築する。
@@ -530,20 +503,6 @@ mod tests {
         row.0
     }
 
-    async fn delete_mailpit_messages() {
-        let response = reqwest::Client::new()
-            .delete("http://127.0.0.1:8025/api/v1/messages")
-            .send()
-            .await
-            .expect("failed to delete Mailpit messages");
-
-        assert!(
-            response.status().is_success(),
-            "failed to clear Mailpit messages: {}",
-            response.status()
-        );
-    }
-
     async fn fetch_mailpit_messages() -> Vec<serde_json::Value> {
         let response = reqwest::get("http://127.0.0.1:8025/api/v1/messages")
             .await
@@ -580,6 +539,16 @@ mod tests {
             .json()
             .await
             .expect("failed to parse Mailpit message detail response")
+    }
+
+    fn mailpit_message_is_addressed_to(message: &serde_json::Value, email: &str) -> bool {
+        message["To"].as_array().is_some_and(|recipients| {
+            recipients.iter().any(|recipient| {
+                recipient["Address"]
+                    .as_str()
+                    .is_some_and(|address| address == email)
+            })
+        })
     }
 
     #[derive(Clone, Default)]
@@ -974,8 +943,6 @@ mod tests {
         let email = format!("route-mail-{}@example.com", uuid::Uuid::new_v4());
 
         delete_pending_registration_by_email(&db, &email).await;
-        delete_mailpit_messages().await;
-
         let app = build_app(state);
 
         let response = app
@@ -996,17 +963,7 @@ mod tests {
 
         let message = mailpit_messages
             .iter()
-            .find(|message| {
-                message["To"] //宛先で特定のメール探索
-                    .as_array()
-                    .is_some_and(|to| {
-                        to.iter().any(|recipient| {
-                            recipient["Address"]
-                                .as_str()
-                                .is_some_and(|address| address == email)
-                        })
-                    })
-            })
+            .find(|message| mailpit_message_is_addressed_to(message, &email))
             .expect("registration completion email was not sent");
 
         let subject = message["Subject"].as_str().unwrap_or("");
@@ -1024,7 +981,6 @@ mod tests {
         assert!(body.contains("token="));
 
         delete_pending_registration_by_email(&db, &email).await;
-        delete_mailpit_messages().await;
     }
 
     #[tokio::test]
@@ -1041,8 +997,6 @@ mod tests {
         AuthRepository::create_user(&db, &email, "reset-user", &password_hash)
             .await
             .expect("user should be created");
-
-        delete_mailpit_messages().await;
 
         let response = app
             .oneshot(
@@ -1080,15 +1034,7 @@ mod tests {
 
         let message = mailpit_messages
             .iter()
-            .find(|message| {
-                message["To"].as_array().is_some_and(|to| {
-                    to.iter().any(|recipient| {
-                        recipient["Address"]
-                            .as_str()
-                            .is_some_and(|address| address == email)
-                    })
-                })
-            })
+            .find(|message| mailpit_message_is_addressed_to(message, &email))
             .expect("password reset email was not sent");
 
         let subject = message["Subject"].as_str().unwrap_or("");
@@ -1103,8 +1049,6 @@ mod tests {
 
         assert!(body.contains("/auth/reset_password"));
         assert!(body.contains("token="));
-
-        delete_mailpit_messages().await;
     }
 
     #[derive(Clone)]
@@ -2951,7 +2895,7 @@ mod tests {
 
         let config = Config::from_env().expect("integration configuration should be valid");
         let bucket = config.garage.bucket.clone();
-        let db = PgPoolOptions::new()
+        let db = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
         let fuseki_store = Arc::new(FusekiClient::new(config.fuseki.clone()));
@@ -3253,8 +3197,6 @@ mod tests {
             uuid::Uuid::new_v4()
         );
 
-        delete_mailpit_messages().await;
-
         let response = app
             .oneshot(
                 Request::builder()
@@ -3296,7 +3238,9 @@ mod tests {
 
         let mailpit_messages = fetch_mailpit_messages().await;
         assert!(
-            mailpit_messages.is_empty(),
+            !mailpit_messages
+                .iter()
+                .any(|message| mailpit_message_is_addressed_to(message, &email)),
             "password reset email should not be sent for unregistered email"
         );
     }
@@ -3366,7 +3310,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -3836,7 +3780,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -5725,7 +5669,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -5900,7 +5844,7 @@ mod tests {
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -6087,7 +6031,7 @@ _:updated <{}> <https://bio-database.net/terms/access-rights/public> <{}> .
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -7463,7 +7407,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 
@@ -7589,7 +7533,7 @@ _:updated <http://purl.org/dc/terms/accessRights> <https://bio-database.net/term
             },
         };
 
-        let posgre = PgPoolOptions::new()
+        let posgre = crate::test_support::pool_options()
             .connect_lazy(&config.posgre.url)
             .expect("failed to create lazy database pool");
 

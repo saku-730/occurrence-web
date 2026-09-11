@@ -5,3 +5,6 @@ pub mod features;
 pub mod infrastructure;
 pub mod openapi;
 pub mod state;
+
+#[cfg(test)]
+pub(crate) mod test_support;
