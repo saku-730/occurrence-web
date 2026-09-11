@@ -42,8 +42,13 @@
 ## PostgreSQLテストデータの分離
 
 - 共有または開発用PostgreSQLのtableをテスト開始時に`TRUNCATE`しない
-- 認証serviceテストは、public tableと同じ構造を持つconnection単位のtemporary tableを使用する
+- 認証・app・media・paper importのDBテストは `backend/src/test_support.rs` のpoolを使い、connection単位のtemporary tableへ隔離する
+- publicから構造と外部キーだけを複製し、テストデータはコピーしない。外部キーは隔離先のテーブルを参照させる
+- search_pathは `pg_temp, pg_catalog` とし、未準備テーブルへのSQLがpublicへ到達することを防ぐ
+- poolは1接続、idle timeoutとmax lifetimeを無効にする。各テストが独立したpoolを持つため、テスト間は並列実行できる
+- 接続が失われた場合のfixture再作成は空から始まるため、接続障害中の継続成功は保証しない
 - temporary tableはテスト用connection終了時に自動削除し、テスト開始前から存在するデータへ影響を与えない
+- 障害注入用functionは `pg_temp` に作成する。ABRのfake tableもtemporary tableを使い、実マスターテーブルをDROPしない
 - temporary tableを使用できない結合テストでは、テスト内で生成したUUIDやemailに一致するレコードだけを外部キーの子から順に削除する
 
 ---
@@ -221,8 +226,10 @@
 
 ## 実行方針
 
-- DBを使うテストは必要に応じて `--test-threads=1`
+- 通常の検証コマンドは `cargo test`。利用者に `--test-threads=1` を要求しない
+- Config・llama設定・PDF前処理のunit testは設定値やクライアントを直接渡し、プロセス環境変数を書き換えない
+- 環境変数を使用するHTTP統合テストでは、そのテストbinary内の既存guardで該当テストだけを排他する
 - 外部サービスはDocker Composeで起動する
 - メールは fake mailer または Mailpit を使う
-- Fusekiテストはデータセット初期化を行う
+- 実Fusekiテストは専用データセットを使い、共有データセット全体の初期化を行わない
 - Garageテストはテスト用bucketまたはprefixを使う

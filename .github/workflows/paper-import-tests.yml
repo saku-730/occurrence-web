@@ -70,41 +70,29 @@ jobs:
         working-directory: backend
         run: cargo check --all-targets
 
+      - name: Verify PostgreSQL test isolation
+        working-directory: backend
+        run: cargo test --test db_isolation
+
+      - name: Run configuration tests in parallel
+        working-directory: backend
+        run: cargo test config::tests --lib
+
       - name: Run GROBID parser unit tests
         working-directory: backend
-        run: cargo test grobid::tests --lib -- --test-threads=1
-
-      - name: Run paper import service unit tests
-        working-directory: backend
-        run: cargo test features::paper_import::service::tests --lib -- --test-threads=1
-
-      - name: Run frontend extraction contract tests
-        working-directory: backend
-        run: cargo test features::paper_import::extraction_handler::tests --lib -- --test-threads=1
+        run: cargo test grobid::tests --lib
 
       - name: Run GROBID HTTP error mapping tests
         working-directory: backend
-        run: cargo test --test paper_import_grobid_http -- --test-threads=1
-
-      - name: Run paper import service integration tests
-        working-directory: backend
-        run: cargo test --test paper_import_flow -- --test-threads=1
-
-      - name: Run staged PDF extraction bridge tests
-        working-directory: backend
-        run: cargo test --test paper_import_extraction_bridge -- --test-threads=1
+        run: cargo test --test paper_import_grobid_http
 
       - name: Run paper import HTTP integration tests
         working-directory: backend
-        run: cargo test --test paper_import_http -- --test-threads=1
+        run: cargo test --test paper_import_http
 
       - name: Run paper import HTTP error-path tests
         working-directory: backend
-        run: cargo test --test paper_import_http_errors -- --test-threads=1
-
-      - name: Run paper import MIME normalization regression test
-        working-directory: backend
-        run: cargo test --test paper_import_content_type -- --test-threads=1
+        run: cargo test --test paper_import_http_errors
 
   real-grobid-smoke:
     runs-on: ubuntu-latest
@@ -173,7 +161,7 @@ jobs:
 
       - name: Run real GROBID PDF smoke test
         working-directory: backend
-        run: cargo test --test paper_import_real_grobid -- --ignored --nocapture --test-threads=1
+        run: cargo test --test paper_import_real_grobid -- --ignored --nocapture
 
       - name: Show GROBID logs on failure
         if: failure()
