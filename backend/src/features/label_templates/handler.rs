@@ -27,6 +27,7 @@ use crate::{
 pub enum LabelTemplateHandlerError {
     InvalidSession,
     InvalidTemplate(String),
+    LimitReached,
     NotFound,
     Database(sqlx::Error),
     Internal,
@@ -45,6 +46,7 @@ impl From<LabelTemplateServiceError> for LabelTemplateHandlerError {
     fn from(error: LabelTemplateServiceError) -> Self {
         match error {
             LabelTemplateServiceError::Validation(message) => Self::InvalidTemplate(message),
+            LabelTemplateServiceError::LimitReached => Self::LimitReached,
             LabelTemplateServiceError::NotFound => Self::NotFound,
             LabelTemplateServiceError::Database(error) => Self::Database(error),
             LabelTemplateServiceError::StoredTemplateInvalid
@@ -65,6 +67,11 @@ impl IntoResponse for LabelTemplateHandlerError {
                 StatusCode::BAD_REQUEST,
                 "invalid_label_template",
                 &message,
+            ),
+            Self::LimitReached => error_response(
+                StatusCode::CONFLICT,
+                "label_template_limit_reached",
+                "A user can save up to 10 label templates",
             ),
             Self::NotFound => error_response(
                 StatusCode::NOT_FOUND,
@@ -96,6 +103,7 @@ impl IntoResponse for LabelTemplateHandlerError {
         (status = 201, description = "Label template created", body = LabelTemplateResponse),
         (status = 400, description = "Invalid label template", body = ErrorResponse),
         (status = 401, description = "Login required", body = ErrorResponse),
+        (status = 409, description = "Per-user label template limit reached", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "label-templates"
