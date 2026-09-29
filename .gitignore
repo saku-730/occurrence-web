@@ -1,4 +1,5 @@
 .env*
 /fuseki/
-/garage/
+/garage/meta/
+garage.toml
 gbif-backbone.nq
