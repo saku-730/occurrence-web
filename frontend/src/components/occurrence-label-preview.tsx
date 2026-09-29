@@ -683,7 +683,7 @@ function OccurrenceLabel({ creatorName, values, customFields, occurrence, settin
       gap: withQr ? "1mm" : 0, alignItems: "start",
     }}>
       <div data-label-text style={{ overflowWrap: "anywhere", minWidth: 0, maxHeight: "100%", overflow: "hidden" }}>
-        {fields.includes("scientificName") && occurrence.scientific_name && <p style={{ margin: 0, fontWeight: 600 }}>{occurrence.scientific_name}</p>}
+        {fields.includes("scientificName") && occurrence.scientific_name && <p style={{ margin: 0, fontWeight: 600, fontStyle: "italic" }}>{occurrence.scientific_name}</p>}
         {fields.includes("creator") && <p style={{ margin: 0 }}>{creatorName ?? "-"}</p>}
         {fields.includes("eventDate") && values[EVENT_DATE_PREDICATE]?.map((value) => <p key={value} style={{ margin: 0 }}>{value}</p>)}
         {fields.includes("locality") && values[LOCALITY_PREDICATE]?.map((value) => <p key={value} style={{ margin: 0 }}>{value}</p>)}
